@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import uuid
 from datetime import datetime, timezone
 from enum import Enum
@@ -87,3 +88,20 @@ class ConceptNode(BaseModel):
     def hours_since_activation(self) -> float:
         delta = datetime.now(timezone.utc) - self.last_activated
         return delta.total_seconds() / 3600.0
+
+    def temporal_relevance(self, half_life_hours: float = 168.0) -> float:
+        """Time-based relevance score in [0, 1].
+
+        Returns 1.0 for a just-activated concept and decays exponentially
+        with a configurable half-life.  A floor of 0.1 prevents ancient
+        but structurally important concepts from being completely invisible.
+
+        Args:
+            half_life_hours: Hours after which relevance halves.
+                Default 168 h (1 week).
+        """
+        hours = self.hours_since_activation()
+        if hours <= 0 or half_life_hours <= 0:
+            return 1.0
+        raw = math.pow(0.5, hours / half_life_hours)
+        return max(0.1, raw)

@@ -3,7 +3,16 @@
 Promotion rules:
   embryonic → developing:   activation_count >= 3 and confidence >= 0.3
   developing → established: activation_count >= 10 and confidence >= 0.6
-  established → core:       activation_count >= 30 and connections >= 5
+  established → core:       activation_count >= 30 and connections >= dynamic_threshold
+
+The ESTABLISHED → CORE connection threshold is dynamic:
+  required_connections = max(MIN_CORE_CONNECTIONS,
+                             BASE_CORE_CONNECTIONS - (activation_count - 30) // ACTIVATION_REDUCTION_STEP)
+
+This means heavily activated concepts need fewer connections to reach
+CORE, acknowledging that frequency of use is itself evidence of
+centrality.  The minimum (MIN_CORE_CONNECTIONS) prevents completely
+isolated concepts from reaching CORE regardless of activation count.
 
 Demotion:
   any → fading: handled by decay engine (confidence < 0.05)
@@ -15,6 +24,12 @@ from __future__ import annotations
 from world0.concepts.manager import ConceptManager
 from world0.relations.manager import RelationManager
 from world0.schemas.concept import Maturity
+
+# ── ESTABLISHED → CORE promotion parameters ─────────────────────────
+BASE_CORE_CONNECTIONS: int = 5       # default connection requirement
+MIN_CORE_CONNECTIONS: int = 2        # absolute minimum connections
+ACTIVATION_REDUCTION_STEP: int = 20  # every N extra activations reduces
+                                      # connection requirement by 1
 
 
 class LifecycleEngine:
@@ -61,8 +76,16 @@ class LifecycleEngine:
             return None
 
         if node.maturity == Maturity.ESTABLISHED:
-            if node.activation_count >= 30 and connections >= 5:
-                return Maturity.CORE
+            if node.activation_count >= 30:
+                # Dynamic threshold: extra activations lower the bar
+                extra = node.activation_count - 30
+                reduction = extra // ACTIVATION_REDUCTION_STEP
+                required = max(
+                    MIN_CORE_CONNECTIONS,
+                    BASE_CORE_CONNECTIONS - reduction,
+                )
+                if connections >= required:
+                    return Maturity.CORE
             return None
 
         return None

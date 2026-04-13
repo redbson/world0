@@ -166,6 +166,15 @@ class ConceptManager:
             node.maturity = maturity
             self._dirty.add(concept_id)
 
+    def adjust_confidence(self, concept_id: str, delta: float) -> ConceptNode | None:
+        """Apply a bounded confidence adjustment to a concept."""
+        node = self._concepts.get(concept_id)
+        if not node:
+            return None
+        node.confidence = min(1.0, max(0.01, node.confidence + delta))
+        self._dirty.add(concept_id)
+        return node
+
     def remove(self, concept_id: str) -> bool:
         node = self._concepts.pop(concept_id, None)
         if node:

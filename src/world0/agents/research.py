@@ -20,6 +20,7 @@ class SearchResult:
     title: str
     url: str
     snippet: str = ""
+    domain: str = ""
 
 
 @dataclass
@@ -56,6 +57,31 @@ def _decode_result_url(href: str) -> str:
     return ""
 
 
+def _extract_domain(url: str) -> str:
+    parsed = urlparse(url)
+    host = (parsed.netloc or "").lower()
+    if host.startswith("www."):
+        host = host[4:]
+    return host
+
+
+def _normalize_domains(domains: list[str] | tuple[str, ...] | None) -> list[str]:
+    if not domains:
+        return []
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for domain in domains:
+        clean = domain.strip().lower()
+        if not clean:
+            continue
+        clean = clean.removeprefix("https://").removeprefix("http://")
+        clean = clean.split("/", 1)[0].removeprefix("www.")
+        if clean and clean not in seen:
+            normalized.append(clean)
+            seen.add(clean)
+    return normalized
+
+
 def parse_duckduckgo_results(html: str, limit: int = 5) -> list[SearchResult]:
     """Extract search results from DuckDuckGo's HTML endpoint."""
     anchors = list(re.finditer(
@@ -64,6 +90,7 @@ def parse_duckduckgo_results(html: str, limit: int = 5) -> list[SearchResult]:
         flags=re.I | re.S,
     ))
     results: list[SearchResult] = []
+    seen_urls: set[str] = set()
 
     for idx, match in enumerate(anchors):
         href = match.group(1)
@@ -78,19 +105,35 @@ def parse_duckduckgo_results(html: str, limit: int = 5) -> list[SearchResult]:
         )
         snippet = _strip_html(snippet_match.group(1)) if snippet_match else ""
 
-        if title and url:
-            results.append(SearchResult(title=title, url=url, snippet=snippet))
+        domain = _extract_domain(url)
+        if title and url and url not in seen_urls:
+            results.append(SearchResult(
+                title=title,
+                url=url,
+                snippet=snippet,
+                domain=domain,
+            ))
+            seen_urls.add(url)
         if len(results) >= limit:
             break
 
     return results
 
 
-def search_web(query: str, limit: int = 5, timeout: int = 15) -> list[SearchResult]:
+def search_web(
+    query: str,
+    limit: int = 5,
+    timeout: int = 15,
+    domains: list[str] | tuple[str, ...] | None = None,
+) -> list[SearchResult]:
     """Run a lightweight web search using DuckDuckGo's HTML endpoint."""
     query = query.strip()
     if not query:
         return []
+
+    domain_filters = _normalize_domains(domains)
+    if domain_filters:
+        query = f"{query} " + " OR ".join(f"site:{domain}" for domain in domain_filters)
 
     url = f"https://html.duckduckgo.com/html/?q={quote_plus(query)}&kl=wt-wt"
     req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
@@ -98,7 +141,10 @@ def search_web(query: str, limit: int = 5, timeout: int = 15) -> list[SearchResu
         raw = resp.read()
         charset = resp.headers.get_content_charset() or "utf-8"
         html = raw.decode(charset, errors="replace")
-    return parse_duckduckgo_results(html, limit=limit)
+    results = parse_duckduckgo_results(html, limit=max(limit * 2, limit))
+    if domain_filters:
+        results = [item for item in results if item.domain in domain_filters]
+    return results[:limit]
 
 
 def fetch_web_document(

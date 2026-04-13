@@ -6,7 +6,15 @@ from pathlib import Path
 
 import pytest
 
-from world0.agents.session import Message, Session, SessionStore
+from world0.agents.session import (
+    Message,
+    ProjectionFeedbackEntry,
+    Session,
+    SessionCompaction,
+    SessionStore,
+    TurnSummary,
+)
+from world0.agents.state import session_state_snapshot
 
 
 class TestSession:
@@ -53,6 +61,86 @@ class TestSession:
         summary = s.summary()
         assert "Test Session" in summary
         assert "1 msgs" in summary
+
+    def test_turn_summary_helpers(self):
+        s = Session()
+        s.add_turn_summary(TurnSummary(
+            stop_reason="end_turn",
+            failure_class="none",
+            rounds=2,
+            tool_count=1,
+            user_input_preview="Research MCP",
+            assistant_output_preview="Summarized MCP flow",
+        ))
+        latest = s.latest_turn_summary()
+        assert latest is not None
+        assert latest.tool_count == 1
+        assert "Research MCP" in latest.as_prompt_line()
+
+    def test_to_llm_messages_includes_compaction_and_turn_state(self):
+        s = Session()
+        for i in range(30):
+            s.add_message("user" if i % 2 == 0 else "assistant", f"message {i}")
+        s.set_compaction(SessionCompaction(
+            summary="Earlier discussion covered MCP integration and session resume bugs.",
+            open_loops=["Confirm the MCP server contract."],
+            key_concepts=["mcp", "resume session"],
+            covered_messages=12,
+        ))
+        s.add_turn_summary(TurnSummary(
+            stop_reason="end_turn",
+            failure_class="tool_runtime",
+            rounds=3,
+            tool_count=4,
+            failed_tools=["web_fetch"],
+            user_input_preview="Research Claude Code MCP",
+            assistant_output_preview="Produced a short research brief.",
+        ))
+
+        msgs = s.to_llm_messages(max_messages=8, preserve_recent=6)
+        assert msgs[0]["role"] == "system"
+        assert "Session Summary" in msgs[0]["content"]
+        assert msgs[1]["role"] == "system"
+        assert "Recent Turn State" in msgs[1]["content"]
+        assert len(msgs) >= 3
+
+    def test_session_state_marks_attention_needed_after_failure(self):
+        s = Session()
+        s.add_turn_summary(TurnSummary(
+            stop_reason="end_turn",
+            failure_class="tool_runtime",
+            rounds=2,
+            tool_count=1,
+            failed_tools=["web_fetch"],
+            user_input_preview="Fetch a source",
+            assistant_output_preview="The fetch failed.",
+        ))
+        state = session_state_snapshot(s)
+        assert state.status.value == "attention_needed"
+        assert state.latest_failure_class == "tool_runtime"
+
+    def test_session_state_marks_compacted_without_failure(self):
+        s = Session()
+        s.set_compaction(SessionCompaction(
+            summary="Older context summarized.",
+            open_loops=["Validate the source list."],
+            key_concepts=["research"],
+            covered_messages=10,
+        ))
+        state = session_state_snapshot(s)
+        assert state.status.value == "compacted"
+        assert state.has_compaction is True
+
+    def test_projection_feedback_helpers(self):
+        s = Session()
+        entry = s.add_projection_feedback(ProjectionFeedbackEntry(
+            query="fastapi backend",
+            useful=True,
+            missing_concepts=["postgresql"],
+        ))
+        assert entry.query == "fastapi backend"
+        assert s.latest_projection_feedback() is not None
+        assert s.latest_projection_feedback().useful is True
 
 
 class TestSessionStore:

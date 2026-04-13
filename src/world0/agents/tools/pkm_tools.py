@@ -293,22 +293,28 @@ def build_pkm_tools(agent: PKMAgent) -> ToolRegistry:
     ))
 
     # ── Web Search ───────────────────────────────────────────────────
-    def web_search(query: str, limit: int = 5) -> ToolResult:
+    def web_search(
+        query: str,
+        limit: int = 5,
+        focus: str = "",
+        domains: str = "",
+        fetch_pages: bool = False,
+    ) -> ToolResult:
         try:
-            results = research_utils.search_web(query, limit=int(limit))
-            if not results:
-                return ToolResult(success=True, output=f"No web results for '{query}'.")
-            lines = [f"## Web Search: {query}", ""]
-            for idx, item in enumerate(results, 1):
-                lines.append(
-                    f"{idx}. [{item.title}]({item.url})"
-                    + (f" — {item.snippet}" if item.snippet else "")
-                )
-            return ToolResult(
-                success=True,
-                output="\n".join(lines),
-                data={"results": [item.__dict__ for item in results]},
+            fetch_flag = fetch_pages
+            if not isinstance(fetch_pages, bool):
+                fetch_flag = str(fetch_pages).strip().lower() not in {
+                    "false", "0", "no", "off", ""
+                }
+            rendered = agent.search_web(
+                query,
+                focus=focus,
+                max_results=int(limit),
+                domains=domains,
+                fetch_pages=fetch_flag,
             )
+            ok = "failed" not in rendered.lower()
+            return ToolResult(success=ok, output=rendered)
         except Exception as e:
             return ToolResult(success=False, output=f"Search error: {e}")
 
@@ -316,11 +322,15 @@ def build_pkm_tools(agent: PKMAgent) -> ToolRegistry:
         name="web_search",
         description=(
             "Search the public web for a topic and return candidate sources with titles, "
-            "URLs, and snippets. Use this when the user asks for outside research or fresh sources."
+            "URLs, snippets, and optional fetched page glimpses. Use this when the user asks "
+            "for outside research or fresh sources."
         ),
         parameters=[
             ToolParam("query", "Search query string", required=True),
             ToolParam("limit", "Maximum number of results to return (default: 5)", type="integer", required=False),
+            ToolParam("focus", "Optional search angle or constraint", required=False),
+            ToolParam("domains", "Optional comma-separated domain filter list", required=False),
+            ToolParam("fetch_pages", "Whether to fetch top results and include short excerpts", type="boolean", required=False),
         ],
         handler=web_search,
         permission=Permission.READ,

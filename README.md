@@ -21,6 +21,12 @@ World 0 is not a knowledge graph, not a memory system, not an ontology. It is a 
 
 World 0 不是知识图谱，不是记忆系统，不是本体论。它是一个认知结构，将积累的观察转化为聚焦的、与任务相关的投影。
 
+## Roadmap / 路线
+
+The current agent development priorities are tracked in [`TODO.md`](TODO.md).
+
+当前 Agent 的功能开发优先级记录在 [`TODO.md`](TODO.md)。
+
 ## Quickstart / 快速开始
 
 ```bash

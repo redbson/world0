@@ -146,6 +146,22 @@ class RelationManager:
             edge.relation_type = new_type
             self._dirty.add(edge.id)
 
+    def adjust_strength(
+        self,
+        relation_id: str,
+        *,
+        weight_delta: float = 0.0,
+        confidence_delta: float = 0.0,
+    ) -> RelationEdge | None:
+        """Apply bounded strength adjustments to a relation."""
+        edge = self._relations.get(relation_id)
+        if not edge:
+            return None
+        edge.weight = min(1.0, max(0.01, edge.weight + weight_delta))
+        edge.confidence = min(1.0, max(0.01, edge.confidence + confidence_delta))
+        self._dirty.add(edge.id)
+        return edge
+
     # ── removal ───────────────────────────────────────────────────────
 
     def remove(self, relation_id: str) -> bool:

@@ -19,6 +19,7 @@ from world0.agents.provider import (
     default_model_for_provider,
     suggested_models_for_provider,
 )
+from world0.agents.state import AgentLifecycleStatus
 from world0.llm.base import LLMProvider
 from world0.schemas.relation import RelationType
 
@@ -71,10 +72,29 @@ class SettingsRequest(BaseModel):
     base_url: str = ""
     azure_endpoint: str = ""
     api_version: str = "2024-10-21"
+    auto_sediment_dialogue: bool = True
+    dialogue_sediment_interval: int = 1
 
 
 class SessionResumeRequest(BaseModel):
     session_id: str
+
+
+class SessionRenameRequest(BaseModel):
+    session_id: str = ""
+    title: str
+
+
+class SessionCompactRequest(BaseModel):
+    session_id: str = ""
+
+
+class ProjectionFeedbackRequest(BaseModel):
+    useful: bool | None = None
+    missing_concepts: list[str] = Field(default_factory=list)
+    noisy_concepts: list[str] = Field(default_factory=list)
+    weak_relations: list[str] = Field(default_factory=list)
+    notes: str = ""
 
 
 class SkillRequest(BaseModel):
@@ -150,12 +170,45 @@ def create_app(
     app = FastAPI(title="World 0 Concept World", version="0.2.0")
 
     def _session_payload(session) -> dict[str, Any]:
+        session_state = _agent.session_state(session)
+        latest_failure = _agent.latest_failure() if session.id == _agent.session.id else None
         return {
             "id": session.id,
             "title": session.title or "Untitled",
             "created_at": session.created_at.isoformat(),
             "updated_at": session.updated_at.isoformat(),
             "message_count": session.message_count(),
+            "state": session_state.model_dump(mode="json"),
+            "latest_failure": latest_failure.model_dump(mode="json") if latest_failure else None,
+            "latest_projection_feedback": (
+                session.latest_projection_feedback().model_dump(mode="json")
+                if session.latest_projection_feedback()
+                else None
+            ),
+            "turn_summaries": [
+                {
+                    "timestamp": item.timestamp.isoformat(),
+                    "stop_reason": item.stop_reason,
+                    "failure_class": item.failure_class,
+                    "rounds": item.rounds,
+                    "tool_count": item.tool_count,
+                    "failed_tools": item.failed_tools,
+                    "user_input_preview": item.user_input_preview,
+                    "assistant_output_preview": item.assistant_output_preview,
+                }
+                for item in session.turn_summaries
+            ],
+            "compaction": (
+                {
+                    "updated_at": session.compaction.updated_at.isoformat(),
+                    "summary": session.compaction.summary,
+                    "open_loops": session.compaction.open_loops,
+                    "key_concepts": session.compaction.key_concepts,
+                    "covered_messages": session.compaction.covered_messages,
+                }
+                if session.compaction
+                else None
+            ),
             "messages": [
                 {
                     "role": msg.role,
@@ -390,9 +443,10 @@ def create_app(
     @app.post("/api/agent/chat", response_model=MessageResponse)
     async def agent_chat(req: AgentChatRequest):
         """Agentic chat — LLM autonomously decides which tools to call."""
-        if not _agentic_ready:
+        current_state = _agent.agent_state()
+        if not current_state.agentic_ready:
             return MessageResponse(
-                message="Agentic mode unavailable. Set ANTHROPIC_API_KEY or OPENAI_API_KEY.",
+                message=current_state.reason or "Agentic mode unavailable.",
                 type="error",
             )
         tool_log: list[dict] = []
@@ -429,23 +483,30 @@ def create_app(
         tools = _agent.tool_registry
         current_session = _agent.session
         settings = _agent.runtime_settings()
-        if _agentic_ready:
-            unavailable_reason = None
-        elif llm is None:
-            unavailable_reason = "No LLM provider configured."
+        current_state = _agent.agent_state()
+        if current_state.status in (
+            AgentLifecycleStatus.BLOCKED,
+            AgentLifecycleStatus.DEGRADED,
+            AgentLifecycleStatus.FAILED,
+        ):
+            unavailable_reason = current_state.reason
         else:
-            unavailable_reason = (
-                "Agentic mode unavailable. Set ANTHROPIC_API_KEY, OPENAI_API_KEY, AZURE_OPENAI_API_KEY, or AZURE_OPENAI_KEY."
-            )
+            unavailable_reason = None
         return {
-            "agentic_ready": _agentic_ready,
-            "llm_enabled": llm is not None,
+            "agentic_ready": current_state.agentic_ready,
+            "llm_enabled": current_state.llm_enabled,
             "store_path": str(Path(store_path).expanduser()),
             "language": _agent.language,
-            "provider": _agent._chat_provider.provider_name if _agent._chat_provider else None,
-            "model": _agent._chat_provider.model if _agent._chat_provider else None,
+            "provider": current_state.provider,
+            "model": current_state.model,
             "unavailable_reason": unavailable_reason,
             "settings": settings,
+            "state": current_state.model_dump(mode="json"),
+            "latest_failure": (
+                _agent.latest_failure().model_dump(mode="json")
+                if _agent.latest_failure()
+                else None
+            ),
             "providers": [
                 {"id": "none", "label": "None"},
                 {"id": "openai", "label": "OpenAI"},
@@ -483,6 +544,20 @@ def create_app(
                 "id": current_session.id,
                 "title": current_session.title or "Untitled",
                 "message_count": current_session.message_count(),
+                "state": _agent.session_state(current_session).model_dump(mode="json"),
+                "last_projection": _agent.latest_projection_snapshot(),
+                "last_dialogue_sediment": _agent.latest_dialogue_sediment(),
+                "latest_turn": (
+                    {
+                        "stop_reason": current_session.latest_turn_summary().stop_reason,
+                        "failure_class": current_session.latest_turn_summary().failure_class,
+                        "rounds": current_session.latest_turn_summary().rounds,
+                        "tool_count": current_session.latest_turn_summary().tool_count,
+                    }
+                    if current_session.latest_turn_summary()
+                    else None
+                ),
+                "has_compaction": current_session.compaction is not None,
             },
             "recent_session_count": len(_agent.list_session_summaries(limit=20)),
             "tools": [
@@ -508,13 +583,17 @@ def create_app(
                 base_url=req.base_url or None,
                 azure_endpoint=req.azure_endpoint or None,
                 api_version=req.api_version or None,
+                auto_sediment_dialogue=req.auto_sediment_dialogue,
+                dialogue_sediment_interval=req.dialogue_sediment_interval,
             )
             llm = _agent._llm
             _agentic_ready = _agent._chat_provider is not None
+            current_state = _agent.agent_state()
             return {
                 "success": True,
                 "settings": _agent.runtime_settings(),
-                "agentic_ready": _agentic_ready,
+                "agentic_ready": current_state.agentic_ready,
+                "state": current_state.model_dump(mode="json"),
             }
         except Exception as e:
             return JSONResponse(
@@ -556,6 +635,73 @@ def create_app(
             "session": payload,
         }
 
+    @app.post("/api/sessions/rename")
+    async def rename_session(req: SessionRenameRequest):
+        try:
+            sid = _agent.rename_session(
+                req.title,
+                session_id=req.session_id or None,
+            )
+            session = _agent.get_session(sid)
+            return {"success": True, "session": _session_payload(session)}
+        except Exception as e:
+            return JSONResponse(
+                {"success": False, "error": str(e)},
+                status_code=400,
+            )
+
+    @app.post("/api/sessions/compact")
+    async def compact_session(req: SessionCompactRequest):
+        try:
+            result = _agent.compact_session(req.session_id or None)
+            session = _agent.get_session(result["session_id"])
+            return {
+                "success": True,
+                "compacted": result["compacted"],
+                "covered_messages": result["covered_messages"],
+                "session": _session_payload(session),
+            }
+        except Exception as e:
+            return JSONResponse(
+                {"success": False, "error": str(e)},
+                status_code=400,
+            )
+
+    @app.get("/api/agent/latest_failure")
+    async def latest_session_failure():
+        failure = _agent.latest_failure()
+        return {
+            "failure": failure.model_dump(mode="json") if failure else None,
+        }
+
+    @app.get("/api/projection/last")
+    async def last_projection():
+        return {
+            "projection": _agent.latest_projection_snapshot(),
+            "latest_feedback": (
+                _agent.latest_projection_feedback().model_dump(mode="json")
+                if _agent.latest_projection_feedback()
+                else None
+            ),
+        }
+
+    @app.post("/api/projection/feedback")
+    async def projection_feedback(req: ProjectionFeedbackRequest):
+        try:
+            result = _agent.apply_projection_feedback(
+                useful=req.useful,
+                missing_concepts=req.missing_concepts,
+                noisy_concepts=req.noisy_concepts,
+                weak_relations=req.weak_relations,
+                notes=req.notes,
+            )
+            return {"success": True, **result}
+        except Exception as e:
+            return JSONResponse(
+                {"success": False, "error": str(e)},
+                status_code=400,
+            )
+
     @app.post("/api/sessions/new")
     async def new_session():
         sid = _agent.new_session()
@@ -572,9 +718,10 @@ def create_app(
 
     @app.post("/api/skills/run", response_model=MessageResponse)
     async def run_skill(req: SkillRequest):
-        if not _agentic_ready:
+        current_state = _agent.agent_state()
+        if not current_state.agentic_ready:
             return MessageResponse(
-                message="Skill execution requires agentic mode (set API key).",
+                message=current_state.reason or "Skill execution requires agentic mode.",
                 type="error",
             )
         tool_log: list[dict] = []
@@ -1816,6 +1963,10 @@ const I18N = {
     baseUrl: "Base URL",
     azureEndpoint: "Azure Endpoint",
     apiVersion: "API Version",
+    autoSedimentDialogue: "Auto-sediment dialogue into World 0",
+    autoSedimentDialogueHelp: "When enabled, chat turns are periodically extracted into concepts and relations.",
+    dialogueSedimentInterval: "Dialogue sediment interval",
+    dialogueSedimentIntervalHelp: "Extract once every 1-20 turns.",
     saveSettings: "Save Settings",
     close: "Close",
     sessionsTitle: "Recent Sessions",
@@ -1933,6 +2084,10 @@ const I18N = {
     baseUrl: "Base URL",
     azureEndpoint: "Azure Endpoint",
     apiVersion: "API 版本",
+    autoSedimentDialogue: "自动将对话沉淀进 World 0",
+    autoSedimentDialogueHelp: "开启后，系统会按间隔把对话轮次抽取为概念与关系。",
+    dialogueSedimentInterval: "对话沉淀间隔",
+    dialogueSedimentIntervalHelp: "每 1-20 轮对话执行一次抽取。",
     saveSettings: "保存设置",
     close: "关闭",
     sessionsTitle: "最近会话",
@@ -2310,7 +2465,18 @@ function renderMarkdown(text) {
 }
 
 // ── Messages ──
-function addMessage(role, content, type = "text") {
+function formatMessageTime(value) {
+  if (!value) {
+    return new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  }
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    return new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  }
+  return parsed.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+}
+
+function addMessage(role, content, type = "text", options = {}) {
   // Hide welcome screen
   const welcome = $("#welcome-screen");
   if (welcome) welcome.style.display = "none";
@@ -2322,7 +2488,7 @@ function addMessage(role, content, type = "text") {
   const avatarMap = { user: "U", agent: "W", system: "S", error: "!" };
   const nameMap = { user: "You", agent: "World 0", system: "System", error: "Error" };
 
-  const now = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  const timeLabel = formatMessageTime(options.timestamp);
 
   const bodyHTML = type === "markdown" || role === "agent"
     ? renderMarkdown(content)
@@ -2333,7 +2499,7 @@ function addMessage(role, content, type = "text") {
     <div class="message-content">
       <div class="message-header">
         <span class="name">${nameMap[role] || role}</span>
-        <span>${now}</span>
+        <span>${timeLabel}</span>
       </div>
       <div class="message-body">${bodyHTML}</div>
     </div>
@@ -2579,12 +2745,8 @@ async function sendMessage() {
   }
 }
 
-// ── Tool call display ──
-function showToolCalls(calls) {
+function buildToolCallPairs(calls) {
   const container = $("#messages");
-  const div = document.createElement("div");
-  div.className = "message msg-system";
-
   const callPairs = [];
   for (let i = 0; i < calls.length; i += 2) {
     const call = calls[i];
@@ -2605,14 +2767,24 @@ function showToolCalls(calls) {
     }
   }
 
+  return callPairs;
+}
+
+function appendToolCallMessage(calls, options = {}) {
+  const container = $("#messages");
+  const div = document.createElement("div");
+  div.className = "message msg-system";
+  const callPairs = buildToolCallPairs(calls);
+
   if (callPairs.length === 0) return;
+  const subtitle = options.subtitle || `${callPairs.length} tool${callPairs.length > 1 ? 's' : ''} used`;
 
   div.innerHTML = `
     <div class="message-avatar" style="background:var(--bg-card);color:var(--purple)">T</div>
     <div class="message-content">
       <div class="message-header">
         <span class="name">Tool Calls</span>
-        <span>${callPairs.length} tool${callPairs.length > 1 ? 's' : ''} used</span>
+        <span>${options.timestamp ? formatMessageTime(options.timestamp) : subtitle}</span>
       </div>
       <div class="message-body" style="font-size:12px;font-family:'SF Mono',Menlo,monospace">
         ${callPairs.join("")}
@@ -2621,6 +2793,11 @@ function showToolCalls(calls) {
   `;
   container.appendChild(div);
   container.scrollTop = container.scrollHeight;
+}
+
+// ── Tool call display ──
+function showToolCalls(calls) {
+  appendToolCallMessage(calls);
 }
 
 // ── Session management ──
@@ -2645,7 +2822,60 @@ function renderStoredMessage(msg) {
   };
   const role = roleMap[msg.role] || "system";
   const type = role === "user" ? "text" : "markdown";
-  addMessage(role, msg.content, type);
+  addMessage(role, msg.content, type, { timestamp: msg.timestamp });
+}
+
+function collectStoredToolCalls(messages, startIndex) {
+  const calls = [];
+  let index = startIndex;
+  let firstTimestamp = null;
+
+  while (index < messages.length) {
+    const current = messages[index];
+    if (!current || current.role !== "tool_call") break;
+
+    let parsed = {};
+    try {
+      parsed = JSON.parse(current.content || "{}");
+    } catch (_) {
+      parsed = {};
+    }
+
+    const callEntry = {
+      phase: "call",
+      tool: parsed.name || current.metadata?.tool_name || "tool",
+      args: parsed.arguments || {},
+    };
+    calls.push(callEntry);
+    if (!firstTimestamp) firstTimestamp = current.timestamp;
+
+    const next = messages[index + 1];
+    if (
+      next &&
+      next.role === "tool_result" &&
+      (
+        !current.metadata?.tool_id ||
+        !next.metadata?.tool_id ||
+        current.metadata.tool_id === next.metadata.tool_id
+      )
+    ) {
+      calls.push({
+        phase: "result",
+        success: next.metadata?.success !== false,
+        output_preview: (next.content || "").slice(0, 200),
+      });
+      index += 2;
+      continue;
+    }
+
+    index += 1;
+  }
+
+  return {
+    calls,
+    nextIndex: index,
+    timestamp: firstTimestamp,
+  };
 }
 
 function renderSession(session) {
@@ -2655,7 +2885,25 @@ function renderSession(session) {
   }
   const container = $("#messages");
   container.innerHTML = "";
-  session.messages.forEach(renderStoredMessage);
+  let i = 0;
+  while (i < session.messages.length) {
+    const msg = session.messages[i];
+    if (msg.role === "tool_call") {
+      const grouped = collectStoredToolCalls(session.messages, i);
+      if (grouped.calls.length) {
+        appendToolCallMessage(grouped.calls, {
+          timestamp: grouped.timestamp,
+          subtitle: `${grouped.calls.filter(item => item.phase === "call").length} tool${grouped.calls.filter(item => item.phase === "call").length > 1 ? "s" : ""} used`,
+        });
+        i = grouped.nextIndex;
+        continue;
+      }
+    }
+    if (msg.role !== "tool_result") {
+      renderStoredMessage(msg);
+    }
+    i += 1;
+  }
 }
 
 async function saveSession() {
@@ -2785,6 +3033,8 @@ async function showSettingsModal() {
       settings.provider,
       settings.model || "",
     );
+    const autoSedimentChecked = settings.auto_sediment_dialogue !== false ? "checked" : "";
+    const sedimentInterval = Number(settings.dialogue_sediment_interval || 1);
     const body = `
       <div class="mode-fields">
         <div class="field-group">
@@ -2821,6 +3071,30 @@ async function showSettingsModal() {
           <label for="settings-api-version">${t("apiVersion")}</label>
           <input id="settings-api-version" value="${escapeHtml(settings.api_version || "2024-10-21")}" />
         </div>
+        <div class="field-group">
+          <label for="settings-auto-sediment-dialogue">${t("autoSedimentDialogue")}</label>
+          <label style="display:flex;align-items:center;gap:10px;font-weight:500;">
+            <input
+              id="settings-auto-sediment-dialogue"
+              type="checkbox"
+              ${autoSedimentChecked}
+              onchange="refreshDialogueSedimentFields()"
+            />
+            <span>${t("autoSedimentDialogueHelp")}</span>
+          </label>
+        </div>
+        <div class="field-group">
+          <label for="settings-dialogue-sediment-interval">${t("dialogueSedimentInterval")}</label>
+          <input
+            id="settings-dialogue-sediment-interval"
+            type="number"
+            min="1"
+            max="20"
+            step="1"
+            value="${Number.isFinite(sedimentInterval) ? sedimentInterval : 1}"
+          />
+          <div class="field-help">${t("dialogueSedimentIntervalHelp")}</div>
+        </div>
       </div>
       <div class="field-help" id="settings-model-hint">
         ${suggested ? `Suggested: ${escapeHtml(suggested)}` : ""}
@@ -2831,6 +3105,7 @@ async function showSettingsModal() {
     `;
     showModal("settings-modal", t("settingsTitle"), body);
     refreshSettingsModelHint();
+    refreshDialogueSedimentFields();
   } catch (err) {
     addMessage("error", t("updateSettingsFailed", { message: err.message }));
   }
@@ -2868,10 +3143,21 @@ function refreshSettingsModelHint() {
   }
 }
 
+function refreshDialogueSedimentFields() {
+  const enabled = !!document.getElementById("settings-auto-sediment-dialogue")?.checked;
+  const interval = document.getElementById("settings-dialogue-sediment-interval");
+  if (!interval) return;
+  interval.disabled = !enabled;
+  interval.style.opacity = enabled ? "1" : "0.55";
+}
+
 async function saveSettings() {
   try {
     const customModel = fieldValue("settings-model");
     const presetModel = fieldValue("settings-model-preset");
+    const autoSedimentDialogue = !!document.getElementById("settings-auto-sediment-dialogue")?.checked;
+    const rawInterval = Number(fieldValue("settings-dialogue-sediment-interval") || "1");
+    const dialogueSedimentInterval = Math.min(20, Math.max(1, Math.round(rawInterval || 1)));
     const payload = {
       language: fieldValue("settings-language") || "en",
       provider: fieldValue("settings-provider") || "none",
@@ -2880,6 +3166,8 @@ async function saveSettings() {
       base_url: fieldValue("settings-base-url"),
       azure_endpoint: fieldValue("settings-azure-endpoint"),
       api_version: fieldValue("settings-api-version") || "2024-10-21",
+      auto_sediment_dialogue: autoSedimentDialogue,
+      dialogue_sediment_interval: dialogueSedimentInterval,
     };
     await apiCall("/api/settings", {
       method: "POST",
@@ -2924,9 +3212,14 @@ async function loadEnvironmentStatus() {
     environmentStatus = agent;
     currentLanguage = agent.language || currentLanguage;
     applyTranslations();
-    $("#env-agentic").textContent = agent.agentic_ready
-      ? `${agent.provider || "ready"} · ${agent.model || "default"}`
-      : (agent.llm_enabled ? t("llmConfigured") : t("llmOff"));
+    const runtimeState = agent.state || {};
+    if (agent.agentic_ready) {
+      $("#env-agentic").textContent = `${runtimeState.status || "ready"} · ${agent.provider || "ready"} · ${agent.model || "default"}`;
+    } else if (runtimeState.reason) {
+      $("#env-agentic").textContent = `${runtimeState.status || "blocked"} · ${runtimeState.reason}`;
+    } else {
+      $("#env-agentic").textContent = agent.llm_enabled ? t("llmConfigured") : t("llmOff");
+    }
     $("#env-skills").textContent = `${availableSkills.length} ${currentLanguage === "zh" ? "已加载" : "loaded"}`;
     $("#env-mcp").textContent = `${mcp.connected || 0} ${t("connected")}`;
     $("#env-sessions").textContent = `${(sessions.sessions || []).length} ${t("recent")}`;

@@ -3,6 +3,10 @@
 Uses MMR (Maximal Marginal Relevance) selection to balance activation
 score against diversity, preventing hub concepts from monopolizing
 the projection.
+
+Task affinity and temporal freshness are integrated into MMR scoring
+so that different tasks produce different *sets* of concepts, and
+recently active concepts are preferred over stale ones.
 """
 
 from __future__ import annotations
@@ -14,6 +18,20 @@ from world0.schemas.types import Projection
 # MMR diversity weight. 0 = pure score ranking, 1 = pure diversity.
 # 0.3 gives a mild diversity nudge while keeping relevance primary.
 MMR_LAMBDA: float = 0.3
+
+# Task affinity discount applied in MMR when a candidate has *no*
+# association with the current task.  Reduces the effective relevance
+# so task-aligned concepts are preferred during selection.
+# 1.0 = no penalty, 0.0 = completely exclude non-matching concepts.
+TASK_AFFINITY_DISCOUNT: float = 0.6
+
+# Temporal freshness weight in MMR relevance computation.
+# Controls how much temporal_relevance influences concept selection.
+# 0.0 = no time influence, 1.0 = freshness equally weighted as score.
+TEMPORAL_WEIGHT: float = 0.3
+
+# Half-life used for temporal relevance in projection (hours).
+PROJECTION_TEMPORAL_HL: float = 168.0  # 1 week
 
 
 class ProjectionEngine:
@@ -40,9 +58,10 @@ class ProjectionEngine:
         """Build a cognitive projection from activation scores.
 
         1. Filter by minimum activation
-        2. MMR greedy selection: balance score vs diversity
-        3. Include relations between selected concepts
-        4. Return LLM-prompt-ready Projection
+        2. Compute per-candidate task affinity
+        3. MMR greedy selection: balance score × task_affinity vs diversity
+        4. Include relations between selected concepts
+        5. Return LLM-prompt-ready Projection
         """
         # Filter candidates
         candidates = {
@@ -59,6 +78,35 @@ class ProjectionEngine:
         if max_score == 0:
             max_score = 1.0
 
+        # Pre-compute task affinity and temporal freshness for each
+        # candidate.  Both are multiplied into the MMR relevance score.
+        task_lower = task.strip().lower()
+        task_affinity: dict[str, float] = {}
+        temporal_freshness: dict[str, float] = {}
+        for cid in candidates:
+            node = self._concepts.get(cid)
+
+            # Task affinity
+            if not task_lower:
+                task_affinity[cid] = 1.0
+            elif node and any(
+                task_lower in entry.task.lower()
+                for entry in node.reinforcement_log
+            ):
+                task_affinity[cid] = 1.0
+            else:
+                task_affinity[cid] = TASK_AFFINITY_DISCOUNT
+
+            # Temporal freshness: blend 1.0 (ignore time) with the
+            # actual temporal_relevance using TEMPORAL_WEIGHT.
+            if node:
+                raw_freshness = node.temporal_relevance(PROJECTION_TEMPORAL_HL)
+                temporal_freshness[cid] = (
+                    (1.0 - TEMPORAL_WEIGHT) + TEMPORAL_WEIGHT * raw_freshness
+                )
+            else:
+                temporal_freshness[cid] = 1.0
+
         # Build neighbor sets for similarity computation
         neighbor_sets: dict[str, set[str]] = {}
         for cid in candidates:
@@ -73,7 +121,15 @@ class ProjectionEngine:
             best_mmr = -float("inf")
 
             for cid in remaining:
-                relevance = candidates[cid] / max_score
+                # Relevance incorporates task affinity and temporal
+                # freshness so that concepts matching the current task
+                # and recently active concepts are preferred during
+                # selection, not just ranked higher.
+                relevance = (
+                    candidates[cid] / max_score
+                    * task_affinity[cid]
+                    * temporal_freshness[cid]
+                )
 
                 # Redundancy: max Jaccard similarity to any already-selected
                 if selected:

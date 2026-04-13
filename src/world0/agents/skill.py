@@ -188,6 +188,7 @@ class SkillExecutor:
             )
 
         from world0.agents.loop import AgentLoop
+        self._agent._prepare_session_for_agentic()
 
         # Use skill's system override if provided
         loop = AgentLoop(

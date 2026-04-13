@@ -72,6 +72,7 @@ Examples:
   %(prog)s --provider none          Start without LLM (structured input only)
   %(prog)s learn "some text..."     Quick learn
   %(prog)s ask "some question?"     Quick ask
+  %(prog)s web-search "latest MCP patterns"   Quick web search
   %(prog)s explore "concept"        Quick explore
   %(prog)s status                   Show world status
   %(prog)s reflect                  Run consolidation
@@ -125,6 +126,26 @@ Examples:
     search_parser = subparsers.add_parser("search", help="Search concepts")
     search_parser.add_argument("query", help="Search query")
 
+    # web-search
+    web_search_parser = subparsers.add_parser(
+        "web-search", help="Search the public web"
+    )
+    web_search_parser.add_argument("query", help="Web search query")
+    web_search_parser.add_argument("--focus", default="", help="Optional search focus")
+    web_search_parser.add_argument(
+        "--domains",
+        default="",
+        help="Optional comma-separated domain filters",
+    )
+    web_search_parser.add_argument(
+        "--limit", type=int, default=5, help="Maximum number of results"
+    )
+    web_search_parser.add_argument(
+        "--fetch-pages",
+        action="store_true",
+        help="Fetch the top pages and include short excerpts",
+    )
+
     # status
     subparsers.add_parser("status", help="Show world status")
 
@@ -155,6 +176,14 @@ Examples:
         print(agent.connect(args.source, args.target, args.type))
     elif args.command == "search":
         print(agent.search(args.query))
+    elif args.command == "web-search":
+        print(agent.search_web(
+            args.query,
+            focus=args.focus,
+            max_results=args.limit,
+            domains=args.domains,
+            fetch_pages=args.fetch_pages,
+        ))
     elif args.command == "status":
         print(agent.status())
     elif args.command == "reflect":

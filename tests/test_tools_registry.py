@@ -197,7 +197,38 @@ class TestPKMTools:
     def test_web_search_empty(self, registry: ToolRegistry):
         result = registry.execute("web_search", {"query": ""})
         assert result.success
-        assert "no web results" in result.output.lower()
+        assert "provide a search query" in result.output.lower()
+
+    def test_web_search_fetch_pages(
+        self,
+        registry: ToolRegistry,
+        agent: PKMAgent,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        calls: dict[str, object] = {}
+
+        def fake_search_web(query, *, focus="", max_results=5, domains=None, fetch_pages=False):
+            calls["query"] = query
+            calls["focus"] = focus
+            calls["max_results"] = max_results
+            calls["domains"] = domains
+            calls["fetch_pages"] = fetch_pages
+            return "## Web Search: MCP\n\n### Source Glimpses"
+
+        monkeypatch.setattr(agent, "search_web", fake_search_web)
+        result = registry.execute("web_search", {
+            "query": "MCP",
+            "focus": "Claude Code",
+            "domains": "docs.anthropic.com",
+            "fetch_pages": True,
+        })
+
+        assert result.success
+        assert "source glimpses" in result.output.lower()
+        assert calls["query"] == "MCP"
+        assert calls["focus"] == "Claude Code"
+        assert calls["domains"] == "docs.anthropic.com"
+        assert calls["fetch_pages"] is True
 
     def test_learn_tool(self, registry: ToolRegistry):
         result = registry.execute("learn", {"text": "Python is great for ML"})

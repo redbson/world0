@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 from starlette.testclient import TestClient
 
+from world0.agents.session import TurnSummary
 from world0.agents.web import create_app
 from world0.llm.base import LLMProvider
 
@@ -145,8 +146,12 @@ def test_agent_status(client):
     assert resp.status_code == 200
     data = resp.json()
     assert "agentic_ready" in data
+    assert data["llm_enabled"] is True
+    assert data["state"]["status"] == "blocked"
+    assert "Agentic mode unavailable" in data["state"]["reason"]
     assert "store_path" in data
     assert "current_session" in data
+    assert data["current_session"]["state"]["status"] == "active"
     assert "tool_count" in data
     assert "languages" in data
     assert "providers" in data
@@ -168,6 +173,7 @@ def test_sessions_flow(client):
     assert detail_resp.status_code == 200
     session = detail_resp.json()["session"]
     assert session["id"] == session_id
+    assert session["state"]["status"] == "active"
     assert len(session["messages"]) >= 2
 
     resume_resp = client.post("/api/sessions/resume", json={"session_id": session_id})
@@ -177,21 +183,100 @@ def test_sessions_flow(client):
     assert resume_data["session"]["id"] == session_id
 
 
+def test_session_rename_endpoint(client):
+    client.post("/api/learn", json={"text": "Python supports APIs"})
+    session_id = client.get("/api/sessions").json()["sessions"][0]["id"]
+    resp = client.post("/api/sessions/rename", json={
+        "session_id": session_id,
+        "title": "Research Session",
+    })
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["success"] is True
+    assert data["session"]["title"] == "Research Session"
+
+
+def test_session_compact_endpoint(client):
+    for i in range(10):
+        client.post("/api/learn", json={"text": f"Python supports APIs {i}"})
+    resp = client.post("/api/sessions/compact", json={})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["success"] is True
+    assert data["session"]["state"]["status"] == "compacted"
+    assert data["covered_messages"] > 0
+
+
+def test_latest_failure_endpoint(client):
+    from world0.agents import web as web_module
+
+    web_module._agent.session.add_turn_summary(TurnSummary(
+        stop_reason="end_turn",
+        failure_class="tool_runtime",
+        rounds=2,
+        tool_count=1,
+        failed_tools=["web_fetch"],
+        user_input_preview="Fetch a source",
+        assistant_output_preview="The fetch failed.",
+    ))
+    resp = client.get("/api/agent/latest_failure")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["failure"]["failure_class"] == "tool_runtime"
+    assert "manual_compact" not in (data["failure"]["recovery_actions"] or [])
+
+
+def test_projection_feedback_flow(client):
+    client.post("/api/learn", json={"text": "FastAPI depends on Python and supports ORM usage"})
+    ask_resp = client.post("/api/ask", json={"query": "python web framework"})
+    assert ask_resp.status_code == 200
+
+    last_projection = client.get("/api/projection/last")
+    assert last_projection.status_code == 200
+    projection = last_projection.json()["projection"]
+    assert projection is not None
+    assert projection["query"] == "python web framework"
+
+    feedback_resp = client.post("/api/projection/feedback", json={
+        "useful": True,
+        "missing_concepts": ["postgresql"],
+        "noisy_concepts": ["web framework"],
+        "notes": "Need database concepts.",
+    })
+    assert feedback_resp.status_code == 200
+    data = feedback_resp.json()
+    assert data["success"] is True
+    assert "postgresql" in data["created_missing_concepts"]
+    latest = client.get("/api/projection/last").json()["latest_feedback"]
+    assert latest is not None
+    assert latest["useful"] is True
+
+
 def test_settings_roundtrip(client):
     resp = client.post("/api/settings", json={
         "language": "zh",
         "provider": "none",
         "model": "",
+        "auto_sediment_dialogue": False,
+        "dialogue_sediment_interval": 3,
     })
     assert resp.status_code == 200
     data = resp.json()
     assert data["success"] is True
     assert data["settings"]["language"] == "zh"
     assert data["settings"]["provider"] == "none"
+    assert data["settings"]["auto_sediment_dialogue"] is False
+    assert data["settings"]["dialogue_sediment_interval"] == 3
+    assert data["agentic_ready"] is False
+    assert data["state"]["status"] == "blocked"
 
     status_resp = client.get("/api/agent/status")
     status = status_resp.json()
     assert status["language"] == "zh"
+    assert status["llm_enabled"] is False
+    assert status["unavailable_reason"] == "No LLM provider configured."
+    assert status["state"]["status"] == "blocked"
+    assert status["state"]["reason"] == "No LLM provider configured."
 
 
 def test_research_endpoint(client, monkeypatch: pytest.MonkeyPatch):

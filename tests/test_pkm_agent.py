@@ -5,10 +5,14 @@ from __future__ import annotations
 import json
 import tempfile
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from world0.agents.pkm import PKMAgent
+from world0.agents.provider import ChatResponse
+from world0.agents.session import TurnSummary
+from world0.agents.state import AgentLifecycleStatus
 from world0.llm.base import LLMProvider
 from world0.schemas.relation import RelationType
 from world0.schemas.types import Observation
@@ -76,6 +80,19 @@ class FakeResearchLLM(LLMProvider):
         })
 
 
+class FakeChatProvider:
+    provider_name = "openai"
+    model = "openai/gpt-5.4"
+
+    def __init__(self, responses: list[ChatResponse]) -> None:
+        self._responses = list(responses)
+
+    def chat(self, messages, *, system=None, tools=None):  # noqa: ANN001
+        if not self._responses:
+            raise AssertionError("No more fake chat responses configured")
+        return self._responses.pop(0)
+
+
 @pytest.fixture
 def tmp_store(tmp_path: Path) -> Path:
     return tmp_path / "test_pkm"
@@ -132,6 +149,139 @@ class TestLearnText:
         assert "empty" in result.lower()
 
 
+class TestDialogueSedimentation:
+    def test_sediment_dialogue_turn_ingests_concepts(self, tmp_store: Path) -> None:
+        llm = FakeLLM(responses=[
+            json.dumps({
+                "concepts": [
+                    {"name": "model serving", "description": "runtime model endpoint"},
+                    {"name": "pytorch", "description": "training framework"},
+                    {"name": "training pipeline", "description": "upstream training path"},
+                ],
+                "relations": [
+                    {"source": "model serving", "target": "pytorch", "type": "depends_on"},
+                    {"source": "pytorch", "target": "training pipeline", "type": "supports"},
+                ],
+            }),
+        ])
+        agent = PKMAgent(store_path=tmp_store, llm=llm)
+
+        sediment = agent.sediment_dialogue_turn(
+            "How does model serving connect back upstream?",
+            "Model serving depends on PyTorch and the training pipeline.",
+            mode="chat",
+        )
+
+        assert sediment["status"] == "ingested"
+        assert agent.latest_dialogue_sediment() is not None
+        assert agent.latest_dialogue_sediment()["mode"] == "chat"
+        assert agent.world.concepts.resolve("model serving") is not None
+        assert agent.world.concepts.resolve("pytorch") is not None
+
+    def test_sediment_dialogue_turn_skips_when_disabled(self, tmp_store: Path) -> None:
+        agent = PKMAgent(store_path=tmp_store, llm=FakeLLM())
+        agent.configure_runtime(
+            provider="none",
+            auto_sediment_dialogue=False,
+        )
+
+        sediment = agent.sediment_dialogue_turn(
+            "What matters for deployment?",
+            "Deployment depends on monitoring.",
+            mode="chat",
+        )
+
+        assert sediment["status"] == "skipped"
+        assert "disabled" in sediment["reason"].lower()
+
+    def test_configure_runtime_rejects_invalid_sediment_interval(
+        self,
+        agent_with_llm: PKMAgent,
+    ) -> None:
+        with pytest.raises(ValueError, match="between 1 and 20"):
+            agent_with_llm.configure_runtime(dialogue_sediment_interval=21)
+
+    def test_agent_chat_auto_sediments_successful_turn(self, tmp_store: Path) -> None:
+        llm = FakeLLM(responses=[
+            json.dumps({
+                "concepts": [
+                    {"name": "model serving", "description": "runtime endpoint"},
+                    {"name": "fastapi", "description": "web framework"},
+                    {"name": "deployment", "description": "release path"},
+                ],
+                "relations": [
+                    {"source": "model serving", "target": "fastapi", "type": "depends_on"},
+                    {"source": "model serving", "target": "deployment", "type": "depends_on"},
+                ],
+            }),
+        ])
+        agent = PKMAgent(store_path=tmp_store, llm=llm)
+        agent._chat_provider = FakeChatProvider([
+            ChatResponse(
+                content="Model serving depends on FastAPI and deployment.",
+                tool_calls=[],
+                stop_reason="end_turn",
+            ),
+        ])
+
+        result = agent.agent_chat("What runtime path matters for model serving?")
+
+        assert "fastapi" in result.lower()
+        sediment = agent.latest_dialogue_sediment()
+        assert sediment is not None
+        assert sediment["status"] == "ingested"
+        assert sediment["mode"] == "agent_chat"
+        assert agent.world.concepts.resolve("model serving") is not None
+        assert agent.world.concepts.resolve("fastapi") is not None
+
+    def test_agent_chat_respects_sediment_interval(self, tmp_store: Path) -> None:
+        llm = FakeLLM(responses=[
+            json.dumps({
+                "concepts": [
+                    {"name": "model serving", "description": "runtime endpoint"},
+                    {"name": "deployment", "description": "release path"},
+                    {"name": "latency", "description": "runtime performance signal"},
+                ],
+                "relations": [
+                    {"source": "model serving", "target": "deployment", "type": "depends_on"},
+                    {"source": "deployment", "target": "latency", "type": "related_to"},
+                ],
+            }),
+        ])
+        agent = PKMAgent(store_path=tmp_store, llm=llm)
+        agent._runtime_settings["dialogue_sediment_interval"] = 2
+        agent._chat_provider = FakeChatProvider([
+            ChatResponse(
+                content="Model serving depends on deployment.",
+                tool_calls=[],
+                stop_reason="end_turn",
+            ),
+            ChatResponse(
+                content="Latency is the current deployment concern.",
+                tool_calls=[],
+                stop_reason="end_turn",
+            ),
+        ])
+
+        first = agent.agent_chat("What release path matters for model serving?")
+        assert "deployment" in first.lower()
+        first_sediment = agent.latest_dialogue_sediment()
+        assert first_sediment is not None
+        assert first_sediment["status"] == "pending"
+        assert first_sediment["pending_turns"] == 1
+        assert agent.world.concepts.resolve("model serving") is None
+
+        second = agent.agent_chat("What signal tells us the runtime is unhealthy?")
+        assert "latency" in second.lower()
+        second_sediment = agent.latest_dialogue_sediment()
+        assert second_sediment is not None
+        assert second_sediment["status"] == "ingested"
+        assert second_sediment["pending_turns"] == 2
+        assert second_sediment["required_turns"] == 2
+        assert agent.world.concepts.resolve("model serving") is not None
+        assert agent.world.concepts.resolve("latency") is not None
+
+
 class TestAsk:
     def test_ask_empty(self, agent: PKMAgent) -> None:
         result = agent.ask("")
@@ -156,8 +306,71 @@ class TestAsk:
         assert "python" in result.lower()
         assert "projection basis" in result.lower()
 
+    def test_ask_stores_projection_snapshot(self, agent: PKMAgent) -> None:
+        obs = Observation(
+            concepts=["fastapi", "python", "postgresql"],
+            relations=[("fastapi", "python", "depends_on")],
+        )
+        agent.learn_structured(obs)
+        agent.ask("fastapi backend")
+        snapshot = agent.latest_projection_snapshot()
+        assert snapshot is not None
+        assert snapshot["query"] == "fastapi backend"
+        assert any(item["name"] == "fastapi" for item in snapshot["concepts"])
+
 
 class TestResearch:
+    def test_search_web_with_filters_and_fetch(
+        self,
+        tmp_store: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from world0.agents import research as research_utils
+
+        llm = FakeResearchLLM()
+        agent = PKMAgent(store_path=tmp_store, llm=llm)
+
+        def fake_search(query, limit=5, timeout=15, domains=None):
+            assert query == "agent mcp"
+            assert domains == ["docs.anthropic.com", "modelcontextprotocol.io"]
+            return [
+                research_utils.SearchResult(
+                    title="Claude Code MCP",
+                    url="https://docs.anthropic.com/en/docs/claude-code/mcp",
+                    snippet="Claude Code can connect to local MCP servers.",
+                    domain="docs.anthropic.com",
+                ),
+                research_utils.SearchResult(
+                    title="MCP Spec",
+                    url="https://modelcontextprotocol.io/introduction",
+                    snippet="MCP standardizes tool and resource access for models.",
+                    domain="modelcontextprotocol.io",
+                ),
+            ]
+
+        monkeypatch.setattr(research_utils, "search_web", fake_search)
+        monkeypatch.setattr(
+            research_utils,
+            "fetch_web_document",
+            lambda url, max_chars=4000: research_utils.FetchedDocument(
+                title="Fetched " + url.rsplit("/", 1)[-1],
+                url=url,
+                text="Search results can be upgraded into grounded source glimpses for agents.",
+            ),
+        )
+
+        result = agent.search_web(
+            "agent",
+            focus="mcp",
+            domains="docs.anthropic.com, modelcontextprotocol.io",
+            fetch_pages=True,
+        )
+
+        assert "web search: agent" in result.lower()
+        assert "domains:" in result.lower()
+        assert "search brief" in result.lower()
+        assert "source glimpses" in result.lower()
+
     def test_research_topic(self, tmp_store: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         from world0.agents import research as research_utils
 
@@ -167,7 +380,7 @@ class TestResearch:
         monkeypatch.setattr(
             research_utils,
             "search_web",
-            lambda query, limit=5: [
+            lambda query, limit=5, timeout=15, domains=None: [
                 research_utils.SearchResult(
                     title="Agent Research Survey",
                     url="https://example.com/survey",
@@ -196,6 +409,62 @@ class TestResearch:
         assert "sources reviewed" in result.lower()
         assert "world 0 update" in result.lower()
         assert "projection into world 0" in result.lower()
+
+    def test_search_web_recovers_without_domain_filters(
+        self,
+        tmp_store: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from world0.agents import research as research_utils
+
+        llm = FakeResearchLLM()
+        agent = PKMAgent(store_path=tmp_store, llm=llm)
+        calls: list[tuple[str, list[str] | None]] = []
+
+        def fake_search(query, limit=5, timeout=15, domains=None):
+            calls.append((query, list(domains) if domains else None))
+            if domains:
+                raise RuntimeError("temporary network failure")
+            return [
+                research_utils.SearchResult(
+                    title="Recovered result",
+                    url="https://example.com/recovered",
+                    snippet="Recovered after removing domain filters.",
+                    domain="example.com",
+                ),
+            ]
+
+        monkeypatch.setattr(research_utils, "search_web", fake_search)
+
+        result = agent.search_web(
+            "agent",
+            focus="mcp",
+            domains="docs.anthropic.com",
+        )
+
+        assert len(calls) >= 2
+        assert "### Recovery" in result
+        assert "without domain filters" in result
+        assert agent.latest_failure() is None
+
+    def test_prepare_session_for_agentic_compacts_old_messages(
+        self,
+        tmp_store: Path,
+    ) -> None:
+        llm = FakeResearchLLM()
+        agent = PKMAgent(store_path=tmp_store, llm=llm)
+        session = agent.session
+        for i in range(60):
+            role = "user" if i % 2 == 0 else "assistant"
+            session.add_message(role, f"message {i} about agent research and citations")
+
+        agent._prepare_session_for_agentic()
+
+        assert session.compaction is not None
+        assert session.compaction.covered_messages > 0
+        msgs = session.to_llm_messages(max_messages=10)
+        assert msgs[0]["role"] == "system"
+        assert "Session Summary" in msgs[0]["content"]
 
 
 class TestExplore:
@@ -310,6 +579,95 @@ class TestStatus:
         agent.learn_structured(obs)
         result = agent.status()
         assert "2" in result  # 2 concepts
+
+    def test_agent_state_without_llm_is_blocked(self, agent: PKMAgent) -> None:
+        state = agent.agent_state()
+        assert state.status == AgentLifecycleStatus.BLOCKED
+        assert state.reason == "No LLM provider configured."
+        assert state.agentic_ready is False
+
+    def test_agent_state_with_latest_turn_failure_is_degraded(
+        self,
+        agent_with_llm: PKMAgent,
+    ) -> None:
+        agent_with_llm._chat_provider = SimpleNamespace(
+            provider_name="openai",
+            model="openai/gpt-5.4",
+        )
+        agent_with_llm.session.add_turn_summary(TurnSummary(
+            stop_reason="end_turn",
+            failure_class="provider_rate_limit",
+            rounds=2,
+            tool_count=1,
+            failed_tools=["web_search"],
+            user_input_preview="Research retry policy",
+            assistant_output_preview="Search failed due to rate limit.",
+        ))
+        state = agent_with_llm.agent_state()
+        assert state.status == AgentLifecycleStatus.DEGRADED
+        assert state.latest_failure_class == "provider_rate_limit"
+        assert state.failed_tools == ["web_search"]
+        assert "latest_turn" in state.degraded_sources
+
+    def test_agent_state_with_runtime_failure_is_degraded(
+        self,
+        tmp_store: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from world0.agents import research as research_utils
+
+        llm = FakeResearchLLM()
+        agent = PKMAgent(store_path=tmp_store, llm=llm)
+        agent._chat_provider = SimpleNamespace(
+            provider_name="openai",
+            model="openai/gpt-5.4",
+        )
+        monkeypatch.setattr(
+            research_utils,
+            "search_web",
+            lambda query, limit=5, timeout=15, domains=None: (_ for _ in ()).throw(
+                RuntimeError("temporary network failure")
+            ),
+        )
+        result = agent.search_web("agent", focus="mcp", domains="docs.anthropic.com")
+        state = agent.agent_state()
+        assert "no web results found" in result.lower()
+        assert state.status == AgentLifecycleStatus.DEGRADED
+        assert "runtime_failure" in state.degraded_sources
+
+
+class TestProjectionFeedback:
+    def test_apply_projection_feedback_adjusts_projection_items(self, agent: PKMAgent) -> None:
+        obs = Observation(
+            concepts=["fastapi", "python", "orm"],
+            relations=[("fastapi", "python", "depends_on"), ("fastapi", "orm", "supports")],
+        )
+        agent.learn_structured(obs)
+        agent.ask("fastapi backend")
+
+        fastapi = agent.world.concepts.resolve("fastapi")
+        orm = agent.world.concepts.resolve("orm")
+        rel = agent.world.relations.find_between(fastapi.id, orm.id)
+        before_noise_conf = orm.confidence
+        before_rel_weight = rel.weight
+
+        result = agent.apply_projection_feedback(
+            useful=True,
+            missing_concepts=["postgresql"],
+            noisy_concepts=["orm"],
+            weak_relations=["fastapi -> supports -> orm"],
+            notes="Need database concepts, ORM was too prominent.",
+        )
+
+        postgres = agent.world.concepts.resolve("postgresql")
+        assert postgres is not None
+        assert "postgresql" in result["created_missing_concepts"]
+        assert "orm" in result["demoted_noisy_concepts"]
+        assert "fastapi -> supports -> orm" in result["weakened_relations"]
+        assert agent.world.concepts.resolve("orm").confidence < before_noise_conf
+        assert agent.world.relations.get(rel.id).weight < before_rel_weight
+        assert agent.latest_projection_feedback() is not None
+        assert agent.latest_projection_feedback().useful is True
 
 
 class TestHandleInput:

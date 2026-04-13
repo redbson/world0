@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import uuid
 from datetime import datetime, timezone
 from enum import Enum
@@ -85,3 +86,23 @@ class RelationEdge(BaseModel):
     def hours_since_reinforced(self) -> float:
         delta = datetime.now(timezone.utc) - self.last_reinforced
         return delta.total_seconds() / 3600.0
+
+    def temporal_relevance(self, half_life_hours: float = 72.0) -> float:
+        """Time-based relevance score in [0, 1].
+
+        Returns 1.0 for a just-reinforced relation and decays
+        exponentially.  More reinforced relations use a longer
+        effective half-life (the same scaling used by DecayEngine).
+        A floor of 0.15 keeps structurally significant but old
+        relations from disappearing completely during activation.
+
+        Args:
+            half_life_hours: Base half-life in hours.
+                Default 72 h (3 days).
+        """
+        hours = self.hours_since_reinforced()
+        if hours <= 0 or half_life_hours <= 0:
+            return 1.0
+        effective_hl = half_life_hours * (1.0 + self.reinforcement_count * 0.5)
+        raw = math.pow(0.5, hours / effective_hl)
+        return max(0.15, raw)

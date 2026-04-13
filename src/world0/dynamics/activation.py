@@ -5,6 +5,8 @@ Activation factors:
   - relation weight, confidence, and type
   - task affinity: relations/concepts associated with the current task
     propagate more strongly
+  - temporal relevance: recently active concepts and relations propagate
+    more strongly than stale ones
   - depth decay with configurable falloff
   - propagation floor to prevent low-confidence nodes from blocking spread
 """
@@ -41,6 +43,20 @@ TASK_AFFINITY_BOOST: float = 1.5
 # this minimum readiness level, preventing "dead node" blockage.
 PROPAGATION_FLOOR: float = 0.3
 
+# ── Propagation minimum ratio ────────────────────────────────────────
+# Ensures propagated score is at least this fraction of the *seed*
+# score at each depth step, preventing the multiplicative chain from
+# zeroing out signal too early.  This widens the cognitive horizon
+# from ~1 hop to 3-4 hops.
+PROPAGATION_MIN_RATIO: float = 0.03
+
+# ── Temporal relevance half-lives ────────────────────────────────────
+# Used by temporal_relevance() during activation propagation.
+# These are "soft" half-lives for freshness weighting, separate from
+# the hard decay half-lives in DecayEngine.
+CONCEPT_TEMPORAL_HL: float = 168.0   # 1 week for concept freshness
+RELATION_TEMPORAL_HL: float = 72.0   # 3 days for relation freshness
+
 
 class ActivationEngine:
     """Spreads activation from seed concepts through the relation network."""
@@ -56,7 +72,7 @@ class ActivationEngine:
         seed_ids: list[str],
         *,
         max_depth: int = 2,
-        decay: float = 0.5,
+        decay: float = 0.6,
         min_activation: float = 0.01,
         source: str = "",
         task: str = "",
@@ -66,11 +82,21 @@ class ActivationEngine:
 
         Propagation strength =
             source_score
-            * relation.weight * relation.confidence
-            * RELATION_TYPE_FACTOR[relation.type]
+            * relation.weight * RELATION_TYPE_FACTOR[relation.type]
             * max(neighbor.confidence, PROPAGATION_FLOOR)
             * depth_decay
             * task_affinity
+            * relation.temporal_relevance   ← time dimension
+            * neighbor.temporal_relevance   ← time dimension
+
+        The temporal factors ensure that recently active concepts and
+        recently reinforced relations propagate more strongly than
+        stale ones.  Both have a floor (0.1 / 0.15) so structurally
+        important but old nodes are not completely cut off.
+
+        A propagation minimum floor (PROPAGATION_MIN_RATIO * seed_score)
+        ensures that the multiplicative chain does not zero out signal
+        before reaching 3–4 hops.
 
         Args:
             record: If True, touched concepts get their activation_count
@@ -83,6 +109,7 @@ class ActivationEngine:
         task_lower = task.strip().lower()
 
         # Seed concepts activate at their own confidence level
+        seed_score_max = 0.0
         for cid in seed_ids:
             node = self._concepts.get(cid)
             if not node:
@@ -92,8 +119,13 @@ class ActivationEngine:
             if task_lower and self._concept_has_task(node, task_lower):
                 score = min(1.0, score * TASK_AFFINITY_BOOST)
             activations[cid] = score
+            if score > seed_score_max:
+                seed_score_max = score
             if record:
                 node.activate(source=source, task=task)
+
+        # Propagation floor: minimum signal that can still pass through
+        prop_floor = seed_score_max * PROPAGATION_MIN_RATIO
 
         # BFS propagation with decay
         frontier = list(seed_ids)
@@ -116,8 +148,6 @@ class ActivationEngine:
                         continue
 
                     # Edge strength: use weight as primary signal
-                    # (weight and confidence track nearly identically on
-                    # relations; multiplying them squares the attenuation)
                     type_factor = RELATION_TYPE_FACTOR.get(
                         rel.relation_type, 0.5
                     )
@@ -142,13 +172,28 @@ class ActivationEngine:
                         if rel_match or node_match:
                             task_boost = TASK_AFFINITY_BOOST
 
+                    # Temporal relevance: recently active concepts and
+                    # recently reinforced relations propagate stronger.
+                    rel_freshness = rel.temporal_relevance(RELATION_TEMPORAL_HL)
+                    neighbor_freshness = neighbor.temporal_relevance(
+                        CONCEPT_TEMPORAL_HL
+                    )
+
                     propagated = (
                         source_score
                         * edge_strength
                         * neighbor_readiness
                         * depth_factor
                         * task_boost
+                        * rel_freshness
+                        * neighbor_freshness
                     )
+
+                    # Apply propagation minimum floor — ensures distant
+                    # but structurally connected concepts still receive
+                    # enough signal to participate in projections.
+                    if propagated < prop_floor and propagated > 0:
+                        propagated = prop_floor
 
                     if propagated < min_activation:
                         continue

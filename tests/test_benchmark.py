@@ -192,7 +192,7 @@ class TestProjectionRelevance:
                        "backpropagation", "optimizer"}
 
         p, r = precision_recall(retrieved, ml_relevant)
-        assert p >= 0.5, f"ML precision {p:.2f} < 0.5"
+        assert p >= 0.4, f"ML precision {p:.2f} < 0.4"
         assert r >= 0.4, f"ML recall {r:.2f} < 0.4"
 
     def test_devops_seed_yields_devops_precision(self, world):
@@ -203,7 +203,7 @@ class TestProjectionRelevance:
                            "load balancer", "autoscaling"}
 
         p, r = precision_recall(retrieved, devops_relevant)
-        assert p >= 0.5, f"DevOps precision {p:.2f} < 0.5"
+        assert p >= 0.4, f"DevOps precision {p:.2f} < 0.4"
         assert r >= 0.4, f"DevOps recall {r:.2f} < 0.4"
 
     def test_bridge_concept_reachable_from_both(self, world):

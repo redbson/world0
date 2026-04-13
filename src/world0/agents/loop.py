@@ -9,16 +9,28 @@ that can plan multi-step knowledge operations.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 import json
 from typing import Any, Callable
 
 from world0.agents.provider import ChatProvider, ChatResponse, ToolCall
-from world0.agents.session import Message, Session
+from world0.agents.session import Session, TurnSummary
 from world0.agents.tools.registry import Permission, ToolRegistry, ToolResult
 from world0.llm.base import LLMError
 
 # Maximum tool calls per turn to prevent infinite loops
 MAX_TOOL_ROUNDS = 10
+
+
+@dataclass
+class AgentTurnOutcome:
+    stop_reason: str
+    failure_class: str
+    rounds: int
+    tool_count: int
+    failed_tools: list[str]
+    user_input: str
+    assistant_output: str
 
 _AGENTIC_SYSTEM_PROMPT = """\
 You are World 0 — a task-facing assistant powered by a cognitive \
@@ -137,10 +149,15 @@ class AgentLoop:
         self._on_tool_call = on_tool_call
         self._on_tool_result = on_tool_result
         self._language = language
+        self._last_outcome: AgentTurnOutcome | None = None
 
     @property
     def session(self) -> Session:
         return self._session
+
+    @property
+    def last_outcome(self) -> AgentTurnOutcome | None:
+        return self._last_outcome
 
     def run(self, user_input: str) -> str:
         """Execute one user turn through the agentic loop.
@@ -161,6 +178,9 @@ class AgentLoop:
 
         # Agent loop
         rounds = 0
+        tool_count = 0
+        failed_tools: list[str] = []
+        response = ChatResponse(content=None, tool_calls=[], stop_reason="end_turn")
         while rounds < self._max_rounds:
             rounds += 1
 
@@ -176,28 +196,58 @@ class AgentLoop:
             except LLMError as e:
                 error_msg = f"LLM error: {e}"
                 self._session.add_message("assistant", error_msg)
+                self._record_turn_outcome(AgentTurnOutcome(
+                    stop_reason="llm_error",
+                    failure_class="llm_error",
+                    rounds=rounds,
+                    tool_count=tool_count,
+                    failed_tools=failed_tools,
+                    user_input=user_input,
+                    assistant_output=error_msg,
+                ))
                 return error_msg
 
             # If no tool calls → final response
             if not response.tool_calls:
                 final = response.content or ""
                 self._session.add_message("assistant", final)
+                failure_class = "tool_runtime" if failed_tools else "none"
+                self._record_turn_outcome(AgentTurnOutcome(
+                    stop_reason=response.stop_reason or "end_turn",
+                    failure_class=failure_class,
+                    rounds=rounds,
+                    tool_count=tool_count,
+                    failed_tools=failed_tools,
+                    user_input=user_input,
+                    assistant_output=final,
+                ))
                 return final
 
             # Process tool calls
+            tool_count += len(response.tool_calls)
             # First, record the assistant's response (may include text + tool calls)
             if self._provider.provider_name == "anthropic":
-                messages = self._process_anthropic_tools(
+                messages, turn_failed = self._process_anthropic_tools(
                     messages, response
                 )
             else:
-                messages = self._process_openai_tools(
+                messages, turn_failed = self._process_openai_tools(
                     messages, response
                 )
+            failed_tools.extend(turn_failed)
 
         # Exceeded max rounds
         fallback = response.content or "I've reached the maximum number of tool calls for this turn."
         self._session.add_message("assistant", fallback)
+        self._record_turn_outcome(AgentTurnOutcome(
+            stop_reason="max_rounds",
+            failure_class="tool_round_limit",
+            rounds=rounds,
+            tool_count=tool_count,
+            failed_tools=failed_tools,
+            user_input=user_input,
+            assistant_output=fallback,
+        ))
         return fallback
 
     def _build_messages(self) -> list[dict]:
@@ -232,7 +282,7 @@ class AgentLoop:
 
     def _process_anthropic_tools(
         self, messages: list[dict], response: ChatResponse
-    ) -> list[dict]:
+    ) -> tuple[list[dict], list[str]]:
         """Process tool calls for Anthropic format."""
         # Build assistant content blocks
         assistant_content: list[dict[str, Any]] = []
@@ -249,8 +299,11 @@ class AgentLoop:
 
         # Execute tools and build result message
         tool_results: list[dict[str, Any]] = []
+        failed_tools: list[str] = []
         for tc in response.tool_calls:
             result = self._execute_tool(tc)
+            if not result.success:
+                failed_tools.append(tc.name)
             tool_results.append({
                 "type": "tool_result",
                 "tool_use_id": tc.id,
@@ -258,11 +311,11 @@ class AgentLoop:
             })
         messages.append({"role": "user", "content": tool_results})
 
-        return messages
+        return messages, failed_tools
 
     def _process_openai_tools(
         self, messages: list[dict], response: ChatResponse
-    ) -> list[dict]:
+    ) -> tuple[list[dict], list[str]]:
         """Process tool calls for OpenAI format."""
         # Assistant message with tool calls
         tc_dicts = [
@@ -285,12 +338,34 @@ class AgentLoop:
         messages.append(assistant_msg)
 
         # Tool result messages
+        failed_tools: list[str] = []
         for tc in response.tool_calls:
             result = self._execute_tool(tc)
+            if not result.success:
+                failed_tools.append(tc.name)
             messages.append({
                 "role": "tool",
                 "tool_call_id": tc.id,
                 "content": result.output,
             })
 
-        return messages
+        return messages, failed_tools
+
+    def _record_turn_outcome(self, outcome: AgentTurnOutcome) -> None:
+        self._last_outcome = outcome
+        self._session.add_turn_summary(TurnSummary(
+            stop_reason=outcome.stop_reason,
+            failure_class=outcome.failure_class,
+            rounds=outcome.rounds,
+            tool_count=outcome.tool_count,
+            failed_tools=outcome.failed_tools,
+            user_input_preview=self._preview(outcome.user_input),
+            assistant_output_preview=self._preview(outcome.assistant_output),
+        ))
+
+    @staticmethod
+    def _preview(text: str, limit: int = 140) -> str:
+        compact = " ".join(text.split())
+        if len(compact) <= limit:
+            return compact
+        return compact[: limit - 3].rstrip() + "..."

@@ -41,7 +41,20 @@ from pathlib import Path
 from typing import Any
 
 from world0.agents import research as research_utils
+from world0.agents.failure import (
+    FailureClass,
+    FailureReport,
+    RecoveryAction,
+    classify_exception,
+    turn_summary_failure_report,
+)
 from world0.agents.provider import create_provider, default_model_for_provider
+from world0.agents.state import (
+    AgentLifecycleStatus,
+    AgentStateSnapshot,
+    session_state_snapshot,
+)
+from world0.agents.session import ProjectionFeedbackEntry
 from world0.llm.base import LLMError, LLMProvider
 from world0.schemas.relation import RelationType
 from world0.schemas.types import Observation, Projection
@@ -133,6 +146,41 @@ Rules:
 - Respond with JSON only.\
 """
 
+_SEARCH_BRIEF_PROMPT = """\
+You are composing a compact search brief for World 0 from web search results.
+
+Return ONLY a JSON object:
+{
+  "summary": "short overview of what the search results suggest",
+  "themes": ["theme 1", "theme 2"],
+  "recommended_sources": ["source title 1", "source title 2"]
+}
+
+Rules:
+- Focus on what the result set appears to cover well.
+- Themes should be concise conceptual angles or clusters.
+- Recommended sources should name 1-3 results worth reading first.
+- Respond with JSON only.\
+"""
+
+_SESSION_COMPACTION_PROMPT = """\
+You are compressing an older World 0 agent session into a reusable brief.
+
+Return ONLY a JSON object:
+{
+  "summary": "compact summary of the earlier session context",
+  "open_loops": ["open item 1", "open item 2"],
+  "key_concepts": ["concept 1", "concept 2"]
+}
+
+Rules:
+- Preserve goals, decisions, unresolved questions, and notable tool outcomes.
+- Keep the summary under 120 words.
+- Keep open_loops to 0-4 items.
+- Keep key_concepts to 0-6 concise entries.
+- Respond with JSON only.\
+"""
+
 
 class PKMAgent:
     """Personal Knowledge Management Agent built on World 0.
@@ -164,6 +212,8 @@ class PKMAgent:
             "base_url": "",
             "azure_endpoint": "",
             "api_version": "2024-10-21",
+            "auto_sediment_dialogue": True,
+            "dialogue_sediment_interval": 1,
         }
 
         # Agentic components (lazy-initialized)
@@ -172,6 +222,10 @@ class PKMAgent:
         self._current_session = None
         self._agent_loop = None
         self._chat_provider = None
+        self._runtime_phase = AgentLifecycleStatus.BLOCKED if llm is None else None
+        self._runtime_phase_reason = "No LLM provider configured." if llm is None else None
+        self._current_task: str | None = None
+        self._last_failure_report: FailureReport | None = None
 
         # MCP & Skill (lazy-initialized)
         self._mcp_manager = None
@@ -252,6 +306,103 @@ class PKMAgent:
         )
         return settings
 
+    def session_state(self, session=None):
+        """Return a machine-readable state snapshot for a session."""
+        target = session or self._ensure_session()
+        return session_state_snapshot(target)
+
+    def agent_state(self) -> AgentStateSnapshot:
+        """Return a machine-readable runtime state for the agent."""
+        session = self._ensure_session()
+        session_state = self.session_state(session)
+        llm_enabled = self._llm is not None
+        agentic_ready = self._chat_provider is not None
+        latest_turn = session.latest_turn_summary()
+        degraded_sources: list[str] = []
+        reason = self._runtime_phase_reason
+
+        mcp_report = None
+        if self._mcp_manager is not None:
+            mcp_report = self._mcp_manager.health()
+
+        if self._runtime_phase is not None:
+            status = self._runtime_phase
+        elif not llm_enabled:
+            status = AgentLifecycleStatus.BLOCKED
+            reason = "No LLM provider configured."
+        elif not agentic_ready:
+            status = AgentLifecycleStatus.BLOCKED
+            reason = (
+                "Agentic mode unavailable. Set ANTHROPIC_API_KEY, OPENAI_API_KEY, "
+                "AZURE_OPENAI_API_KEY, or AZURE_OPENAI_KEY."
+            )
+        elif latest_turn and latest_turn.failure_class != "none":
+            status = AgentLifecycleStatus.DEGRADED
+            reason = f"Latest turn ended with {latest_turn.failure_class}."
+            degraded_sources.append("latest_turn")
+        elif self._last_failure_report is not None:
+            status = AgentLifecycleStatus.DEGRADED
+            reason = self._last_failure_report.message
+            degraded_sources.append("runtime_failure")
+        elif mcp_report and mcp_report.failed:
+            status = AgentLifecycleStatus.DEGRADED
+            reason = f"MCP servers unavailable: {', '.join(mcp_report.failed)}."
+            degraded_sources.append("mcp")
+        else:
+            status = AgentLifecycleStatus.READY
+            reason = None
+
+        if session_state.status.value == "attention_needed" and "latest_turn" not in degraded_sources:
+            degraded_sources.append("session")
+
+        provider = self._chat_provider.provider_name if self._chat_provider else None
+        model = self._chat_provider.model if self._chat_provider else None
+        return AgentStateSnapshot(
+            status=status,
+            reason=reason,
+            agentic_ready=agentic_ready,
+            llm_enabled=llm_enabled,
+            provider=provider,
+            model=model,
+            session_id=session.id,
+            session_message_count=session.message_count(),
+            turn_count=len(session.turn_summaries),
+            latest_failure_class=latest_turn.failure_class if latest_turn else "none",
+            failed_tools=latest_turn.failed_tools if latest_turn else [],
+            has_compaction=session.compaction is not None,
+            open_loops=session.compaction.open_loops if session.compaction else [],
+            mcp_total_servers=mcp_report.total_servers if mcp_report else 0,
+            mcp_connected_servers=len(mcp_report.connected) if mcp_report else 0,
+            mcp_failed_servers=mcp_report.failed if mcp_report else [],
+            degraded_sources=degraded_sources,
+            current_task=self._current_task,
+        )
+
+    def _set_runtime_phase(
+        self,
+        status: AgentLifecycleStatus | None,
+        *,
+        reason: str | None = None,
+        current_task: str | None = None,
+    ) -> None:
+        self._runtime_phase = status
+        self._runtime_phase_reason = reason
+        self._current_task = current_task
+
+    def latest_failure(self) -> FailureReport | None:
+        """Return the most relevant structured failure for the current session/runtime."""
+        latest_turn = self.session.latest_turn_summary()
+        turn_report = turn_summary_failure_report(latest_turn) if latest_turn else None
+        if turn_report is not None:
+            return turn_report
+        return self._last_failure_report
+
+    def _remember_failure(self, report: FailureReport | None) -> None:
+        self._last_failure_report = report
+
+    def _clear_runtime_failure(self) -> None:
+        self._last_failure_report = None
+
     @staticmethod
     def _api_key_source(provider: str) -> str:
         if provider == "openai" and os.environ.get("OPENAI_API_KEY"):
@@ -275,11 +426,24 @@ class PKMAgent:
         base_url: str | None = None,
         azure_endpoint: str | None = None,
         api_version: str | None = None,
+        auto_sediment_dialogue: bool | None = None,
+        dialogue_sediment_interval: int | None = None,
     ) -> None:
         """Update language and LLM runtime settings."""
         if language:
             self._language = language
             self._runtime_settings["language"] = language
+        if auto_sediment_dialogue is not None:
+            self._runtime_settings["auto_sediment_dialogue"] = bool(
+                auto_sediment_dialogue
+            )
+        if dialogue_sediment_interval is not None:
+            interval = int(dialogue_sediment_interval)
+            if interval < 1 or interval > 20:
+                raise ValueError(
+                    "dialogue_sediment_interval must be between 1 and 20."
+                )
+            self._runtime_settings["dialogue_sediment_interval"] = interval
 
         provider_name = provider or self._runtime_settings.get("provider", "none")
         fallback_model = (
@@ -312,6 +476,10 @@ class PKMAgent:
             self._llm = None
             self._world.set_llm(None)
             self._chat_provider = None
+            self._set_runtime_phase(
+                AgentLifecycleStatus.BLOCKED,
+                reason="No LLM provider configured.",
+            )
             return
 
         provider_model = chosen_model
@@ -333,6 +501,8 @@ class PKMAgent:
             azure_endpoint=chosen_azure_endpoint or None,
             api_version=chosen_api_version or None,
         )
+        self._set_runtime_phase(None)
+        self._clear_runtime_failure()
 
     def agent_chat(
         self,
@@ -353,16 +523,41 @@ class PKMAgent:
             )
 
         from world0.agents.loop import AgentLoop
-
-        loop = AgentLoop(
-            self._chat_provider,
-            self._ensure_tools(),
-            self._ensure_session(),
-            on_tool_call=on_tool_call,
-            on_tool_result=on_tool_result,
-            language=self._language,
+        self._prepare_session_for_agentic()
+        self._set_runtime_phase(
+            AgentLifecycleStatus.RUNNING,
+            reason="Agent turn in progress.",
+            current_task=user_input,
         )
-        return loop.run(user_input)
+
+        try:
+            loop = AgentLoop(
+                self._chat_provider,
+                self._ensure_tools(),
+                self._ensure_session(),
+                on_tool_call=on_tool_call,
+                on_tool_result=on_tool_result,
+                language=self._language,
+            )
+            self._agent_loop = loop
+            result = loop.run(user_input)
+            self._auto_sediment_agent_turn(user_input, result)
+            self._clear_runtime_failure()
+            return result
+        except Exception as exc:
+            self._remember_failure(classify_exception(exc, context="llm"))
+            self._set_runtime_phase(
+                AgentLifecycleStatus.FAILED,
+                reason=str(exc),
+                current_task=user_input,
+            )
+            raise
+        finally:
+            if self._runtime_phase in (
+                AgentLifecycleStatus.RUNNING,
+                AgentLifecycleStatus.RECOVERING,
+            ):
+                self._set_runtime_phase(None)
 
     # ── Session management ───────────────────────────────────────────
 
@@ -411,9 +606,162 @@ class PKMAgent:
                 "message_count": s.message_count(),
                 "updated_at": s.updated_at.isoformat(),
                 "created_at": s.created_at.isoformat(),
+                "state": self.session_state(s).model_dump(mode="json"),
             }
             for s in sessions
         ]
+
+    def rename_session(self, title: str, session_id: str | None = None) -> str:
+        """Rename the current or a saved session."""
+        clean = title.strip()
+        if not clean:
+            raise ValueError("Session title cannot be empty.")
+        target = self.get_session(session_id) if session_id else self._ensure_session()
+        if target is None:
+            raise ValueError(f"Session '{session_id}' not found.")
+        target.title = clean
+        self._ensure_session_store().save(target)
+        if self._current_session and self._current_session.id == target.id:
+            self._current_session = target
+        return target.id
+
+    def compact_session(self, session_id: str | None = None) -> dict[str, Any]:
+        """Manually compact a session and return the resulting metadata."""
+        target = self.get_session(session_id) if session_id else self._ensure_session()
+        if target is None:
+            raise ValueError(f"Session '{session_id}' not found.")
+        before = target.compaction.covered_messages if target.compaction else 0
+        self._compact_session(target)
+        after = target.compaction.covered_messages if target.compaction else 0
+        self._ensure_session_store().save(target)
+        if self._current_session and self._current_session.id == target.id:
+            self._current_session = target
+        return {
+            "session_id": target.id,
+            "compacted": after > before,
+            "covered_messages": after,
+            "state": self.session_state(target).model_dump(mode="json"),
+        }
+
+    def latest_projection_feedback(self) -> ProjectionFeedbackEntry | None:
+        """Return the latest recorded projection feedback for the current session."""
+        return self.session.latest_projection_feedback()
+
+    def latest_projection_snapshot(self) -> dict[str, Any] | None:
+        """Return the last projection snapshot captured during ask()."""
+        snapshot = self.session.metadata.get("last_projection")
+        return snapshot if isinstance(snapshot, dict) else None
+
+    def apply_projection_feedback(
+        self,
+        *,
+        useful: bool | None = None,
+        missing_concepts: list[str] | None = None,
+        noisy_concepts: list[str] | None = None,
+        weak_relations: list[str] | None = None,
+        notes: str = "",
+    ) -> dict[str, Any]:
+        """Record and apply feedback about the latest projection."""
+        snapshot = self.latest_projection_snapshot()
+        if not snapshot:
+            raise ValueError("No recent projection is available for feedback.")
+
+        missing_concepts = [item.strip() for item in (missing_concepts or []) if item.strip()]
+        noisy_concepts = [item.strip() for item in (noisy_concepts or []) if item.strip()]
+        weak_relations = [item.strip() for item in (weak_relations or []) if item.strip()]
+
+        created_missing: list[str] = []
+        reinforced_missing: list[str] = []
+        adjusted_noisy: list[str] = []
+        adjusted_relations: list[str] = []
+
+        for name in missing_concepts:
+            node, is_new = self._world.concepts.get_or_create(
+                name,
+                origin="projection_feedback",
+                task=f"feedback:{snapshot.get('query', '')}".strip(":"),
+            )
+            self._world.concepts.reinforce(
+                node.id,
+                source="projection_feedback",
+                task=snapshot.get("query", ""),
+            )
+            if is_new:
+                created_missing.append(node.name)
+            else:
+                reinforced_missing.append(node.name)
+
+        projection_concepts = {
+            item["name"].strip().lower(): item["id"]
+            for item in snapshot.get("concepts", [])
+            if item.get("name") and item.get("id")
+        }
+        for name in noisy_concepts:
+            cid = projection_concepts.get(name.strip().lower())
+            if not cid:
+                node = self._world.concepts.resolve(name)
+                cid = node.id if node else None
+            if cid:
+                adjusted = self._world.concepts.adjust_confidence(cid, -0.05)
+                if adjusted:
+                    adjusted_noisy.append(adjusted.name)
+
+        projection_relations = {
+            item["label"].strip().lower(): item["id"]
+            for item in snapshot.get("relations", [])
+            if item.get("label") and item.get("id")
+        }
+        for label in weak_relations:
+            rid = projection_relations.get(label.strip().lower())
+            if not rid:
+                rid = self._resolve_relation_feedback_label(label)
+            if rid:
+                adjusted = self._world.relations.adjust_strength(
+                    rid,
+                    weight_delta=-0.05,
+                    confidence_delta=-0.05,
+                )
+                if adjusted:
+                    adjusted_relations.append(label)
+
+        if useful is True:
+            for item in snapshot.get("concepts", [])[:5]:
+                cid = item.get("id")
+                if cid:
+                    self._world.concepts.reinforce(
+                        cid,
+                        source="projection_feedback",
+                        task=snapshot.get("query", ""),
+                    )
+            for item in snapshot.get("relations", [])[:5]:
+                rid = item.get("id")
+                if rid:
+                    self._world.relations.reinforce(
+                        rid,
+                        provenance=f"projection_feedback:{snapshot.get('query', '')}",
+                    )
+
+        self._world.concepts.flush()
+        self._world.relations.flush()
+
+        feedback = self.session.add_projection_feedback(ProjectionFeedbackEntry(
+            query=str(snapshot.get("query", "")),
+            useful=useful,
+            missing_concepts=missing_concepts,
+            noisy_concepts=adjusted_noisy,
+            weak_relations=adjusted_relations,
+            notes=notes.strip(),
+            concept_names=[item.get("name", "") for item in snapshot.get("concepts", []) if item.get("name")],
+            relation_labels=[item.get("label", "") for item in snapshot.get("relations", []) if item.get("label")],
+        ))
+        self.save_session()
+        return {
+            "feedback": feedback.model_dump(mode="json"),
+            "created_missing_concepts": created_missing,
+            "reinforced_missing_concepts": reinforced_missing,
+            "demoted_noisy_concepts": adjusted_noisy,
+            "weakened_relations": adjusted_relations,
+        }
 
     def get_session(self, session_id: str):
         """Load a session by id. Use 'latest' for the most recent session."""
@@ -437,14 +785,134 @@ class PKMAgent:
         *,
         mode: str,
         save: bool = True,
+        auto_sediment: bool = False,
     ) -> str:
         """Record a non-agentic UI interaction into the current session."""
         session = self._ensure_session()
         session.add_message("user", user_input, mode=mode)
         session.add_message("assistant", assistant_output, mode=mode)
+        if auto_sediment:
+            self._auto_sediment_dialogue_turn(
+                user_input,
+                assistant_output,
+                mode=mode,
+            )
         if save:
             return self.save_session()
         return session.id
+
+    def latest_dialogue_sediment(self) -> dict[str, Any] | None:
+        """Return the latest automatic dialogue sedimentation snapshot."""
+        return self.session.metadata.get("last_dialogue_sediment")
+
+    def sediment_dialogue_turn(
+        self,
+        user_input: str,
+        assistant_output: str,
+        *,
+        mode: str = "chat",
+        task: str = "",
+        source: str = "",
+    ) -> dict[str, Any]:
+        """Extract concepts from one dialogue turn and ingest them into World 0."""
+        session = self._ensure_session()
+        event = {
+            "status": "skipped",
+            "mode": mode,
+            "task": task or self._dialogue_task_label(user_input, mode=mode),
+            "source": source,
+            "reason": "",
+            "pending_turns": 0,
+            "required_turns": 1,
+            "new_concepts": [],
+            "reinforced_concepts": [],
+            "new_relations": [],
+            "reinforced_relations": [],
+            "hebbian_relations": [],
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+
+        if not self._runtime_settings.get("auto_sediment_dialogue", True):
+            event["reason"] = "Automatic dialogue sedimentation is disabled."
+            session.metadata["last_dialogue_sediment"] = event
+            return event
+
+        if not self._llm:
+            event["reason"] = "No LLM provider configured for dialogue sedimentation."
+            session.metadata["last_dialogue_sediment"] = event
+            return event
+
+        if not user_input.strip() and not assistant_output.strip():
+            event["reason"] = "Dialogue turn is empty."
+            session.metadata["last_dialogue_sediment"] = event
+            return event
+
+        task_label = task or self._dialogue_task_label(user_input, mode=mode)
+        source_label = source or self._dialogue_source_label(session, mode=mode)
+        dialogue_text = self._render_dialogue_for_learning(
+            user_input,
+            assistant_output,
+            mode=mode,
+        )
+
+        return self._ingest_dialogue_text(
+            dialogue_text,
+            mode=mode,
+            task=task_label,
+            source=source_label,
+            pending_turns=1,
+            required_turns=1,
+        )
+
+    def _ingest_dialogue_text(
+        self,
+        dialogue_text: str,
+        *,
+        mode: str,
+        task: str,
+        source: str,
+        pending_turns: int,
+        required_turns: int,
+    ) -> dict[str, Any]:
+        """Ingest rendered dialogue text into World 0."""
+        session = self._ensure_session()
+        event = {
+            "status": "skipped",
+            "mode": mode,
+            "task": task,
+            "source": source,
+            "reason": "",
+            "pending_turns": pending_turns,
+            "required_turns": required_turns,
+            "new_concepts": [],
+            "reinforced_concepts": [],
+            "new_relations": [],
+            "reinforced_relations": [],
+            "hebbian_relations": [],
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+
+        try:
+            result = self._world.ingest_text(
+                dialogue_text,
+                task=task,
+                source=source,
+            )
+        except RuntimeError as exc:
+            event["reason"] = str(exc)
+            session.metadata["last_dialogue_sediment"] = event
+            return event
+
+        event.update({
+            "status": "ingested",
+            "new_concepts": result.new_concepts,
+            "reinforced_concepts": result.reinforced_concepts,
+            "new_relations": result.new_relations,
+            "reinforced_relations": result.reinforced_relations,
+            "hebbian_relations": result.hebbian_relations,
+        })
+        session.metadata["last_dialogue_sediment"] = event
+        return event
 
     # ── MCP integration ──────────────────────────────────────────────
 
@@ -674,24 +1142,46 @@ class PKMAgent:
 
         source_limit = max(1, min(int(max_sources), 8))
         search_query = topic if not focus else f"{topic} {focus}"
-
-        try:
-            results = research_utils.search_web(search_query, limit=source_limit)
-        except Exception as e:
-            return f"Web search failed: {e}"
+        results, recovery_notes, failure = self._search_web_with_recovery(
+            query=topic,
+            focus=focus,
+            max_results=source_limit,
+            domains=None,
+        )
 
         if not results:
+            self._remember_failure(
+                failure or FailureReport(
+                    failure_class=FailureClass.SEARCH_FETCH_FAILED,
+                    message=f"No web results found for '{search_query}'.",
+                    retryable=True,
+                    context="search",
+                    recovery_actions=[
+                        RecoveryAction.RETRY_WITHOUT_FOCUS,
+                        RecoveryAction.RETRY_WITHOUT_DOMAINS,
+                    ],
+                )
+            )
             return f"No web results found for '{search_query}'."
 
         source_notes: list[dict[str, Any]] = []
         learning_log: list[str] = []
+        skipped_sources: list[str] = []
+        last_fetch_failure: FailureReport | None = None
 
         for result in results[:source_limit]:
             try:
                 doc = research_utils.fetch_web_document(result.url)
-            except Exception:
+            except Exception as exc:
+                last_fetch_failure = classify_exception(exc, context="fetch")
+                skipped_sources.append(
+                    f"- [{result.title}]({result.url}) — {last_fetch_failure.message}"
+                )
                 continue
             if not doc.text.strip():
+                skipped_sources.append(
+                    f"- [{result.title}]({result.url}) — Empty source text after fetch."
+                )
                 continue
 
             note = self._distill_research_source(
@@ -725,9 +1215,22 @@ class PKMAgent:
                 )
 
         if not source_notes:
+            self._remember_failure(
+                last_fetch_failure or FailureReport(
+                    failure_class=FailureClass.SEARCH_FETCH_FAILED,
+                    message=(
+                        f"I found search results for '{search_query}', but couldn't extract readable source text."
+                    ),
+                    retryable=True,
+                    context="fetch",
+                    recovery_actions=[RecoveryAction.SKIP_SOURCE],
+                )
+            )
             return (
                 f"I found search results for '{search_query}', but couldn't extract readable source text."
             )
+
+        self._clear_runtime_failure()
 
         brief = self._compose_research_brief(
             topic=topic,
@@ -768,11 +1271,116 @@ class PKMAgent:
             lines.extend(["", "### Next Steps"])
             lines.extend(f"- {item}" for item in brief["next_steps"])
 
+        if recovery_notes or skipped_sources:
+            lines.extend(["", "### Recovery Notes"])
+            lines.extend(f"- {item}" for item in recovery_notes)
+            lines.extend(skipped_sources[:4])
+
         if learning_log:
             lines.extend(["", "### World 0 Update"])
             lines.extend(learning_log)
 
         lines.extend(["", "### Projection Into World 0", "", projection])
+        return "\n".join(lines)
+
+    def search_web(
+        self,
+        query: str,
+        *,
+        focus: str = "",
+        max_results: int = 5,
+        domains: str | list[str] | tuple[str, ...] | None = None,
+        fetch_pages: bool = False,
+    ) -> str:
+        """Search the public web and optionally fetch top pages for quick review."""
+        query = query.strip()
+        focus = focus.strip()
+        if not query:
+            return "Please provide a search query."
+
+        result_limit = max(1, min(int(max_results), 10))
+        domain_filters = self._parse_domain_filters(domains)
+        search_query = query if not focus else f"{query} {focus}"
+        results, recovery_notes, failure = self._search_web_with_recovery(
+            query=query,
+            focus=focus,
+            max_results=result_limit,
+            domains=domain_filters,
+        )
+
+        if not results:
+            self._remember_failure(
+                failure or FailureReport(
+                    failure_class=FailureClass.SEARCH_FETCH_FAILED,
+                    message=f"No web results found for '{search_query}'.",
+                    retryable=True,
+                    context="search",
+                    recovery_actions=[
+                        RecoveryAction.RETRY_WITHOUT_FOCUS,
+                        RecoveryAction.RETRY_WITHOUT_DOMAINS,
+                    ],
+                )
+            )
+            scoped = ""
+            if domain_filters:
+                scoped = f" within {', '.join(domain_filters)}"
+            return f"No web results found for '{search_query}'{scoped}."
+
+        self._clear_runtime_failure()
+
+        lines = [
+            f"## Web Search: {query}",
+            "",
+        ]
+        if focus:
+            lines.append(f"**Focus:** {focus}")
+        if domain_filters:
+            lines.append(f"**Domains:** {', '.join(domain_filters)}")
+        lines.extend([
+            f"**Results:** {len(results)}",
+            "",
+            "### Results",
+        ])
+        if recovery_notes:
+            lines.extend(["### Recovery"])
+            lines.extend(f"- {item}" for item in recovery_notes)
+            lines.append("")
+
+        for idx, item in enumerate(results, 1):
+            meta = f" ({item.domain})" if item.domain else ""
+            snippet = f" — {item.snippet}" if item.snippet else ""
+            lines.append(f"{idx}. [{item.title}]({item.url}){meta}{snippet}")
+
+        if fetch_pages:
+            fetched = self._fetch_search_result_notes(results)
+            if fetched:
+                brief = self._compose_search_brief(
+                    query=query,
+                    focus=focus,
+                    results=results,
+                    fetched=fetched,
+                )
+                if brief:
+                    lines.extend([
+                        "",
+                        "### Search Brief",
+                        f"- Summary: {brief['summary']}",
+                    ])
+                    if brief["themes"]:
+                        lines.extend(f"- Theme: {item}" for item in brief["themes"])
+                    if brief["recommended_sources"]:
+                        lines.extend(
+                            f"- Start with: {item}" for item in brief["recommended_sources"]
+                        )
+
+                lines.extend(["", "### Source Glimpses"])
+                for note in fetched:
+                    lines.extend([
+                        f"- **{note['title']}**",
+                        f"  URL: {note['url']}",
+                        f"  Glimpse: {note['excerpt']}",
+                    ])
+
         return "\n".join(lines)
 
     def ask(
@@ -822,6 +1430,7 @@ class PKMAgent:
 
         rendered = projection.render()
         basis = self._render_projection_basis(projection, seeds)
+        self._remember_projection_snapshot(query, seeds, projection)
 
         if not self._llm:
             return f"{rendered}\n\n{basis}"
@@ -1109,6 +1718,7 @@ class PKMAgent:
             /explore <concept>  — Explore a concept
             /connect <a> <b> [type] — Connect two concepts
             /search <query>     — Search concepts
+            /web-search <query> — Search the public web
             /reflect            — Run consolidation
             /status             — Show status
             /viz                — Visualize
@@ -1119,7 +1729,7 @@ class PKMAgent:
         print("  World 0 — Personal Knowledge Management Agent")
         print("=" * 60)
         print()
-        print("Commands: /learn, /ask, /explore, /connect, /search,")
+        print("Commands: /learn, /ask, /explore, /connect, /search, /web-search,")
         print("          /reflect, /status, /viz, /help, /quit")
         print()
         print("Or just type naturally — I'll treat it as a question.")
@@ -1186,6 +1796,11 @@ class PKMAgent:
                 return "Usage: /search <query>"
             return self.search(arg)
 
+        if command == "/web-search":
+            if not arg:
+                return "Usage: /web-search <query>"
+            return self.search_web(arg, fetch_pages=True)
+
         if command == "/reflect":
             return self.reflect()
 
@@ -1216,6 +1831,404 @@ class PKMAgent:
         return self.connect(source, target, rel_type)
 
     # ── Internal helpers ──────────────────────────────────────────────
+
+    def _parse_domain_filters(
+        self,
+        domains: str | list[str] | tuple[str, ...] | None,
+    ) -> list[str]:
+        if domains is None:
+            return []
+        if isinstance(domains, str):
+            raw_parts = re.split(r"[, \n]+", domains)
+        else:
+            raw_parts = [str(item) for item in domains]
+
+        normalized: list[str] = []
+        seen: set[str] = set()
+        for part in raw_parts:
+            clean = part.strip().lower()
+            if not clean:
+                continue
+            clean = clean.removeprefix("https://").removeprefix("http://")
+            clean = clean.split("/", 1)[0].removeprefix("www.")
+            if clean and clean not in seen:
+                normalized.append(clean)
+                seen.add(clean)
+        return normalized
+
+    def _auto_sediment_agent_turn(
+        self,
+        user_input: str,
+        assistant_output: str,
+    ) -> dict[str, Any]:
+        """Persist successful agent dialogue turns into World 0."""
+        latest_turn = self.session.latest_turn_summary()
+        if latest_turn and latest_turn.failure_class != "none":
+            event = {
+                "status": "skipped",
+                "mode": "agent_chat",
+                "task": self._dialogue_task_label(user_input, mode="agent_chat"),
+                "source": "",
+                "reason": (
+                    "Skipped dialogue sedimentation because the latest turn "
+                    f"ended with {latest_turn.failure_class}."
+                ),
+                "new_concepts": [],
+                "reinforced_concepts": [],
+                "new_relations": [],
+                "reinforced_relations": [],
+                "hebbian_relations": [],
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            }
+            self.session.metadata["last_dialogue_sediment"] = event
+            return event
+
+        return self._auto_sediment_dialogue_turn(
+            user_input,
+            assistant_output,
+            mode="agent_chat",
+        )
+
+    def _auto_sediment_dialogue_turn(
+        self,
+        user_input: str,
+        assistant_output: str,
+        *,
+        mode: str,
+    ) -> dict[str, Any]:
+        """Batch dialogue turns and sediment them on the configured interval."""
+        session = self._ensure_session()
+        interval = int(self._runtime_settings.get("dialogue_sediment_interval", 1))
+        event = {
+            "status": "skipped",
+            "mode": mode,
+            "task": self._dialogue_task_label(user_input, mode=mode),
+            "source": "",
+            "reason": "",
+            "pending_turns": 0,
+            "required_turns": interval,
+            "new_concepts": [],
+            "reinforced_concepts": [],
+            "new_relations": [],
+            "reinforced_relations": [],
+            "hebbian_relations": [],
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+
+        if not self._runtime_settings.get("auto_sediment_dialogue", True):
+            event["reason"] = "Automatic dialogue sedimentation is disabled."
+            session.metadata["last_dialogue_sediment"] = event
+            return event
+
+        if not self._llm:
+            event["reason"] = "No LLM provider configured for dialogue sedimentation."
+            session.metadata["last_dialogue_sediment"] = event
+            return event
+
+        queue = list(session.metadata.get("dialogue_sediment_queue") or [])
+        queue.append({
+            "user_input": user_input,
+            "assistant_output": assistant_output,
+            "mode": mode,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        })
+        session.metadata["dialogue_sediment_queue"] = queue
+
+        if len(queue) < interval:
+            event["status"] = "pending"
+            event["pending_turns"] = len(queue)
+            event["reason"] = (
+                f"Waiting for dialogue sedimentation interval "
+                f"({len(queue)}/{interval})."
+            )
+            session.metadata["last_dialogue_sediment"] = event
+            return event
+
+        latest_user_input = queue[-1]["user_input"]
+        task_label = self._dialogue_task_label(latest_user_input, mode=mode)
+        source_label = self._dialogue_source_label(
+            session,
+            mode=mode,
+            batch_size=len(queue),
+        )
+        dialogue_text = self._render_dialogue_batch_for_learning(queue)
+        result = self._ingest_dialogue_text(
+            dialogue_text,
+            mode=mode,
+            task=task_label,
+            source=source_label,
+            pending_turns=len(queue),
+            required_turns=interval,
+        )
+        if result["status"] == "ingested":
+            session.metadata["dialogue_sediment_queue"] = []
+        return result
+
+    def _dialogue_task_label(self, user_input: str, *, mode: str) -> str:
+        prompt = self._excerpt_text(user_input, limit=80) or "conversation"
+        return f"{mode}: {prompt}"
+
+    def _dialogue_source_label(self, session, *, mode: str, batch_size: int = 1) -> str:
+        turn_count = len(session.turn_summaries) or max(1, session.message_count() // 2)
+        return f"{mode}:{session.id}:{turn_count}:batch{batch_size}"
+
+    def _render_dialogue_for_learning(
+        self,
+        user_input: str,
+        assistant_output: str,
+        *,
+        mode: str,
+    ) -> str:
+        user_excerpt = self._excerpt_text(user_input, limit=2000)
+        assistant_excerpt = self._excerpt_text(assistant_output, limit=3500)
+        lines = [
+            f"Dialogue mode: {mode}",
+            "",
+            "[User]",
+            user_excerpt,
+            "",
+            "[Assistant]",
+            assistant_excerpt,
+        ]
+        return "\n".join(lines).strip()
+
+    def _render_dialogue_batch_for_learning(
+        self,
+        queue: list[dict[str, Any]],
+    ) -> str:
+        """Render multiple dialogue turns into one extraction document."""
+        lines = [
+            f"Dialogue mode: {queue[-1]['mode']}",
+            f"Dialogue turns: {len(queue)}",
+            "",
+        ]
+        for index, item in enumerate(queue, start=1):
+            lines.extend([
+                f"[Turn {index} User]",
+                self._excerpt_text(item.get("user_input", ""), limit=2000),
+                "",
+                f"[Turn {index} Assistant]",
+                self._excerpt_text(item.get("assistant_output", ""), limit=3500),
+                "",
+            ])
+        return "\n".join(lines).strip()
+
+    def _remember_projection_snapshot(
+        self,
+        query: str,
+        seeds: list[str],
+        projection: Projection,
+    ) -> None:
+        """Store a compact snapshot of the latest projection for feedback."""
+        concept_items = [
+            {
+                "id": concept.id,
+                "name": concept.name,
+                "confidence": concept.confidence,
+                "maturity": concept.maturity.value,
+            }
+            for concept in projection.concepts
+        ]
+        concept_names = {concept.id: concept.name for concept in projection.concepts}
+        relation_items = []
+        for relation in projection.relations:
+            src = concept_names.get(relation.source_id, relation.source_id)
+            tgt = concept_names.get(relation.target_id, relation.target_id)
+            relation_items.append({
+                "id": relation.id,
+                "label": f"{src} -> {relation.relation_type.value} -> {tgt}",
+                "source_id": relation.source_id,
+                "target_id": relation.target_id,
+            })
+        self.session.metadata["last_projection"] = {
+            "query": query,
+            "task": projection.task,
+            "seeds": seeds,
+            "concepts": concept_items,
+            "relations": relation_items,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+
+    def _resolve_relation_feedback_label(self, label: str) -> str | None:
+        """Resolve a human-readable relation label into a relation id."""
+        match = re.match(
+            r"^\s*(.+?)\s*->\s*([a-z_]+)\s*->\s*(.+?)\s*$",
+            label,
+            flags=re.IGNORECASE,
+        )
+        if not match:
+            return None
+        source_name, rel_type_name, target_name = match.groups()
+        source = self._world.concepts.resolve(source_name)
+        target = self._world.concepts.resolve(target_name)
+        if not source or not target:
+            return None
+        try:
+            rel_type = RelationType(rel_type_name.strip().lower())
+        except ValueError:
+            rel_type = None
+        relation = self._world.relations.find_between(
+            source.id,
+            target.id,
+            rel_type,
+        )
+        if relation is None and rel_type is not None:
+            relation = self._world.relations.find_between(source.id, target.id, None)
+        return relation.id if relation else None
+
+    def _search_web_with_recovery(
+        self,
+        *,
+        query: str,
+        focus: str,
+        max_results: int,
+        domains: list[str] | tuple[str, ...] | None,
+    ) -> tuple[list[Any], list[str], FailureReport | None]:
+        """Search the web with basic recovery fallbacks for over-constrained queries."""
+        domain_filters = list(domains or [])
+        search_query = query if not focus else f"{query} {focus}"
+        attempts: list[tuple[str, list[str], RecoveryAction | None]] = [
+            (search_query, domain_filters, None),
+        ]
+        if domain_filters:
+            attempts.append((search_query, [], RecoveryAction.RETRY_WITHOUT_DOMAINS))
+        if focus:
+            attempts.append((query, [], RecoveryAction.RETRY_WITHOUT_FOCUS))
+
+        seen: set[tuple[str, tuple[str, ...]]] = set()
+        recovery_notes: list[str] = []
+        last_failure: FailureReport | None = None
+        action_notes = {
+            RecoveryAction.RETRY_WITHOUT_DOMAINS: "Retried search without domain filters.",
+            RecoveryAction.RETRY_WITHOUT_FOCUS: "Retried search without the extra focus constraint.",
+        }
+
+        for attempt_query, attempt_domains, action in attempts:
+            key = (attempt_query, tuple(attempt_domains))
+            if key in seen:
+                continue
+            seen.add(key)
+            try:
+                results = research_utils.search_web(
+                    attempt_query,
+                    limit=max_results,
+                    domains=attempt_domains or None,
+                )
+            except Exception as exc:
+                last_failure = classify_exception(exc, context="search")
+                if action is not None:
+                    recovery_notes.append(action_notes[action])
+                continue
+            if results:
+                if action is not None:
+                    recovery_notes.append(action_notes[action])
+                return results, recovery_notes, None
+            last_failure = FailureReport(
+                failure_class=FailureClass.SEARCH_FETCH_FAILED,
+                message=f"No web results found for '{attempt_query}'.",
+                retryable=True,
+                context="search",
+                recovery_actions=[
+                    RecoveryAction.RETRY_WITHOUT_DOMAINS,
+                    RecoveryAction.RETRY_WITHOUT_FOCUS,
+                ],
+            )
+            if action is not None:
+                recovery_notes.append(action_notes[action])
+
+        return [], recovery_notes, last_failure
+
+    def _fetch_search_result_notes(
+        self,
+        results: list[research_utils.SearchResult],
+        *,
+        max_pages: int = 3,
+    ) -> list[dict[str, str]]:
+        fetched: list[dict[str, str]] = []
+        for item in results[:max_pages]:
+            try:
+                doc = research_utils.fetch_web_document(item.url, max_chars=4000)
+            except Exception:
+                continue
+            excerpt = self._excerpt_text(doc.text, limit=320)
+            if not excerpt:
+                continue
+            fetched.append({
+                "title": doc.title or item.title,
+                "url": item.url,
+                "excerpt": excerpt,
+            })
+        return fetched
+
+    def _compose_search_brief(
+        self,
+        *,
+        query: str,
+        focus: str,
+        results: list[research_utils.SearchResult],
+        fetched: list[dict[str, str]],
+    ) -> dict[str, Any] | None:
+        fallback_sources = [item.title for item in results[:2] if item.title]
+        fallback_themes = [
+            item.snippet for item in results[:2] if item.snippet
+        ]
+        fallback = {
+            "summary": (
+                f"Search results for {query} cluster around "
+                f"{'; '.join(fallback_themes[:2])}."
+                if fallback_themes
+                else f"Collected {len(results)} public web results for {query}."
+            ),
+            "themes": [self._excerpt_text(text, limit=120) for text in fallback_themes[:3]],
+            "recommended_sources": fallback_sources,
+        }
+
+        if not self._llm:
+            return fallback
+
+        try:
+            raw = self._llm.complete_json(
+                f"{_SEARCH_BRIEF_PROMPT}\n\n{self._language_instruction()}",
+                (
+                    f"Query: {query}\n"
+                    f"Focus: {focus or 'none'}\n\n"
+                    "Search results:\n"
+                    + "\n".join(
+                        f"- {item.title} | {item.url} | {item.snippet}"
+                        for item in results
+                    )
+                    + "\n\nFetched excerpts:\n"
+                    + "\n".join(
+                        f"- {item['title']} | {item['url']} | {item['excerpt']}"
+                        for item in fetched
+                    )
+                ),
+            )
+            parsed = json.loads(self._extract_json(raw))
+            summary = str(parsed.get("summary") or fallback["summary"]).strip()
+            themes = [
+                str(item).strip() for item in parsed.get("themes", [])
+                if str(item).strip()
+            ] or fallback["themes"]
+            recommended_sources = [
+                str(item).strip() for item in parsed.get("recommended_sources", [])
+                if str(item).strip()
+            ] or fallback["recommended_sources"]
+            return {
+                "summary": summary,
+                "themes": themes[:3],
+                "recommended_sources": recommended_sources[:3],
+            }
+        except (LLMError, json.JSONDecodeError, KeyError, TypeError, ValueError):
+            return fallback
+
+    def _excerpt_text(self, text: str, *, limit: int = 320) -> str:
+        compact = re.sub(r"\s+", " ", text).strip()
+        if not compact:
+            return ""
+        if len(compact) <= limit:
+            return compact
+        return compact[: limit - 3].rstrip() + "..."
 
     def _distill_research_source(
         self,
@@ -1305,6 +2318,96 @@ class PKMAgent:
             }
         except Exception:
             return fallback
+
+    def _prepare_session_for_agentic(self) -> None:
+        """Compact older session context before agentic runs."""
+        session = self._ensure_session()
+        if not self._llm:
+            return
+        if not session.needs_compaction():
+            return
+        self._compact_session(session)
+
+    def _compact_session(self, session) -> None:
+        preserve_recent = 16
+        covered_messages = max(0, len(session.messages) - preserve_recent)
+        if covered_messages <= 0:
+            return
+
+        transcript = self._render_messages_for_compaction(
+            session.messages[:covered_messages]
+        )
+        fallback = self._fallback_session_compaction(session, covered_messages)
+
+        try:
+            raw = self._llm.complete_json(
+                f"{_SESSION_COMPACTION_PROMPT}\n\n{self._language_instruction()}",
+                transcript,
+            )
+            data = json.loads(self._extract_json(raw))
+            summary = str(data.get("summary") or fallback["summary"]).strip()
+            open_loops = self._string_list(data.get("open_loops")) or fallback["open_loops"]
+            key_concepts = self._string_list(data.get("key_concepts")) or fallback["key_concepts"]
+        except Exception:
+            summary = fallback["summary"]
+            open_loops = fallback["open_loops"]
+            key_concepts = fallback["key_concepts"]
+
+        from world0.agents.session import SessionCompaction
+
+        session.set_compaction(SessionCompaction(
+            summary=summary,
+            open_loops=open_loops[:4],
+            key_concepts=key_concepts[:6],
+            covered_messages=covered_messages,
+        ))
+
+    def _render_messages_for_compaction(self, messages: list[Any]) -> str:
+        rendered: list[str] = []
+        for msg in messages:
+            role = msg.role
+            if role == "tool_call":
+                rendered.append(f"[tool_call] {msg.content}")
+                continue
+            if role == "tool_result":
+                rendered.append(f"[tool_result] {self._excerpt_text(msg.content, limit=280)}")
+                continue
+            rendered.append(f"[{role}] {self._excerpt_text(msg.content, limit=320)}")
+        return "\n".join(rendered[-80:])
+
+    def _fallback_session_compaction(
+        self,
+        session,
+        covered_messages: int,
+    ) -> dict[str, list[str] | str]:
+        user_messages = [
+            self._excerpt_text(msg.content, limit=90)
+            for msg in session.messages[:covered_messages]
+            if msg.role == "user"
+        ]
+        assistant_messages = [
+            self._excerpt_text(msg.content, limit=120)
+            for msg in session.messages[:covered_messages]
+            if msg.role == "assistant"
+        ]
+        key_concepts = self._extract_seeds(" ".join(user_messages[-4:]))[:6]
+        open_loops: list[str] = []
+        latest_turn = session.latest_turn_summary()
+        if latest_turn and latest_turn.failure_class != "none":
+            open_loops.append(
+                f"Latest earlier turn ended with {latest_turn.failure_class}."
+            )
+        summary_parts = []
+        if user_messages:
+            summary_parts.append(f"Earlier requests focused on: {'; '.join(user_messages[-3:])}.")
+        if assistant_messages:
+            summary_parts.append(f"Recent agent outcomes included: {'; '.join(assistant_messages[-2:])}.")
+        summary = " ".join(summary_parts) or "Earlier agent context was compacted."
+        return {
+            "summary": summary,
+            "open_loops": open_loops,
+            "key_concepts": key_concepts,
+        }
 
     @staticmethod
     def _string_list(value: Any) -> list[str]:
