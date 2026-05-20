@@ -21,9 +21,12 @@ Demotion:
 
 from __future__ import annotations
 
-from world0.concepts.manager import ConceptManager
-from world0.relations.manager import RelationManager
+from typing import TYPE_CHECKING
+
 from world0.schemas.concept import Maturity
+
+if TYPE_CHECKING:
+    from world0.core import ConceptStore, RelationStore
 
 # ── ESTABLISHED → CORE promotion parameters ─────────────────────────
 BASE_CORE_CONNECTIONS: int = 5       # default connection requirement
@@ -33,10 +36,15 @@ ACTIVATION_REDUCTION_STEP: int = 20  # every N extra activations reduces
 
 
 class LifecycleEngine:
-    """Evaluates and applies maturity transitions for concepts."""
+    """Evaluates and applies maturity transitions for concepts.
+
+    Implements the ``LifecyclePolicy`` Protocol from ``world0.core``.
+    """
 
     def __init__(
-        self, concepts: ConceptManager, relations: RelationManager
+        self,
+        concepts: "ConceptStore",
+        relations: "RelationStore",
     ) -> None:
         self._concepts = concepts
         self._relations = relations

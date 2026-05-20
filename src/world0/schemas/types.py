@@ -15,11 +15,24 @@ class Observation(BaseModel):
 
     The Agent (an LLM) does the semantic extraction. World 0 does the
     structural and cognitive computation.
+
+    In addition to the positive evidence channel (``concepts`` and
+    ``relations``), an observation can also carry *negative* evidence:
+    concepts that the Agent has reason to believe are wrong or
+    irrelevant for the current task (``weakened``) and pairs of
+    concepts whose asserted relation did not hold
+    (``contradicted_relations``).  Both feed into Beta-style
+    confidence updates.
     """
 
     concepts: list[str] = Field(default_factory=list)
     relations: list[tuple[str, str, str]] = Field(default_factory=list)
     descriptions: dict[str, str] = Field(default_factory=dict)
+    weakened: list[str] = Field(default_factory=list)
+    contradicted_relations: list[tuple[str, str, str]] = Field(
+        default_factory=list
+    )
+    domain: str = ""
     task: str = ""
     source: str = ""
     timestamp: datetime = Field(
@@ -32,8 +45,10 @@ class IngestResult(BaseModel):
 
     new_concepts: list[str] = Field(default_factory=list)
     reinforced_concepts: list[str] = Field(default_factory=list)
+    weakened_concepts: list[str] = Field(default_factory=list)
     new_relations: list[str] = Field(default_factory=list)
     reinforced_relations: list[str] = Field(default_factory=list)
+    weakened_relations: list[str] = Field(default_factory=list)
     hebbian_relations: list[str] = Field(default_factory=list)
 
 
@@ -146,6 +161,11 @@ class ReflectResult(BaseModel):
     pruned_concepts: list[str] = Field(default_factory=list)
     decayed_relations: list[str] = Field(default_factory=list)
     pruned_relations: list[str] = Field(default_factory=list)
+    # Color-field dynamics (doc §29 Stage A observation layer).
+    new_communities: list[str] = Field(default_factory=list)
+    stable_communities: list[str] = Field(default_factory=list)
+    pruned_communities: list[str] = Field(default_factory=list)
+    color_sources: list[str] = Field(default_factory=list)
 
 
 class WorldStatus(BaseModel):
@@ -156,3 +176,10 @@ class WorldStatus(BaseModel):
     by_maturity: dict[str, int] = Field(default_factory=dict)
     avg_confidence: float = 0.0
     last_reflect: datetime | None = None
+    # Color-field diagnostics (doc §12.3).  Populated whenever
+    # ``World.status()`` runs — independent of whether the caller
+    # actually triggers a reflect cycle.
+    total_communities: int = 0
+    stable_communities: int = 0
+    bridge_concepts: int = 0
+    avg_color_purity: float = 1.0

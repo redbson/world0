@@ -14,7 +14,10 @@ htmlcov/
 .ruff_cache/
 .venv/
 venv/
+.world0_service/
+.world0_store/
 dist/
 build/
 *.egg-info/
 world0_viz.html
+.omx/

@@ -44,9 +44,11 @@ class RelationEdge(BaseModel):
 
     confidence: float = Field(default=0.3, ge=0.0, le=1.0)
     reinforcement_count: int = 0
+    disconfirmation_count: int = 0
     last_reinforced: datetime = Field(
         default_factory=lambda: datetime.now(timezone.utc)
     )
+    last_weakened: datetime | None = None
     discovered_at: datetime = Field(
         default_factory=lambda: datetime.now(timezone.utc)
     )
@@ -82,6 +84,37 @@ class RelationEdge(BaseModel):
             cap = 0.7
         self.weight = min(cap, self.weight + boost)
         self.confidence = min(cap, self.confidence + boost)
+
+    def weaken(self, provenance: str = "") -> None:
+        """Disconfirmation evidence against this relation.
+
+        Mirrors `reinforce()` in the negative direction.  Hebbian and
+        explicit relations use the same diminishing-returns penalty
+        profile — the cap asymmetry only matters for growth, not decay.
+        """
+        self.disconfirmation_count += 1
+        self.last_weakened = datetime.now(timezone.utc)
+        penalty = 0.06 * (1.0 / (1.0 + self.disconfirmation_count * 0.10))
+        self.weight = max(0.01, self.weight - penalty)
+        self.confidence = max(0.01, self.confidence - penalty)
+        if provenance and provenance not in self.task_history:
+            self.task_history.append(provenance)
+
+    def beta_posterior(
+        self, prior_alpha: float = 1.0, prior_beta: float = 1.0
+    ) -> tuple[float, float]:
+        """Beta(α, β) posterior from evidence counts."""
+        alpha = prior_alpha + float(self.reinforcement_count)
+        beta = prior_beta + float(self.disconfirmation_count)
+        return alpha, beta
+
+    def evidence_balance(self) -> float:
+        """Posterior mean of reinforcement vs disconfirmation in [0, 1]."""
+        alpha, beta = self.beta_posterior()
+        total = alpha + beta
+        if total <= 0:
+            return 0.5
+        return alpha / total
 
     def hours_since_reinforced(self) -> float:
         delta = datetime.now(timezone.utc) - self.last_reinforced

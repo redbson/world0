@@ -139,6 +139,14 @@ class RelationManager:
         self._dirty.add(edge.id)
         return edge
 
+    def weaken(self, relation_id: str, provenance: str = "") -> RelationEdge | None:
+        edge = self._relations.get(relation_id)
+        if not edge:
+            return None
+        edge.weaken(provenance=provenance)
+        self._dirty.add(edge.id)
+        return edge
+
     def refine_type(self, relation_id: str, new_type: RelationType) -> None:
         """Agent refines a RELATED_TO relation to a more specific type."""
         edge = self._relations.get(relation_id)
@@ -179,6 +187,81 @@ class RelationManager:
             self._unindex(r)
             self._store.delete_relation(r.id)
         return len(rels)
+
+    def migrate_concept(self, old_id: str, new_id: str) -> int:
+        """Rewrite all relations touching ``old_id`` to use ``new_id``.
+
+        If the rewrite produces a duplicate relation (same direction
+        and type between the same pair), the older edge absorbs the
+        duplicate: weights sum (capped at 1.0), counters add, the
+        latest ``last_reinforced`` timestamp wins.  Self-loops that
+        result from the migration are dropped.
+
+        Returns the number of edges that were migrated or absorbed.
+        """
+        if old_id == new_id:
+            return 0
+
+        affected = 0
+        # Copy list — we mutate during iteration
+        for rel in self.for_concept(old_id):
+            old_src, old_tgt = rel.source_id, rel.target_id
+            new_src = new_id if old_src == old_id else old_src
+            new_tgt = new_id if old_tgt == old_id else old_tgt
+
+            # Drop self-loops created by the migration
+            if new_src == new_tgt:
+                self._relations.pop(rel.id, None)
+                self._unindex(rel)
+                self._store.delete_relation(rel.id)
+                affected += 1
+                continue
+
+            duplicate = self._find_directed(
+                new_src, new_tgt, rel.relation_type
+            )
+            if duplicate is not None and duplicate.id != rel.id:
+                # Absorb into the existing edge
+                duplicate.weight = min(1.0, duplicate.weight + rel.weight)
+                duplicate.confidence = min(
+                    1.0, duplicate.confidence + rel.confidence
+                )
+                duplicate.reinforcement_count += rel.reinforcement_count
+                duplicate.disconfirmation_count += rel.disconfirmation_count
+                if rel.last_reinforced > duplicate.last_reinforced:
+                    duplicate.last_reinforced = rel.last_reinforced
+                for t in rel.task_history:
+                    if t not in duplicate.task_history:
+                        duplicate.task_history.append(t)
+                self._dirty.add(duplicate.id)
+
+                self._relations.pop(rel.id, None)
+                self._unindex(rel)
+                self._store.delete_relation(rel.id)
+            else:
+                self._unindex(rel)
+                rel.source_id = new_src
+                rel.target_id = new_tgt
+                self._index(rel)
+                self._dirty.add(rel.id)
+            affected += 1
+
+        return affected
+
+    def _find_directed(
+        self,
+        source_id: str,
+        target_id: str,
+        relation_type: RelationType,
+    ) -> RelationEdge | None:
+        for rel in self.for_concept(source_id):
+            if (
+                rel.source_id == source_id
+                and rel.target_id == target_id
+                and rel.relation_type == relation_type
+            ):
+                return rel
+        return None
 
     # ── internals ─────────────────────────────────────────────────────
 

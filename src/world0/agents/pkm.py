@@ -56,130 +56,10 @@ from world0.agents.state import (
 )
 from world0.agents.session import ProjectionFeedbackEntry
 from world0.llm.base import LLMError, LLMProvider
+from world0.prompts import PromptRegistry, load_prompt_registry, prompt_config_path
 from world0.schemas.relation import RelationType
 from world0.schemas.types import Observation, Projection
 from world0.world import World
-
-
-# ── LLM prompts ──────────────────────────────────────────────────────
-
-_ANSWER_SYSTEM_PROMPT = """\
-You are a cognitive concept-world assistant powered by World 0. \
-You help the user understand a task domain through concepts, relations, \
-activation, and local projection.
-
-You will receive:
-1. A cognitive projection — a local view of the user's concept world \
-relevant to their query. This includes concepts (with maturity and confidence), \
-relations between them, and activation scores.
-2. The user's question or request.
-
-Your job:
-- Answer based on the cognitive projection provided.
-- Highlight connections between concepts the user might not have noticed.
-- If the projection is sparse, say so honestly — suggest what observations \
-or concept links would make the world clearer.
-- Be concise but insightful. Focus on conceptual understanding, not trivia.
-- When referencing concepts, mention their maturity level if it adds context \
-(e.g., an "embryonic" concept is new and may need more reinforcement).
-
-Do NOT fabricate knowledge that isn't in the projection or general knowledge. \
-If the projection doesn't cover the query well, say so.\
-"""
-
-_QUERY_EXTRACT_PROMPT = """\
-Extract the key concept names from this user query. These will be used as \
-seed concepts to activate a cognitive projection.
-
-Return ONLY a JSON object:
-{"seeds": ["concept1", "concept2", ...]}
-
-Extract 1-5 concept names that best capture what the user is asking about. \
-Use lowercase, canonical forms. Respond ONLY with JSON, no explanation.\
-"""
-
-_LEARN_SUMMARY_PROMPT = """\
-Summarize what was just learned in 1-2 sentences. The user submitted text \
-and the system extracted concepts and relations. Here is the ingest result:
-
-{ingest_result}
-
-Be brief and informative. Mention the most interesting new concepts or \
-relations discovered.\
-"""
-
-_RESEARCH_SOURCE_PROMPT = """\
-You are distilling a web source into a compact research note for World 0.
-
-Return ONLY a JSON object:
-{
-  "summary": "1-2 sentence summary",
-  "key_points": ["point 1", "point 2"],
-  "concepts": ["concept a", "concept b"],
-  "open_questions": ["question 1"]
-}
-
-Rules:
-- Focus on claims, mechanisms, boundaries, tradeoffs, and notable terms.
-- Keep key_points to 2-4 items.
-- Keep concepts to 2-6 concise concept names.
-- Keep open_questions to 0-3 items.
-- Respond with JSON only.\
-"""
-
-_RESEARCH_REPORT_PROMPT = """\
-You are composing a concise research brief for World 0 from source notes.
-
-Return ONLY a JSON object:
-{
-  "summary": "short overall summary",
-  "findings": ["finding 1", "finding 2"],
-  "gaps": ["gap 1"],
-  "next_steps": ["step 1", "step 2"]
-}
-
-Rules:
-- Findings should synthesize across sources, not repeat them verbatim.
-- Gaps should identify uncertainty, missing evidence, or weakly covered areas.
-- Next steps should be concrete research or learning actions.
-- Keep each list to 2-5 items.
-- Respond with JSON only.\
-"""
-
-_SEARCH_BRIEF_PROMPT = """\
-You are composing a compact search brief for World 0 from web search results.
-
-Return ONLY a JSON object:
-{
-  "summary": "short overview of what the search results suggest",
-  "themes": ["theme 1", "theme 2"],
-  "recommended_sources": ["source title 1", "source title 2"]
-}
-
-Rules:
-- Focus on what the result set appears to cover well.
-- Themes should be concise conceptual angles or clusters.
-- Recommended sources should name 1-3 results worth reading first.
-- Respond with JSON only.\
-"""
-
-_SESSION_COMPACTION_PROMPT = """\
-You are compressing an older World 0 agent session into a reusable brief.
-
-Return ONLY a JSON object:
-{
-  "summary": "compact summary of the earlier session context",
-  "open_loops": ["open item 1", "open item 2"],
-  "key_concepts": ["concept 1", "concept 2"]
-}
-
-Rules:
-- Preserve goals, decisions, unresolved questions, and notable tool outcomes.
-- Keep the summary under 120 words.
-- Keep open_loops to 0-4 items.
-- Keep key_concepts to 0-6 concise entries.
-- Respond with JSON only.\
-"""
 
 
 class PKMAgent:
@@ -197,10 +77,44 @@ class PKMAgent:
         self,
         store_path: str | Path = ".pkm_world",
         llm: LLMProvider | None = None,
+        *,
+        space_id: str | None = None,
     ) -> None:
-        store_path = Path(store_path).expanduser()
-        self._store_path = store_path
-        self._world = World(store_path=store_path, llm=llm)
+        root_path = Path(store_path).expanduser()
+        self._root_path = root_path
+
+        # Resolve the active space.  When a registry already exists or
+        # ``space_id`` is explicit, PKMAgent routes the World + sessions
+        # to that space's subdirectory.  Otherwise we fall back to the
+        # legacy behaviour: the root itself is the store path.
+        from world0.spaces import SpaceRegistry
+
+        self._space_registry = SpaceRegistry(root_path)
+        active = (
+            self._space_registry.resolve(space_id)
+            if space_id is not None
+            else self._space_registry.active()
+        )
+        if active is None and self._space_registry.list():
+            active = self._space_registry.list()[0]
+        if active is not None:
+            self._space_registry.set_active(active.id)
+            self._space_registry.touch(active.id)
+            store_path = self._space_registry.path_for(active.id)
+        else:
+            store_path = root_path
+
+        self._space = active
+        self._store_path = Path(store_path)
+        prompt_paths = [prompt_config_path(root_path)]
+        if self._store_path != root_path:
+            prompt_paths.append(prompt_config_path(self._store_path))
+        self._prompts = load_prompt_registry(*prompt_paths)
+        self._world = World(
+            store_path=self._store_path,
+            llm=llm,
+            prompt_registry=self._prompts,
+        )
         self._llm = llm
         self._history: list[dict[str, str]] = []
         self._language = "en"
@@ -236,6 +150,21 @@ class PKMAgent:
     def world(self) -> World:
         """Access the underlying World 0 instance."""
         return self._world
+
+    @property
+    def prompts(self) -> PromptRegistry:
+        """Access the effective prompt registry."""
+        return self._prompts
+
+    @property
+    def space(self):
+        """Currently active ``Space`` (or ``None`` in legacy single-store mode)."""
+        return self._space
+
+    @property
+    def space_registry(self):
+        """Access the underlying ``SpaceRegistry``."""
+        return self._space_registry
 
     # ── Agentic mode ─────────────────────────────────────────────────
 
@@ -538,6 +467,7 @@ class PKMAgent:
                 on_tool_call=on_tool_call,
                 on_tool_result=on_tool_result,
                 language=self._language,
+                prompt_registry=self._prompts,
             )
             self._agent_loop = loop
             result = loop.run(user_input)
@@ -986,7 +916,7 @@ class PKMAgent:
         if self._skill_registry is None:
             from world0.agents.skill import SkillRegistry, register_builtin_skills
             self._skill_registry = SkillRegistry()
-            register_builtin_skills(self._skill_registry)
+            register_builtin_skills(self._skill_registry, self._prompts)
             # Load custom skills if available
             custom_path = self._store_path / "skills.json"
             if custom_path.exists():
@@ -1095,9 +1025,10 @@ class PKMAgent:
         if self._llm:
             try:
                 llm_summary = self._llm.complete_json(
-                    "You are a concise knowledge assistant. "
-                    f"{self._language_instruction()} "
-                    "Respond with a JSON object: {\"summary\": \"...\"}",
+                    self._prompts.render(
+                        "agent.learn_inline_summary.system",
+                        language_instruction=self._language_instruction(),
+                    ),
                     f"Summarize what was learned:\n{summary}",
                 )
                 parsed = json.loads(self._extract_json(llm_summary))
@@ -1442,7 +1373,7 @@ class PKMAgent:
                 f"## User Question\n{query}"
             )
             response = self._llm.complete_json(
-                f"{_ANSWER_SYSTEM_PROMPT}\n\n{self._language_instruction()}",
+                self._prompt_with_language("agent.answer.system"),
                 user_prompt,
             )
             # The response here is plain text, not necessarily JSON
@@ -2188,7 +2119,7 @@ class PKMAgent:
 
         try:
             raw = self._llm.complete_json(
-                f"{_SEARCH_BRIEF_PROMPT}\n\n{self._language_instruction()}",
+                self._prompt_with_language("agent.search_brief.system"),
                 (
                     f"Query: {query}\n"
                     f"Focus: {focus or 'none'}\n\n"
@@ -2249,7 +2180,7 @@ class PKMAgent:
 
         try:
             raw = self._llm.complete_json(
-                f"{_RESEARCH_SOURCE_PROMPT}\n\n{self._language_instruction()}",
+                self._prompt_with_language("agent.research_source.system"),
                 (
                     f"Topic: {topic}\n"
                     f"Focus: {focus or 'none'}\n"
@@ -2302,7 +2233,7 @@ class PKMAgent:
 
         try:
             raw = self._llm.complete_json(
-                f"{_RESEARCH_REPORT_PROMPT}\n\n{self._language_instruction()}",
+                self._prompt_with_language("agent.research_report.system"),
                 (
                     f"Topic: {topic}\n"
                     f"Focus: {focus or 'none'}\n\n"
@@ -2341,7 +2272,7 @@ class PKMAgent:
 
         try:
             raw = self._llm.complete_json(
-                f"{_SESSION_COMPACTION_PROMPT}\n\n{self._language_instruction()}",
+                self._prompt_with_language("agent.session_compaction.system"),
                 transcript,
             )
             data = json.loads(self._extract_json(raw))
@@ -2422,7 +2353,10 @@ class PKMAgent:
         """
         if self._llm:
             try:
-                raw = self._llm.complete_json(_QUERY_EXTRACT_PROMPT, query)
+                raw = self._llm.complete_json(
+                    self._prompts.render("agent.query_extract.system"),
+                    query,
+                )
                 cleaned = self._extract_json(raw)
                 data = json.loads(cleaned)
                 seeds = data.get("seeds", [])
@@ -2494,6 +2428,10 @@ class PKMAgent:
         if self._language == "zh":
             return "Respond in Simplified Chinese."
         return "Respond in English."
+
+    def _prompt_with_language(self, prompt_id: str, **values: Any) -> str:
+        prompt = self._prompts.render(prompt_id, **values)
+        return f"{prompt}\n\n{self._language_instruction()}"
 
     @staticmethod
     def _help_text() -> str:

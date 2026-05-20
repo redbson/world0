@@ -12,10 +12,12 @@ skipped entirely, avoiding unnecessary floating-point work.
 from __future__ import annotations
 
 import math
+from typing import TYPE_CHECKING
 
-from world0.concepts.manager import ConceptManager
-from world0.relations.manager import RelationManager
 from world0.schemas.concept import Maturity
+
+if TYPE_CHECKING:
+    from world0.core import ConceptStore, RelationStore
 
 # Half-life in hours per maturity level
 CONCEPT_HALF_LIFE: dict[Maturity, float] = {
@@ -34,10 +36,15 @@ DECAY_GRACE_HOURS: float = 1.0
 
 
 class DecayEngine:
-    """Applies time-based decay to concepts and relations."""
+    """Applies time-based decay to concepts and relations.
+
+    Implements the ``DecayPolicy`` Protocol from ``world0.core``.
+    """
 
     def __init__(
-        self, concepts: ConceptManager, relations: RelationManager
+        self,
+        concepts: "ConceptStore",
+        relations: "RelationStore",
     ) -> None:
         self._concepts = concepts
         self._relations = relations

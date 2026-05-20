@@ -13,9 +13,12 @@ from __future__ import annotations
 
 from collections import defaultdict
 from itertools import combinations
+from typing import TYPE_CHECKING
 
-from world0.relations.manager import RelationManager
 from world0.schemas.relation import RelationType
+
+if TYPE_CHECKING:
+    from world0.core import RelationStore
 
 # Minimum co-occurrence count before a Hebbian relation is created.
 # Prevents noise relations from a single shared observation.
@@ -28,9 +31,12 @@ MAX_PAIRS: int = 30
 
 
 class HebbianEngine:
-    """Implements Hebbian co-activation learning for relation discovery."""
+    """Implements Hebbian co-activation learning for relation discovery.
 
-    def __init__(self, relations: RelationManager) -> None:
+    Implements the ``HebbianLearner`` Protocol from ``world0.core``.
+    """
+
+    def __init__(self, relations: "RelationStore") -> None:
         self._relations = relations
         # Tracks co-occurrence counts for pairs that don't yet have a relation.
         # Key: frozenset({id_a, id_b}), Value: count

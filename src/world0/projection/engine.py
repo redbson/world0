@@ -11,9 +11,12 @@ recently active concepts are preferred over stale ones.
 
 from __future__ import annotations
 
-from world0.concepts.manager import ConceptManager
-from world0.relations.manager import RelationManager
+from typing import TYPE_CHECKING
+
 from world0.schemas.types import Projection
+
+if TYPE_CHECKING:
+    from world0.core import ConceptStore, RelationStore
 
 # MMR diversity weight. 0 = pure score ranking, 1 = pure diversity.
 # 0.3 gives a mild diversity nudge while keeping relevance primary.
@@ -42,7 +45,9 @@ class ProjectionEngine:
     """
 
     def __init__(
-        self, concepts: ConceptManager, relations: RelationManager
+        self,
+        concepts: "ConceptStore",
+        relations: "RelationStore",
     ) -> None:
         self._concepts = concepts
         self._relations = relations

@@ -33,6 +33,7 @@ all = [
 dev = [
     "pytest>=7.0",
     "pytest-cov",
+    "playwright>=1.48",
     "openai>=1.0",
     "anthropic>=0.30",
     "fastapi>=0.100",
@@ -48,5 +49,15 @@ pkm-web = "world0.agents.web_main:main"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+"world0.visualization" = ["template.html"]
+
 [tool.pytest.ini_options]
-testpaths = ["tests"]
+testpaths = [
+    "tests",
+    "src/world0/concepts/tests",
+    "src/world0/dynamics/tests",
+    "src/world0/spaces/tests",
+    "src/world0/visualization/tests",
+    "src/world0/world/tests",
+]

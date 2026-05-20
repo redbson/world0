@@ -27,7 +27,43 @@ The current agent development priorities are tracked in [`TODO.md`](TODO.md).
 
 当前 Agent 的功能开发优先级记录在 [`TODO.md`](TODO.md)。
 
+## Documentation / 文档
+
+- [`docs/world0-usage.md`](docs/world0-usage.md) — operational usage guide for World 0 / World 0 操作与使用文档
+- [`docs/world0-color-field-dynamics.md`](docs/world0-color-field-dynamics.md) — dynamics-first design for community-born color fields / 基于动力学的群落生色与褪色设计
+- [`DesignPhilosophy.md`](DesignPhilosophy.md) — design rationale and framing / 设计哲学与边界
+- [`TODO.md`](TODO.md) — current implementation priorities / 当前实现优先级
+
 ## Quickstart / 快速开始
+
+The repository includes a launcher that can set up a local virtualenv and
+run the CLI, browser UI, native GUI, tests, and one-shot agent commands:
+
+本仓库包含一个启动器，可用于创建本地虚拟环境，并启动 CLI、浏览器界面、
+原生 GUI、测试和一次性 Agent 命令：
+
+```bash
+./start_world0.sh setup
+./start_world0.sh
+./start_world0.sh web --provider none
+./start_world0.sh ask "What concepts matter here?"
+./start_world0.sh test -- -k projection
+```
+
+For a resident browser-based GUI service:
+
+如需启动常驻的浏览器 GUI 服务：
+
+```bash
+./start_world0.sh service-start --provider none
+./start_world0.sh service-status
+./start_world0.sh service-logs -f
+./start_world0.sh service-stop
+```
+
+You can still use the installed Python entry points directly:
+
+你也可以继续直接使用 Python 安装后的入口：
 
 ```bash
 pip install -e .
@@ -67,6 +103,14 @@ pip install -e ".[anthropic,web]"
 - `pkm-web` — browser interface / 浏览器界面
 - `pkm-gui` — native GUI / 原生 GUI
 - `World(...)` — Python library API / Python 库接口
+
+For a task-oriented walkthrough of the Python API, CLI, Web/UI launchers,
+LLM provider setup, persistence layout, and recommended workflows, see
+[`docs/world0-usage.md`](docs/world0-usage.md).
+
+如果你需要面向任务的完整使用说明，包括 Python API、CLI、Web/UI 启动、
+LLM provider 配置、持久化目录结构与推荐工作流，请查看
+[`docs/world0-usage.md`](docs/world0-usage.md)。
 
 ### Research Workflow / 研究工作流
 

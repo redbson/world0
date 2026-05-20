@@ -109,6 +109,26 @@ class McpServerRequest(BaseModel):
     env: dict[str, str] = Field(default_factory=dict)
 
 
+class SpaceCreateRequest(BaseModel):
+    name: str
+    description: str = ""
+    activate: bool = True
+
+
+class SpaceSwitchRequest(BaseModel):
+    target: str  # name or id
+
+
+class SpaceRenameRequest(BaseModel):
+    target: str
+    new_name: str
+
+
+class SpaceDeleteRequest(BaseModel):
+    target: str
+    purge: bool = False
+
+
 class MessageResponse(BaseModel):
     message: str
     type: str = "text"  # text, markdown, error
@@ -121,13 +141,14 @@ def create_app(
     store_path: str | Path = "~/.pkm_world",
     llm: LLMProvider | None = None,
     model: str = "sonnet",
+    space_id: str | None = None,
 ) -> Any:
     """Create the FastAPI application with a PKMAgent backend."""
     from fastapi import FastAPI
     from fastapi.responses import HTMLResponse, JSONResponse
 
     global _agent
-    _agent = PKMAgent(store_path=store_path, llm=llm)
+    _agent = PKMAgent(store_path=store_path, llm=llm, space_id=space_id)
     runtime_provider = "none"
     runtime_model = ""
     if llm is not None:
@@ -168,6 +189,80 @@ def create_app(
         pass  # Agentic mode unavailable (no API key, etc.)
 
     app = FastAPI(title="World 0 Concept World", version="0.2.0")
+
+    def _space_payload() -> dict[str, Any]:
+        registry = _agent.space_registry
+        active = registry.active()
+        return {
+            "spaces": [
+                {
+                    "id": s.id,
+                    "name": s.name,
+                    "description": s.description,
+                    "path": str(registry.path_for(s.id)),
+                    "created_at": s.created_at.isoformat(),
+                    "last_active_at": s.last_active_at.isoformat(),
+                    "is_active": active is not None and active.id == s.id,
+                }
+                for s in registry.list()
+            ],
+            "active_space_id": active.id if active else None,
+        }
+
+    def _rebuild_agent(target_space_id: str) -> None:
+        """Swap the process-global ``_agent`` to a different space.
+
+        Preserves current runtime settings (language, provider, model,
+        credentials) and re-initialises agentic mode if LLM is ready.
+        """
+        nonlocal _agentic_ready, llm
+        global _agent
+
+        prior_settings = dict(_agent.runtime_settings())
+        prior_llm = _agent._llm
+        prior_language = prior_settings.get("language", "en")
+        prior_provider = prior_settings.get("provider", "none")
+        prior_model = prior_settings.get("model", "")
+
+        _agent = PKMAgent(
+            store_path=store_path,
+            llm=prior_llm,
+            space_id=target_space_id,
+        )
+        if prior_provider and prior_provider != "custom":
+            try:
+                _agent.configure_runtime(
+                    language=prior_language,
+                    provider=prior_provider,
+                    model=prior_model,
+                    api_key=prior_settings.get("api_key") or None,
+                    base_url=prior_settings.get("base_url") or None,
+                    azure_endpoint=prior_settings.get("azure_endpoint") or None,
+                    api_version=prior_settings.get("api_version") or None,
+                    auto_sediment_dialogue=prior_settings.get(
+                        "auto_sediment_dialogue", True
+                    ),
+                    dialogue_sediment_interval=prior_settings.get(
+                        "dialogue_sediment_interval", 1
+                    ),
+                )
+            except Exception:
+                pass
+        llm = _agent._llm
+
+        _agentic_ready = False
+        try:
+            if prior_provider not in ("none", "custom"):
+                effective_model = (
+                    _agent.runtime_settings().get("model") or prior_model
+                )
+                if effective_model:
+                    _agent.init_agentic(
+                        model=f"{prior_provider}/{effective_model}"
+                    )
+                    _agentic_ready = _agent._chat_provider is not None
+        except Exception:
+            _agentic_ready = False
 
     def _session_payload(session) -> dict[str, Any]:
         session_state = _agent.session_state(session)
@@ -789,6 +884,80 @@ def create_app(
             return MessageResponse(message=result, type="markdown")
         except Exception as e:
             return MessageResponse(message=str(e), type="error")
+
+    # ── Space endpoints ───────────────────────────────────────────
+
+    @app.get("/api/spaces")
+    async def list_spaces():
+        return _space_payload()
+
+    @app.post("/api/spaces/create")
+    async def create_space(req: SpaceCreateRequest):
+        try:
+            space = _agent.space_registry.create(
+                req.name, description=req.description
+            )
+        except ValueError as exc:
+            return JSONResponse(
+                {"success": False, "error": str(exc)}, status_code=400
+            )
+        if req.activate:
+            _rebuild_agent(space.id)
+        return {
+            "success": True,
+            "space": {
+                "id": space.id,
+                "name": space.name,
+                "description": space.description,
+            },
+            **_space_payload(),
+        }
+
+    @app.post("/api/spaces/use")
+    async def use_space(req: SpaceSwitchRequest):
+        space = _agent.space_registry.resolve(req.target)
+        if space is None:
+            return JSONResponse(
+                {"success": False, "error": f"space {req.target!r} not found"},
+                status_code=404,
+            )
+        _rebuild_agent(space.id)
+        return {"success": True, **_space_payload()}
+
+    @app.post("/api/spaces/rename")
+    async def rename_space(req: SpaceRenameRequest):
+        registry = _agent.space_registry
+        space = registry.resolve(req.target)
+        if space is None:
+            return JSONResponse(
+                {"success": False, "error": f"space {req.target!r} not found"},
+                status_code=404,
+            )
+        try:
+            registry.rename(space.id, req.new_name)
+        except ValueError as exc:
+            return JSONResponse(
+                {"success": False, "error": str(exc)}, status_code=400
+            )
+        return {"success": True, **_space_payload()}
+
+    @app.post("/api/spaces/delete")
+    async def delete_space(req: SpaceDeleteRequest):
+        registry = _agent.space_registry
+        space = registry.resolve(req.target)
+        if space is None:
+            return JSONResponse(
+                {"success": False, "error": f"space {req.target!r} not found"},
+                status_code=404,
+            )
+        active = registry.active()
+        was_active = active is not None and active.id == space.id
+        registry.delete(space.id, purge_data=req.purge)
+        if was_active:
+            new_active = registry.active()
+            if new_active is not None:
+                _rebuild_agent(new_active.id)
+        return {"success": True, **_space_payload()}
 
     return app
 
@@ -1898,6 +2067,7 @@ let availableSkills = [];
 let environmentStatus = null;
 window._selectedSkill = null;
 let currentLanguage = "en";
+let isComposingInput = false;
 
 const I18N = {
   en: {
@@ -2410,6 +2580,10 @@ function renderModeContext() {
 }
 
 function handleKeydown(e) {
+  if (e.isComposing || isComposingInput || e.keyCode === 229) {
+    return;
+  }
+
   if (e.key === "Enter" && !e.shiftKey) {
     e.preventDefault();
     sendMessage();
@@ -2425,7 +2599,14 @@ function handleKeydown(e) {
 }
 
 // ── Auto-resize textarea ──
-$("#user-input").addEventListener("input", function() {
+const userInputEl = $("#user-input");
+userInputEl.addEventListener("compositionstart", () => {
+  isComposingInput = true;
+});
+userInputEl.addEventListener("compositionend", () => {
+  isComposingInput = false;
+});
+userInputEl.addEventListener("input", function() {
   this.style.height = "auto";
   this.style.height = Math.min(this.scrollHeight, 120) + "px";
 });
@@ -2692,7 +2873,8 @@ function buildModeRequest(mode, text) {
 async function sendMessage() {
   if (isProcessing) return;
   const input = $("#user-input");
-  const text = input.value.trim();
+  const submittedInput = input.value;
+  const text = submittedInput.trim();
   const mode = $("#mode-select").value;
   const built = buildModeRequest(mode, text);
 
@@ -2732,8 +2914,10 @@ async function sendMessage() {
       updateSkillBadge();
     }
 
-    input.value = "";
-    input.style.height = "auto";
+    if (input.value === submittedInput) {
+      input.value = "";
+      input.style.height = "auto";
+    }
   } catch (err) {
     removeTypingIndicator();
     addMessage("error", t("requestFailed", { message: err.message }));
@@ -3009,9 +3193,44 @@ function modelOptionsForProvider(provider, selectedModel = "") {
 
 async function showSettingsModal() {
   try {
-    const meta = await apiCall("/api/agent/status");
+    const [meta, spacesData] = await Promise.all([
+      apiCall("/api/agent/status"),
+      apiCall("/api/spaces").catch(() => ({ spaces: [], active_space_id: null })),
+    ]);
     const settings = meta.settings || {};
     const providerEnv = meta.provider_env || {};
+    const spaces = spacesData.spaces || [];
+    const activeSpaceId = spacesData.active_space_id;
+    const activeSpace = spaces.find(s => s.id === activeSpaceId);
+    const spaceOptions = spaces.map(s => `
+      <option value="${escapeHtml(s.id)}" ${s.id === activeSpaceId ? "selected" : ""}>
+        ${escapeHtml(s.name)}${s.is_active ? (currentLanguage === "zh" ? " (当前)" : " (current)") : ""}
+      </option>
+    `).join("");
+    const zh = currentLanguage === "zh";
+    const spacesPanel = `
+      <div class="field-group">
+        <label>${zh ? "概念空间 (Space)" : "Concept Space"}</label>
+        <div class="field-help" style="margin-bottom:8px;">
+          ${zh
+            ? `当前空间：<strong>${escapeHtml(activeSpace ? activeSpace.name : "—")}</strong>${activeSpace ? `  <span style="opacity:.7">(${escapeHtml(activeSpace.id)})</span>` : ""}`
+            : `Active space: <strong>${escapeHtml(activeSpace ? activeSpace.name : "—")}</strong>${activeSpace ? `  <span style="opacity:.7">(${escapeHtml(activeSpace.id)})</span>` : ""}`}
+        </div>
+        <div style="display:flex;gap:8px;align-items:center;margin-bottom:10px;">
+          <select id="settings-space-select" style="flex:1;">${spaceOptions || `<option value="">${zh ? "（暂无空间）" : "(no spaces yet)"}</option>`}</select>
+          <button type="button" class="modal-close" onclick="switchSpace()" ${spaces.length ? "" : "disabled"}>${zh ? "切换" : "Switch"}</button>
+        </div>
+        <div style="display:flex;gap:8px;align-items:center;">
+          <input id="settings-space-new-name" placeholder="${zh ? "新空间名称" : "New space name"}" style="flex:1;" />
+          <button type="button" class="modal-close" onclick="createSpaceInline()">${zh ? "新建" : "Create"}</button>
+        </div>
+        <div class="field-help" style="margin-top:6px;">
+          ${zh
+            ? "每个空间是一个独立的概念世界，切换后对话将使用该空间的概念与关系。"
+            : "Each space is an isolated concept world; conversations use that space's concepts and relations."}
+        </div>
+      </div>
+    `;
     const providerOptions = (meta.providers || []).map(p => `
       <option value="${escapeHtml(p.id)}" ${settings.provider === p.id ? "selected" : ""}>
         ${escapeHtml(p.label)}
@@ -3037,6 +3256,7 @@ async function showSettingsModal() {
     const sedimentInterval = Number(settings.dialogue_sediment_interval || 1);
     const body = `
       <div class="mode-fields">
+        ${spacesPanel}
         <div class="field-group">
           <label for="settings-language">${t("language")}</label>
           <select id="settings-language">${languageOptions}</select>
@@ -3180,6 +3400,55 @@ async function saveSettings() {
     await loadEnvironmentStatus();
   } catch (err) {
     addMessage("error", t("updateSettingsFailed", { message: err.message }));
+  }
+}
+
+async function switchSpace() {
+  const target = fieldValue("settings-space-select");
+  if (!target) return;
+  try {
+    const resp = await apiCall("/api/spaces/use", {
+      method: "POST",
+      body: JSON.stringify({ target }),
+    });
+    if (resp && resp.success === false) {
+      addMessage("error", resp.error || "switch failed");
+      return;
+    }
+    const active = (resp.spaces || []).find(s => s.is_active);
+    const name = active ? active.name : target;
+    const zh = currentLanguage === "zh";
+    addMessage("system", zh ? `已切换到空间：${name}` : `Switched to space: ${name}`);
+    closeModal("settings-modal");
+    await loadEnvironmentStatus();
+    await showSettingsModal();
+  } catch (err) {
+    addMessage("error", err.message);
+  }
+}
+
+async function createSpaceInline() {
+  const name = fieldValue("settings-space-new-name");
+  const zh = currentLanguage === "zh";
+  if (!name || !name.trim()) {
+    addMessage("error", zh ? "请填写空间名称" : "Please enter a space name");
+    return;
+  }
+  try {
+    const resp = await apiCall("/api/spaces/create", {
+      method: "POST",
+      body: JSON.stringify({ name: name.trim(), description: "", activate: true }),
+    });
+    if (resp && resp.success === false) {
+      addMessage("error", resp.error || "create failed");
+      return;
+    }
+    addMessage("system", zh ? `已创建并切换到空间：${name.trim()}` : `Created and switched to space: ${name.trim()}`);
+    closeModal("settings-modal");
+    await loadEnvironmentStatus();
+    await showSettingsModal();
+  } catch (err) {
+    addMessage("error", err.message);
   }
 }
 

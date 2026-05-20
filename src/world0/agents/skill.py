@@ -21,6 +21,8 @@ import json
 from dataclasses import dataclass, field
 from typing import Any, Callable, TYPE_CHECKING
 
+from world0.prompts import PromptRegistry
+
 if TYPE_CHECKING:
     from world0.agents.pkm import PKMAgent
 
@@ -198,6 +200,7 @@ class SkillExecutor:
             on_tool_call=on_tool_call,
             on_tool_result=on_tool_result,
             language=self._agent.language,
+            prompt_registry=self._agent.prompts,
         )
 
         # If skill has a system override, we inject it as context
@@ -226,8 +229,13 @@ class SkillExecutor:
 
 # ── Built-in Skills ──────────────────────────────────────────────────
 
-def builtin_skills() -> list[Skill]:
+def builtin_skills(prompt_registry: PromptRegistry | None = None) -> list[Skill]:
     """Return all built-in PKM skills."""
+    prompts = prompt_registry or PromptRegistry()
+
+    def template(prompt_id: str) -> str:
+        return prompts.get(prompt_id).template
+
     return [
         Skill(
             name="digest_article",
@@ -236,16 +244,7 @@ def builtin_skills() -> list[Skill]:
                 "Identifies key concepts, establishes relations, and provides "
                 "a summary of what was learned."
             ),
-            prompt_template=(
-                "Please digest the following article/text and add it to my knowledge world.\n\n"
-                "Steps:\n"
-                "1. Use the `learn` tool to ingest the text\n"
-                "2. Use `list_concepts` to see what was extracted\n"
-                "3. Use `explore` on the most important new concepts\n"
-                "4. If you notice concepts that should be connected but aren't, use `connect`\n"
-                "5. Give me a brief summary of what was learned and what connections were made\n\n"
-                "Article text:\n{{text}}"
-            ),
+            prompt_template=template("skill.digest_article.user"),
             parameters=[
                 SkillParam("text", "The article or text to digest"),
             ],
@@ -257,17 +256,7 @@ def builtin_skills() -> list[Skill]:
                 "Research a topic from outside sources, distill the strongest findings, "
                 "bring them into World 0, and highlight open questions."
             ),
-            prompt_template=(
-                "Please research the topic '{{topic}}' for me.\n\n"
-                "Focus: {{focus}}\n"
-                "Sources limit: {{sources_limit}}\n"
-                "Learn findings into World 0: {{save_findings}}\n\n"
-                "Steps:\n"
-                "1. Use the `research_topic` tool with the topic, focus, and source limit\n"
-                "2. If the brief surfaces important concepts, use `explore` on the strongest ones\n"
-                "3. If needed, use `ask` to project what World 0 now knows about the topic\n"
-                "4. Return a concise research brief with findings, gaps, next steps, and source links"
-            ),
+            prompt_template=template("skill.research_topic.user"),
             parameters=[
                 SkillParam("topic", "The topic or question to research"),
                 SkillParam("focus", "Optional angle or lens for the research", required=False, default=""),
@@ -282,16 +271,7 @@ def builtin_skills() -> list[Skill]:
                 "Deep analysis of a topic: what you know, what's connected, "
                 "what gaps exist, and suggestions for what to learn next."
             ),
-            prompt_template=(
-                "Please perform a deep analysis of the topic '{{topic}}' in my knowledge world.\n\n"
-                "Steps:\n"
-                "1. Use `search` to find related concepts\n"
-                "2. Use `explore` on each relevant concept found\n"
-                "3. Use `ask` to query what I know about this topic\n"
-                "4. Identify gaps — what concepts are missing or weak (embryonic)?\n"
-                "5. Suggest what I should learn next to strengthen this area\n\n"
-                "Be thorough but concise in your analysis."
-            ),
+            prompt_template=template("skill.analyze_topic.user"),
             parameters=[
                 SkillParam("topic", "The topic to analyze"),
             ],
@@ -303,16 +283,7 @@ def builtin_skills() -> list[Skill]:
                 "Map connections between a set of concepts. Explores each one, "
                 "identifies missing links, and creates new relations."
             ),
-            prompt_template=(
-                "Please build a knowledge map around these concepts: {{concepts}}\n\n"
-                "Steps:\n"
-                "1. Use `explore` on each concept to understand current connections\n"
-                "2. Identify concepts that should be related but aren't connected\n"
-                "3. Use `connect` to create meaningful typed relations\n"
-                "4. Use `search` to find other relevant concepts in the world\n"
-                "5. Give me a summary of the map: what's well-connected and what's isolated\n\n"
-                "Use specific relation types (depends_on, supports, contrasts, etc.) rather than generic related_to."
-            ),
+            prompt_template=template("skill.build_knowledge_map.user"),
             parameters=[
                 SkillParam("concepts", "Comma-separated list of concept names"),
             ],
@@ -325,17 +296,7 @@ def builtin_skills() -> list[Skill]:
                 "Looks at recently added concepts, identifies patterns, "
                 "and creates cross-domain links."
             ),
-            prompt_template=(
-                "Please review my knowledge world and find new connections.\n\n"
-                "Steps:\n"
-                "1. Use `status` to see the current state\n"
-                "2. Use `list_concepts` to see all concepts, especially embryonic ones\n"
-                "3. Look for concepts from different domains that could be connected\n"
-                "4. Use `connect` to create meaningful cross-domain relations\n"
-                "5. Use `reflect` to consolidate the knowledge\n"
-                "6. Give me a summary of what connections you found and why they matter\n\n"
-                "Focus on surprising or non-obvious connections across different domains."
-            ),
+            prompt_template=template("skill.review_and_connect.user"),
             parameters=[],
             tags=["review", "cross-domain", "synthesis"],
         ),
@@ -345,19 +306,7 @@ def builtin_skills() -> list[Skill]:
                 "Generate a comprehensive summary of the entire knowledge world: "
                 "key themes, strongest concepts, most important relations, and overall health."
             ),
-            prompt_template=(
-                "Please give me a comprehensive summary of my knowledge world.\n\n"
-                "Steps:\n"
-                "1. Use `status` for the overview\n"
-                "2. Use `list_concepts` to see all concepts\n"
-                "3. Identify the top 3-5 knowledge themes/domains\n"
-                "4. For each theme, use `explore` on the core concepts\n"
-                "5. Summarize:\n"
-                "   - What are my strongest knowledge areas?\n"
-                "   - What are the main themes and how do they connect?\n"
-                "   - What concepts are fading and might need reinforcement?\n"
-                "   - What's the overall health of my knowledge world?"
-            ),
+            prompt_template=template("skill.summarize_world.user"),
             parameters=[],
             tags=["summary", "overview", "health"],
         ),
@@ -367,15 +316,7 @@ def builtin_skills() -> list[Skill]:
                 "Learn from text and then generate quiz questions to test understanding. "
                 "Helps reinforce learning through active recall."
             ),
-            prompt_template=(
-                "Please help me learn and test my understanding.\n\n"
-                "Steps:\n"
-                "1. Use `learn` to ingest the following text\n"
-                "2. Use `explore` on the most important concepts extracted\n"
-                "3. Generate 3-5 quiz questions that test understanding of the key concepts and relations\n"
-                "4. Include questions about how concepts connect to each other\n\n"
-                "Text to learn:\n{{text}}"
-            ),
+            prompt_template=template("skill.learn_and_quiz.user"),
             parameters=[
                 SkillParam("text", "The text to learn and be quizzed on"),
             ],
@@ -384,7 +325,10 @@ def builtin_skills() -> list[Skill]:
     ]
 
 
-def register_builtin_skills(registry: SkillRegistry) -> None:
+def register_builtin_skills(
+    registry: SkillRegistry,
+    prompt_registry: PromptRegistry | None = None,
+) -> None:
     """Register all built-in skills into a registry."""
-    for skill in builtin_skills():
+    for skill in builtin_skills(prompt_registry):
         registry.register(skill)

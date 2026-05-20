@@ -92,6 +92,7 @@ def launch_native(
     store_path: str = "~/.pkm_world",
     provider: str = "anthropic",
     model: str | None = None,
+    space_id: str | None = None,
     host: str = "127.0.0.1",
     port: int | None = None,
     width: int = 1200,
@@ -126,7 +127,12 @@ def launch_native(
 
     from world0.agents.web import create_app
 
-    app = create_app(store_path=store_path, llm=llm, model=agentic_model)
+    app = create_app(
+        store_path=store_path,
+        llm=llm,
+        model=agentic_model,
+        space_id=space_id,
+    )
 
     # Start server in background
     server_thread = threading.Thread(
@@ -161,8 +167,10 @@ def launch_browser(
     store_path: str = "~/.pkm_world",
     provider: str = "anthropic",
     model: str | None = None,
+    space_id: str | None = None,
     host: str = "127.0.0.1",
     port: int = 8420,
+    open_browser: bool = True,
 ) -> None:
     """Launch the PKM Agent as a web app (opens in default browser)."""
     import webbrowser
@@ -175,18 +183,24 @@ def launch_browser(
 
     from world0.agents.web import create_app
 
-    app = create_app(store_path=store_path, llm=llm, model=agentic_model)
+    app = create_app(
+        store_path=store_path,
+        llm=llm,
+        model=agentic_model,
+        space_id=space_id,
+    )
 
     url = f"http://{host}:{port}"
     print(f"Starting World 0 PKM Agent at {url}")
     print("Press Ctrl+C to stop.\n")
 
-    # Open browser after a short delay
-    def open_browser():
+    # Open browser after a short delay when this is an interactive launch.
+    def _open_browser():
         time.sleep(1.0)
         webbrowser.open(url)
 
-    threading.Thread(target=open_browser, daemon=True).start()
+    if open_browser:
+        threading.Thread(target=_open_browser, daemon=True).start()
 
     import uvicorn
 
@@ -220,9 +234,19 @@ def main() -> None:
         help="Port number (default: auto for native, 8420 for web)",
     )
     parser.add_argument(
+        "--space",
+        default=None,
+        help="Space to use for this run (name or id)",
+    )
+    parser.add_argument(
         "--web",
         action="store_true",
         help="Open in browser instead of native window",
+    )
+    parser.add_argument(
+        "--no-open",
+        action="store_true",
+        help="Do not automatically open the browser for --web",
     )
     parser.add_argument(
         "--width",
@@ -244,14 +268,17 @@ def main() -> None:
             store_path=args.store,
             provider=args.provider,
             model=args.model,
+            space_id=args.space,
             host="127.0.0.1",
             port=args.port or 8420,
+            open_browser=not args.no_open,
         )
     else:
         launch_native(
             store_path=args.store,
             provider=args.provider,
             model=args.model,
+            space_id=args.space,
             port=args.port,
             width=args.width,
             height=args.height,

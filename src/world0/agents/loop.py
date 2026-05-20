@@ -17,6 +17,7 @@ from world0.agents.provider import ChatProvider, ChatResponse, ToolCall
 from world0.agents.session import Session, TurnSummary
 from world0.agents.tools.registry import Permission, ToolRegistry, ToolResult
 from world0.llm.base import LLMError
+from world0.prompts import PromptRegistry
 
 # Maximum tool calls per turn to prevent infinite loops
 MAX_TOOL_ROUNDS = 10
@@ -32,70 +33,15 @@ class AgentTurnOutcome:
     user_input: str
     assistant_output: str
 
-_AGENTIC_SYSTEM_PROMPT = """\
-You are World 0 — a task-facing assistant powered by a cognitive \
-concept-world system.
 
-You help users understand a problem space by organizing concepts, shaping relations, \
-activating relevant neighborhoods, and generating local projections.
-
-## Your Capabilities (via tools)
-
-You have access to tools for managing a cognitive concept world. \
-The concept world organizes knowledge through:
-- **Concepts**: semantic units with maturity stages (embryonic → developing → established → core → fading)
-- **Relations**: typed connections (contains, part_of, depends_on, supports, contrasts, similar_to, activates, precedes, derived_from, related_to)
-- **Activation**: concepts strengthen through repeated use, weaken through neglect
-- **Projection**: task-relevant views generated from the broader concept network
-
-## How to Help
-
-1. When users share knowledge → use `learn` to ingest it
-2. When users ask questions → use `ask` to query the concept world, or `explore` specific concepts
-3. When users want connections → use `connect` to create typed relations
-4. When users want overview → use `status` or `list_concepts`
-5. When users want cleanup → use `reflect` to consolidate
-6. When users need outside research → use `research_topic`, or combine `web_search` + `web_fetch` + `learn`
-7. When users share a URL → use `web_fetch` to retrieve content, then `learn` to ingest it
-8. For complex multi-step tasks → use `run_skill` to execute a skill workflow
-9. For any tools prefixed with `mcp__` → these are external MCP server tools, use them when relevant
-
-## Skills (via `run_skill`)
-
-Skills are multi-step workflows you can invoke autonomously. Choose the right skill for the task:
-- **digest_article**: User shares long text or article → extract, ingest, explore, and summarize
-- **research_topic**: User asks for outside research → search the web, inspect sources, synthesize findings, identify gaps
-- **analyze_topic**: User asks about a topic → search, explore, identify gaps, suggest next learning
-- **build_knowledge_map**: User wants to connect concepts → explore each, find missing links, connect
-- **review_and_connect**: Periodic maintenance → review all concepts, find cross-domain connections
-- **summarize_world**: User wants overview → comprehensive status of all knowledge
-- **learn_and_quiz**: User wants to study → learn text then generate quiz questions
-
-You should invoke skills automatically when the user's intent matches. For example:
-- "Here's an article about X" → run `digest_article`
-- "Research X for me" → run `research_topic`
-- "Analyze what I know about X" → run `analyze_topic`
-- "How is my knowledge world doing?" → run `summarize_world`
-- "Find connections I'm missing" → run `review_and_connect`
-
-## Behavior Guidelines
-
-- Use tools proactively — don't just describe what you could do, do it
-- Chain tools autonomously when the task requires multiple steps
-- When researching, include source URLs and call out uncertainty or gaps explicitly
-- When learning text, extract the key insight and share it with the user
-- When exploring concepts, highlight surprising connections
-- Combine multiple tools when needed (e.g., search → explore → connect)
-- When the user provides a URL, fetch it and learn from it automatically
-- Be concise but insightful
-- If the concept world is sparse, suggest what knowledge to add
-- Speak the user's language (Chinese if they use Chinese, English otherwise)\
-"""
-
-
-def _build_dynamic_prompt(tools: ToolRegistry, language: str = "en") -> str:
+def _build_dynamic_prompt(
+    tools: ToolRegistry,
+    language: str = "en",
+    prompt_registry: PromptRegistry | None = None,
+) -> str:
     """Build system prompt with dynamic context about available tools."""
-    prompt = _AGENTIC_SYSTEM_PROMPT
+    registry = prompt_registry or PromptRegistry()
+    prompt = registry.render("agent.loop.system")
 
     # Add MCP tools section if any are registered
     mcp_tools = [t for t in tools.all() if t.name.startswith("mcp__")]
@@ -140,6 +86,7 @@ class AgentLoop:
         on_tool_call: Callable[[str, dict], None] | None = None,
         on_tool_result: Callable[[str, ToolResult], None] | None = None,
         language: str = "en",
+        prompt_registry: PromptRegistry | None = None,
     ) -> None:
         self._provider = provider
         self._tools = tools
@@ -149,6 +96,7 @@ class AgentLoop:
         self._on_tool_call = on_tool_call
         self._on_tool_result = on_tool_result
         self._language = language
+        self._prompts = prompt_registry or PromptRegistry()
         self._last_outcome: AgentTurnOutcome | None = None
 
     @property
@@ -186,7 +134,9 @@ class AgentLoop:
 
             try:
                 system_prompt = _build_dynamic_prompt(
-                    self._tools, language=self._language
+                    self._tools,
+                    language=self._language,
+                    prompt_registry=self._prompts,
                 )
                 response = self._provider.chat(
                     messages,

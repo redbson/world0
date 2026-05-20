@@ -21,11 +21,202 @@ Usage::
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from pathlib import Path
 
 from world0.agents.pkm import PKMAgent
 from world0.llm.base import LLMProvider
+
+
+def _prompt_config_target(args: argparse.Namespace) -> Path:
+    """Return the prompt config file targeted by CLI arguments."""
+    from world0.prompts import prompt_config_path
+    from world0.spaces import SpaceRegistry
+
+    root = Path(args.store).expanduser()
+    if args.space:
+        registry = SpaceRegistry(root)
+        space = registry.resolve(args.space)
+        if space is None:
+            print(f"error: space {args.space!r} not found", file=sys.stderr)
+            sys.exit(1)
+        return prompt_config_path(registry.path_for(space.id))
+    return prompt_config_path(root)
+
+
+def _handle_prompt_command(args: argparse.Namespace) -> None:
+    """Manage runtime prompt overrides without constructing an LLM provider."""
+    from world0.prompts import (
+        PromptSpec,
+        export_prompt_config,
+        load_prompt_registry,
+        save_prompt_overrides,
+    )
+
+    config_path = _prompt_config_target(args)
+    registry = load_prompt_registry(config_path)
+    cmd = args.prompt_cmd or "list"
+
+    if cmd == "list":
+        print(f"{'ID':<42} {'OVERRIDE':<8} {'OUTPUT':<6} DESCRIPTION")
+        for spec in registry.all():
+            overridden = "yes" if registry.is_overridden(spec.id) else "no"
+            print(f"{spec.id:<42} {overridden:<8} {spec.output:<6} {spec.description}")
+        return
+
+    if cmd == "show":
+        spec = registry.get(args.prompt_id)
+        if args.json:
+            print(json.dumps(spec.to_dict(), indent=2, ensure_ascii=False))
+        else:
+            print(spec.template)
+        return
+
+    if cmd == "export":
+        data = export_prompt_config(registry)
+        rendered = json.dumps(data, indent=2, ensure_ascii=False) + "\n"
+        if args.output:
+            Path(args.output).expanduser().write_text(rendered, encoding="utf-8")
+            print(f"Exported prompts to {args.output}")
+        else:
+            print(rendered, end="")
+        return
+
+    if cmd == "set":
+        base = registry.default(args.prompt_id)
+        if args.file:
+            template = Path(args.file).expanduser().read_text(encoding="utf-8")
+        elif args.template is not None:
+            template = args.template
+        else:
+            print("error: provide --file or --template", file=sys.stderr)
+            sys.exit(1)
+
+        data = base.to_dict(include_id=False)
+        data["template"] = template
+        data["variables"] = []
+        registry.set_override(PromptSpec.from_dict(args.prompt_id, data))
+        save_prompt_overrides(config_path, registry)
+        print(f"Updated {args.prompt_id} in {config_path}")
+        return
+
+    if cmd == "reset":
+        registry.default(args.prompt_id)
+        registry.clear_override(args.prompt_id)
+        save_prompt_overrides(config_path, registry)
+        print(f"Reset {args.prompt_id} in {config_path}")
+        return
+
+    if cmd == "validate":
+        issues = registry.validate()
+        if not issues:
+            print(f"Prompt config OK: {config_path}")
+            return
+        for issue in issues:
+            print(issue.render())
+        if any(issue.severity == "error" for issue in issues):
+            sys.exit(1)
+        return
+
+    if cmd == "diff":
+        overrides = registry.overrides()
+        if not overrides:
+            print("No prompt overrides.")
+            return
+        for prompt_id in sorted(overrides):
+            current = registry.get(prompt_id)
+            base = registry.default(prompt_id)
+            print(f"## {prompt_id}")
+            print(f"- default length: {len(base.template)} chars")
+            print(f"- override length: {len(current.template)} chars")
+        return
+
+    print(f"Unknown prompt subcommand: {cmd}", file=sys.stderr)
+    sys.exit(1)
+
+
+def _handle_space_command(args: argparse.Namespace) -> None:
+    """Space subcommands don't need an LLM or a full PKMAgent."""
+    from world0.spaces import SpaceRegistry
+
+    root = Path(args.store).expanduser()
+    registry = SpaceRegistry(root)
+    cmd = args.space_cmd
+
+    if cmd is None or cmd == "list":
+        spaces = registry.list()
+        if not spaces:
+            print("No spaces yet. Create one with:")
+            print("  pkm space create <name>")
+            return
+        active_id = registry.active().id if registry.active() else None
+        print(f"{'':2} {'ID':<20} {'NAME':<24} DESCRIPTION")
+        for s in spaces:
+            marker = "*" if s.id == active_id else " "
+            desc = s.description or ""
+            print(f"{marker:2} {s.id:<20} {s.name:<24} {desc}")
+        return
+
+    if cmd == "show":
+        space = registry.active()
+        if space is None:
+            print("No active space. Use `pkm space create <name>`.")
+            return
+        print(f"Active space:")
+        print(f"  id:          {space.id}")
+        print(f"  name:        {space.name}")
+        print(f"  description: {space.description or '(none)'}")
+        print(f"  path:        {registry.path_for(space.id)}")
+        print(f"  created:     {space.created_at.isoformat()}")
+        print(f"  last active: {space.last_active_at.isoformat()}")
+        return
+
+    if cmd == "create":
+        try:
+            space = registry.create(args.name, description=args.description)
+        except ValueError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            sys.exit(1)
+        print(f"Created space {space.name!r} (id: {space.id}).")
+        if registry.active() and registry.active().id == space.id:
+            print("Set as active space.")
+        return
+
+    if cmd == "use":
+        space = registry.resolve(args.target)
+        if space is None:
+            print(f"error: space {args.target!r} not found", file=sys.stderr)
+            sys.exit(1)
+        registry.set_active(space.id)
+        print(f"Active space is now {space.name!r} ({space.id}).")
+        return
+
+    if cmd == "rename":
+        space = registry.resolve(args.target)
+        if space is None:
+            print(f"error: space {args.target!r} not found", file=sys.stderr)
+            sys.exit(1)
+        try:
+            registry.rename(space.id, args.new_name)
+        except ValueError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            sys.exit(1)
+        print(f"Renamed {space.id} → {args.new_name}.")
+        return
+
+    if cmd == "delete":
+        space = registry.resolve(args.target)
+        if space is None:
+            print(f"error: space {args.target!r} not found", file=sys.stderr)
+            sys.exit(1)
+        registry.delete(space.id, purge_data=args.purge)
+        detail = " (data purged)" if args.purge else ""
+        print(f"Deleted space {space.name!r}{detail}.")
+        return
+
+    print(f"Unknown space subcommand: {cmd}", file=sys.stderr)
+    sys.exit(1)
 
 
 def _create_provider(provider: str, model: str | None) -> LLMProvider | None:
@@ -74,6 +265,7 @@ Examples:
   %(prog)s ask "some question?"     Quick ask
   %(prog)s web-search "latest MCP patterns"   Quick web search
   %(prog)s explore "concept"        Quick explore
+  %(prog)s prompt list              List configurable prompts
   %(prog)s status                   Show world status
   %(prog)s reflect                  Run consolidation
 """,
@@ -94,6 +286,12 @@ Examples:
         "--model",
         default=None,
         help="Model name override (e.g., gpt-5.4, claude-sonnet-4-6)",
+    )
+    parser.add_argument(
+        "--space",
+        default=None,
+        help="Space to use for this command (name or id). "
+        "Overrides the active space without changing it.",
     )
 
     subparsers = parser.add_subparsers(dest="command")
@@ -156,13 +354,72 @@ Examples:
     viz_parser = subparsers.add_parser("viz", help="Generate visualization")
     viz_parser.add_argument("--output", default=None, help="Output file path")
 
+    # space
+    space_parser = subparsers.add_parser(
+        "space", help="Manage isolated concept worlds (spaces)"
+    )
+    space_sub = space_parser.add_subparsers(dest="space_cmd")
+    space_sub.add_parser("list", help="List all spaces")
+    space_sub.add_parser("show", help="Show the currently active space")
+    sp_create = space_sub.add_parser("create", help="Create a new space")
+    sp_create.add_argument("name", help="Human-readable space name")
+    sp_create.add_argument("--description", default="")
+    sp_use = space_sub.add_parser("use", help="Switch the active space")
+    sp_use.add_argument("target", help="Space name or id")
+    sp_rename = space_sub.add_parser("rename", help="Rename a space")
+    sp_rename.add_argument("target", help="Space name or id")
+    sp_rename.add_argument("new_name")
+    sp_delete = space_sub.add_parser("delete", help="Delete a space")
+    sp_delete.add_argument("target", help="Space name or id")
+    sp_delete.add_argument(
+        "--purge",
+        action="store_true",
+        help="Also delete the on-disk concept data",
+    )
+
+    # prompt
+    prompt_parser = subparsers.add_parser(
+        "prompt", help="Manage runtime prompt configuration"
+    )
+    prompt_sub = prompt_parser.add_subparsers(dest="prompt_cmd")
+    prompt_sub.add_parser("list", help="List all configurable prompts")
+    prompt_show = prompt_sub.add_parser("show", help="Show an effective prompt")
+    prompt_show.add_argument("prompt_id")
+    prompt_show.add_argument(
+        "--json",
+        action="store_true",
+        help="Show prompt metadata as JSON",
+    )
+    prompt_export = prompt_sub.add_parser(
+        "export", help="Export all effective prompts as JSON"
+    )
+    prompt_export.add_argument("--output", default="")
+    prompt_set = prompt_sub.add_parser("set", help="Override a prompt")
+    prompt_set.add_argument("prompt_id")
+    prompt_set.add_argument("--file", default="")
+    prompt_set.add_argument("--template", default=None)
+    prompt_reset = prompt_sub.add_parser("reset", help="Remove a prompt override")
+    prompt_reset.add_argument("prompt_id")
+    prompt_sub.add_parser("validate", help="Validate prompt configuration")
+    prompt_sub.add_parser("diff", help="Summarize prompt overrides")
+
     args = parser.parse_args()
 
+    # ── space subcommands: handled before constructing PKMAgent ───────
+    if args.command == "space":
+        _handle_space_command(args)
+        return
+    if args.command == "prompt":
+        _handle_prompt_command(args)
+        return
+
     llm = _create_provider(args.provider, args.model)
-    agent = PKMAgent(store_path=args.store, llm=llm)
+    agent = PKMAgent(store_path=args.store, llm=llm, space_id=args.space)
 
     if args.command is None:
         # Interactive mode
+        if agent.space is not None:
+            print(f"[space: {agent.space.name} ({agent.space.id})]")
         agent.chat()
         return
 

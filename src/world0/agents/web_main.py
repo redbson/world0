@@ -38,6 +38,16 @@ def main() -> None:
         default=8420,
         help="Port number (default: 8420)",
     )
+    parser.add_argument(
+        "--space",
+        default=None,
+        help="Space to use for this run (name or id)",
+    )
+    parser.add_argument(
+        "--no-open",
+        action="store_true",
+        help="Do not automatically open the browser",
+    )
 
     args = parser.parse_args()
     launch_browser(
@@ -46,6 +56,8 @@ def main() -> None:
         model=args.model,
         host=args.host,
         port=args.port,
+        space_id=args.space,
+        open_browser=not args.no_open,
     )
 
 

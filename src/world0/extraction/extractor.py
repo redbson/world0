@@ -11,62 +11,12 @@ import json
 import re
 
 from world0.llm.base import LLMProvider
+from world0.prompts import PromptRegistry
 from world0.schemas.relation import RelationType
 from world0.schemas.types import Observation
 
 # All valid relation type values for prompt and validation
 _VALID_RELATION_TYPES = {rt.value for rt in RelationType}
-
-_SYSTEM_PROMPT = """\
-You are a concept extraction engine for a cognitive system called World 0.
-
-Your job is to extract **concepts** and **relations** from the given text.
-
-## What is a concept?
-A concept is a meaningful semantic unit — not a trivial word. Good concepts are:
-- Domain terms (e.g., "machine learning", "REST API", "event sourcing")
-- Processes or methods (e.g., "gradient descent", "blue-green deployment")
-- Architectural components (e.g., "message queue", "load balancer")
-- Roles or actors (e.g., "data engineer", "end user")
-- Abstract principles (e.g., "separation of concerns", "eventual consistency")
-
-Do NOT extract:
-- Generic words ("system", "thing", "process" without context)
-- Stopwords or filler
-- Redundant near-duplicates (pick the most specific form)
-
-## What is a relation?
-A typed connection between two concepts. Available relation types:
-- contains: A contains B as a component
-- part_of: A is part of B
-- depends_on: A depends on B
-- supports: A supports or enables B
-- contrasts: A is in contrast with B
-- similar_to: A is similar to B
-- activates: A triggers or activates B
-- precedes: A comes before B in a sequence
-- derived_from: A is derived from B
-- related_to: generic fallback (use sparingly)
-
-## Output format
-Respond with ONLY a JSON object:
-{
-  "concepts": [
-    {"name": "concept name", "description": "one-line description"}
-  ],
-  "relations": [
-    {"source": "concept A", "target": "concept B", "type": "relation_type"}
-  ]
-}
-
-Rules:
-- Extract 3-15 concepts depending on text length and density.
-- Extract meaningful relations — don't force connections that aren't there.
-- Use the most specific relation type that applies.
-- Concept names should be normalized: lowercase, concise, canonical form.
-- Every concept in a relation must appear in the concepts list.
-- Respond ONLY with the JSON object, no markdown fences, no explanation.\
-"""
 
 
 class ConceptExtractor:
@@ -89,8 +39,14 @@ class ConceptExtractor:
         # observation is a ready-to-use Observation for World.ingest()
     """
 
-    def __init__(self, provider: LLMProvider) -> None:
+    def __init__(
+        self,
+        provider: LLMProvider,
+        *,
+        prompt_registry: PromptRegistry | None = None,
+    ) -> None:
         self._provider = provider
+        self._prompts = prompt_registry or PromptRegistry()
 
     def extract(
         self,
@@ -112,7 +68,8 @@ class ConceptExtractor:
         if not text.strip():
             return Observation(task=task, source=source)
 
-        raw = self._provider.complete_json(_SYSTEM_PROMPT, text)
+        system_prompt = self._prompts.render("extraction.concepts_relations.system")
+        raw = self._provider.complete_json(system_prompt, text)
         return self._parse_response(raw, task=task, source=source)
 
     def _parse_response(
