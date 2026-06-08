@@ -262,15 +262,20 @@ class TestStress:
         assert node.activation_count >= 2
 
     def test_self_referential_relation(self, world):
-        """A concept relating to itself raises ValueError — system rejects
-        self-relations by design."""
-        # Self-relations are explicitly forbidden in RelationManager.discover
-        with pytest.raises(ValueError, match="self-relation"):
-            world.ingest(Observation(
-                concepts=["self_ref"],
-                relations=[("self_ref", "self_ref", "related_to")],
-                source="bench",
-            ))
+        """A concept relating to itself is skipped gracefully during ingest.
+
+        RelationManager.discover() still forbids self-relations, but the
+        ingest pipeline must defend against them rather than propagate the
+        ValueError as a crash — real LLM extractions occasionally emit
+        same-name self-loops.
+        """
+        result = world.ingest(Observation(
+            concepts=["self_ref"],
+            relations=[("self_ref", "self_ref", "related_to")],
+            source="bench",
+        ))
+        assert result.new_relations == []
+        assert world.status().total_relations == 0
 
     def test_many_relations_between_same_pair(self, world):
         """Multiple typed relations between same concept pair."""

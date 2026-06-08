@@ -136,3 +136,36 @@ class TestAgentSimulation:
         ml = w.concepts.resolve("Machine Learning")
         assert ml.activation_count >= 10
         assert ml.maturity in (Maturity.DEVELOPING, Maturity.ESTABLISHED)
+
+
+class TestSelfLoopRelations:
+    """Regression: real models occasionally emit same-name self-loop
+    relations (["X", "X", ...]).  These must not crash ingest."""
+
+    def test_same_name_self_loop_does_not_crash_ingest(self, store_path):
+        w = World(store_path=store_path)
+        # Would previously raise ValueError("Cannot create a self-relation")
+        # from RelationManager.discover() via the ingest pipeline.
+        result = w.ingest(Observation(
+            concepts=["Cache", "Latency"],
+            relations=[
+                ("Cache", "Cache", "dependence"),      # self-loop, must skip
+                ("Cache", "Latency", "dependence"),    # genuine edge, must keep
+            ],
+            task="latency fix",
+            source="regression",
+        ))
+        assert len(result.new_relations) == 1
+        assert "Cache" in result.new_relations[0] and "Latency" in result.new_relations[0]
+        assert w.status().total_relations == 1
+
+    def test_contradicted_self_loop_does_not_crash_ingest(self, store_path):
+        w = World(store_path=store_path)
+        result = w.ingest(Observation(
+            concepts=["MongoDB"],
+            contradicted_relations=[("MongoDB", "MongoDB", "membership")],
+            task="profiling",
+            source="regression",
+        ))
+        # No edge to weaken and no self-relation crash.
+        assert result.weakened_relations == []

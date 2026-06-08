@@ -182,6 +182,22 @@ def test_ingest_handles_disconfirmation() -> None:
     assert result.weakened_concepts == ["target"]
 
 
+def test_ingest_skips_self_loop_relation() -> None:
+    # A relation whose endpoints resolve to the same concept (e.g. the model
+    # emitted ["X", "X", ...]) must be skipped, not turned into an edge.
+    pipeline, cs, rs, _, _ = _make_ingest_pipeline()
+    result = pipeline.run(
+        Observation(
+            concepts=["X", "Y"],
+            relations=[("X", "X", "dependence"), ("X", "Y", "dependence")],
+            task="t",
+        )
+    )
+    # Self-loop dropped; the genuine X→Y edge survives.
+    assert result.new_relations == ["X → dependence → Y"]
+    assert len(rs) == 1
+
+
 def test_ingest_reports_endpoint_disconfirmation_without_existing_edge() -> None:
     # A contradicted relation whose endpoints have no edge between them
     # weakens both endpoint concepts.  That applied disconfirmation must be

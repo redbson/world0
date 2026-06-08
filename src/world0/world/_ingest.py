@@ -177,7 +177,11 @@ class IngestPipeline:
             tgt = self._resolve_observation_ref(tgt_name, local_refs)
             if not src or not tgt:
                 continue
-            if src.id == tgt.id and src_name != tgt_name:
+            # Skip self-loops.  Endpoints can collapse to one concept either
+            # because the model emitted the same name twice or because two
+            # different surface forms resolved to the same node — both would
+            # make RelationManager.discover() raise on a self-relation.
+            if src.id == tgt.id:
                 continue
 
             semantic_relation = normalize_semantic_relation(relation_name)
