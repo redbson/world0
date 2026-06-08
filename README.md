@@ -31,6 +31,7 @@ The current agent development priorities are tracked in [`TODO.md`](TODO.md).
 
 - [`docs/world0-usage.md`](docs/world0-usage.md) — operational usage guide for World 0 / World 0 操作与使用文档
 - [`docs/world0-color-field-dynamics.md`](docs/world0-color-field-dynamics.md) — dynamics-first design for community-born color fields / 基于动力学的群落生色与褪色设计
+- [`docs/extraction-model-prompt-eval.md`](docs/extraction-model-prompt-eval.md) — model × prompt extraction-quality evaluation (why gpt-5.4-nano is the default) / 模型×prompt 提取质量评测（为何默认 gpt-5.4-nano）
 - [`DesignPhilosophy.md`](DesignPhilosophy.md) — design rationale and framing / 设计哲学与边界
 - [`TODO.md`](TODO.md) — current implementation priorities / 当前实现优先级
 
@@ -354,6 +355,31 @@ Relations are typed and influence activation propagation strength:
 Hebbian relations (`related_to`, auto-discovered from co-occurrence) are capped at weight 0.7. Explicit relations declared by the Agent can reach 1.0.
 
 Hebbian 关系（`related_to`，从共现中自动发现）权重上限为 0.7。Agent 显式声明的关系可达 1.0。
+
+## Model Selection / 模型选择
+
+The **recommended default extraction model is `gpt-5.4-nano`** (via Azure OpenAI). A real `model × prompt` evaluation across 9 models (3 runs each) found that on the production extraction prompt, structural quality is largely model-agnostic — `gpt-5.4-nano` reaches the top tier (synonym dedup, sense disambiguation, typed relations, contradiction handling, Chinese preservation all stable) at the lowest cost and latency. Full evidence: [`docs/extraction-model-prompt-eval.md`](docs/extraction-model-prompt-eval.md).
+
+**推荐的默认提取模型是 `gpt-5.4-nano`**（经 Azure OpenAI）。一项覆盖 9 个模型、各 3 轮的真实 `模型×prompt` 评测发现：在生产提取 prompt 下，结构质量基本与模型无关，`gpt-5.4-nano` 以最低成本/延迟达到第一梯队。完整证据见 [`docs/extraction-model-prompt-eval.md`](docs/extraction-model-prompt-eval.md)。
+
+Set it as your per-operation default (writes `<store>/models.json`):
+
+```bash
+pkm model set extraction --provider azure-openai --model gpt-5.4-nano
+# or copy the template:
+cp models.example.json ~/.pkm_world/models.json
+```
+
+Required environment for Azure / 所需 Azure 环境变量:
+
+```bash
+export AZURE_OPENAI_ENDPOINT="https://<resource>.openai.azure.com/"
+export AZURE_OPENAI_KEY="<key>"      # or AZURE_OPENAI_API_KEY
+```
+
+Per-operation overrides (`extraction`, `answer`, `query_extract`, …) let you route each cognitive operation to a different model. Use `pkm model list` / `pkm model validate` to inspect. Good alternatives for extraction: `azure-openai/DeepSeek-V4-Pro` (strong Chinese, low cost) and `glm-5.1`. Avoid `claude-sonnet-4-6` for bilingual corpora — it does not reliably preserve Chinese concept names.
+
+每个操作（`extraction` / `answer` / `query_extract` …）都可路由到不同模型；用 `pkm model list` / `pkm model validate` 查看。提取的其他优选：`azure-openai/DeepSeek-V4-Pro`（中文强、便宜）、`glm-5.1`。双语语料避免用 `claude-sonnet-4-6`——它不能稳定保留中文概念名。
 
 ## Architecture / 架构
 

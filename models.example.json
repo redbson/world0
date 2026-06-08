@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "operations": {
+    "extraction": {
+      "enabled": true,
+      "provider": "azure-openai",
+      "model": "gpt-5.4-nano",
+      "notes": "Recommended default extraction model. Top structural-quality tier at the lowest cost/latency; preserves Chinese concept names. See docs/extraction-model-prompt-eval.md. Copy this file to <store>/models.json (e.g. ~/.pkm_world/models.json) or run: pkm model set extraction --provider azure-openai --model gpt-5.4-nano"
+    }
+  }
+}
