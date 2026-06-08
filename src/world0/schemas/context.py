@@ -34,9 +34,9 @@ class Perspective(BaseModel):
             task="triage prod latency",
             active_domains=["observability", "infra"],
             relation_type_weights={
-                "depends_on": 1.2,   # dependencies matter most in debug
-                "similar_to": 0.3,   # analogies matter least
-                "contrasts":  1.0,   # counter-evidence is fully valued
+                "positive": 1.2,  # attraction matters most in this frame
+                "parallel": 0.7,  # resonance is useful but secondary
+                "negative": 1.0,  # repulsion/counter-evidence is fully valued
             },
         )
         proj = world.project(["latency"], perspective=p)

@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
-from world0.schemas.relation import RelationEdge, RelationType
+from world0.schemas.relation import (
+    RelationEdge,
+    RelationType,
+    semantic_relation_spec,
+)
 from world0.store.base import Store
 
 
@@ -24,6 +28,7 @@ class RelationManager:
         self._relations.clear()
         self._by_concept.clear()
         for edge in self._store.load_all_relations():
+            edge.ensure_probability()
             self._relations[edge.id] = edge
             self._index(edge)
 
@@ -52,10 +57,15 @@ class RelationManager:
         self,
         source_id: str,
         target_id: str,
-        relation_type: RelationType = RelationType.RELATED_TO,
+        relation_type: RelationType = RelationType.PARALLEL,
         *,
+        semantic_relation: str = "",
         provenance: str = "",
         is_explicit: bool = True,
+        probability: float | None = None,
+        prior_probability: float | None = None,
+        prior_strength: float = 1.0,
+        evidence_strength: float = 2.0,
     ) -> tuple[RelationEdge, bool]:
         """Find existing relation or discover a new one.
 
@@ -69,28 +79,80 @@ class RelationManager:
         if source_id == target_id:
             raise ValueError("Cannot create a self-relation")
 
+        semantic_spec = semantic_relation_spec(semantic_relation or relation_type.value)
+        relation_type = semantic_spec.axis
+
         existing = self.find_between(source_id, target_id, relation_type)
         if existing:
+            if semantic_relation:
+                existing.semantic_relation = semantic_spec.name
+                existing.structural_strength = semantic_spec.structural_strength
+                existing.propagation_strength = semantic_spec.propagation_strength
+            if probability is not None or prior_probability is not None:
+                existing.update_probability(
+                    evidence_probability=probability,
+                    prior_probability=prior_probability,
+                    prior_strength=prior_strength,
+                    evidence_strength=evidence_strength,
+                    provenance=provenance,
+                )
+                self._dirty.add(existing.id)
             return existing, False
 
         # Explicit relations start stronger than Hebbian (auto-discovered)
-        init_weight = 0.3 if is_explicit else 0.15
-        init_confidence = 0.3 if is_explicit else 0.15
+        init_weight = semantic_spec.propagation_strength if is_explicit else 0.15
+        init_confidence = semantic_spec.structural_strength if is_explicit else 0.15
+        init_probability = self._initial_probability(
+            default=init_weight,
+            probability=probability,
+            prior_probability=prior_probability,
+            prior_strength=prior_strength,
+            evidence_strength=evidence_strength,
+        )
+        has_probability_input = probability is not None or prior_probability is not None
 
         edge = RelationEdge(
             source_id=source_id,
             target_id=target_id,
             relation_type=relation_type,
-            weight=init_weight,
-            confidence=init_confidence,
+            semantic_relation=semantic_spec.name,
+            structural_strength=semantic_spec.structural_strength,
+            propagation_strength=semantic_spec.propagation_strength,
+            probability=init_probability,
+            probability_observation_count=1 if probability is not None else 0,
+            weight=init_probability if has_probability_input else init_weight,
+            confidence=init_probability if has_probability_input else init_confidence,
             provenance=provenance,
             task_history=[provenance] if provenance else [],
             is_explicit=is_explicit,
+            reinforcement_count=1 if probability is not None and probability >= 0.5 else 0,
+            disconfirmation_count=1 if probability is not None and probability < 0.5 else 0,
         )
         self._relations[edge.id] = edge
         self._index(edge)
         self._dirty.add(edge.id)
         return edge, True
+
+    @staticmethod
+    def _initial_probability(
+        *,
+        default: float,
+        probability: float | None,
+        prior_probability: float | None,
+        prior_strength: float,
+        evidence_strength: float,
+    ) -> float:
+        total = 0.0
+        strength = 0.0
+        if prior_probability is not None and prior_strength > 0:
+            total += min(1.0, max(0.0, prior_probability)) * prior_strength
+            strength += prior_strength
+        if probability is not None and evidence_strength > 0:
+            total += min(1.0, max(0.0, probability)) * evidence_strength
+            strength += evidence_strength
+        if strength <= 0:
+            return default
+        return min(1.0, max(0.0, total / strength))
 
     # ── lookup ────────────────────────────────────────────────────────
 
@@ -167,6 +229,7 @@ class RelationManager:
             return None
         edge.weight = min(1.0, max(0.01, edge.weight + weight_delta))
         edge.confidence = min(1.0, max(0.01, edge.confidence + confidence_delta))
+        edge.probability = edge.confidence
         self._dirty.add(edge.id)
         return edge
 
@@ -225,6 +288,12 @@ class RelationManager:
                 duplicate.weight = min(1.0, duplicate.weight + rel.weight)
                 duplicate.confidence = min(
                     1.0, duplicate.confidence + rel.confidence
+                )
+                duplicate.probability = min(
+                    1.0, max(duplicate.probability, rel.probability)
+                )
+                duplicate.probability_observation_count += (
+                    rel.probability_observation_count
                 )
                 duplicate.reinforcement_count += rel.reinforcement_count
                 duplicate.disconfirmation_count += rel.disconfirmation_count

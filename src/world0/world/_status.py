@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import TYPE_CHECKING
 
+from world0.metrics.entropy import compute_network_entropy
 from world0.schemas.types import WorldStatus
 
 if TYPE_CHECKING:
@@ -39,6 +40,8 @@ def build_status(
         1 for c in all_communities if c.is_color_source()
     )
 
+    entropy = compute_network_entropy(all_concepts, relations.all())
+
     return WorldStatus(
         total_concepts=len(all_concepts),
         total_relations=len(relations),
@@ -55,4 +58,7 @@ def build_status(
         stable_communities=stable_communities,
         bridge_concepts=bridge_count,
         avg_color_purity=(purity_total / purity_n) if purity_n else 1.0,
+        avg_network_entropy=entropy.avg_network_entropy,
+        high_entropy_concepts=entropy.high_entropy_nodes,
+        relation_type_entropy=entropy.relation_type_entropy,
     )

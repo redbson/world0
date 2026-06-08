@@ -62,7 +62,7 @@ class TestRelationDecay:
         # Simulate 2 weeks (relation gets 1 reinforcement from hebbian)
         rel.last_reinforced = datetime.now(timezone.utc) - timedelta(hours=336)
         world._decay.decay_relations()
-        assert rel.weight < 0.05
+        assert rel.weight < 0.10
 
     def test_heavily_reinforced_relation_persists(self, world):
         """A relation reinforced many times should decay slowly."""

@@ -2,7 +2,7 @@
 
 import pytest
 
-from world0 import Observation, World
+from world0 import ConceptCandidate, Observation, World
 
 
 @pytest.fixture
@@ -100,6 +100,24 @@ class TestProjectionRender:
         proj = world.project(["Nonexistent"])
         rendered = proj.render()
         assert "## Cognitive Context" in rendered
+
+    def test_render_uses_concept_representation(self, world):
+        world.ingest(Observation(
+            concept_candidates=[
+                ConceptCandidate(
+                    uid="c1",
+                    name="Apple",
+                    sense="technology company",
+                    kind="entity",
+                    domain="technology",
+                )
+            ],
+            task="identity",
+        ))
+        node = next(c for c in world.concepts.all() if c.name == "Apple")
+        proj = world.project([node.id])
+        rendered = proj.render()
+        assert f"apple.technology-company.{node.id}" in rendered
 
 
 class TestProjectionScoring:

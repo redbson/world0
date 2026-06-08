@@ -7,6 +7,7 @@ from pathlib import Path
 
 from world0.schemas.concept import ConceptNode
 from world0.schemas.relation import RelationEdge
+from world0.schemas.source import SourceRecord
 from world0.store.base import Store
 
 
@@ -16,6 +17,8 @@ class JsonStore(Store):
     Layout:
         {root}/concepts/{id}.json
         {root}/relations/{id}.json
+        {root}/sources/{id}.json
+        {root}/source_index.json
         {root}/state.json
     """
 
@@ -23,10 +26,13 @@ class JsonStore(Store):
         self._root = Path(root)
         self._concepts_dir = self._root / "concepts"
         self._relations_dir = self._root / "relations"
+        self._sources_dir = self._root / "sources"
+        self._source_index_path = self._root / "source_index.json"
         self._state_path = self._root / "state.json"
 
         self._concepts_dir.mkdir(parents=True, exist_ok=True)
         self._relations_dir.mkdir(parents=True, exist_ok=True)
+        self._sources_dir.mkdir(parents=True, exist_ok=True)
 
     # ── concepts ──────────────────────────────────────────────────────
 
@@ -99,6 +105,57 @@ class JsonStore(Store):
             path = self._relations_dir / f"{rid}.json"
             if path.exists():
                 path.unlink()
+
+    # ── sources ───────────────────────────────────────────────────────
+
+    def save_source(self, source: SourceRecord) -> None:
+        path = self._sources_dir / f"{source.id}.json"
+        path.write_text(source.model_dump_json(indent=2), encoding="utf-8")
+        self._update_source_index(source)
+
+    def load_source(self, source_id: str) -> SourceRecord | None:
+        path = self._sources_dir / f"{source_id}.json"
+        if not path.exists():
+            return None
+        return SourceRecord.model_validate_json(path.read_text(encoding="utf-8"))
+
+    def load_all_sources(self) -> list[SourceRecord]:
+        sources = []
+        for path in self._sources_dir.glob("*.json"):
+            sources.append(
+                SourceRecord.model_validate_json(path.read_text(encoding="utf-8"))
+            )
+        return sources
+
+    def _update_source_index(self, source: SourceRecord) -> None:
+        index = self.load_source_index()
+        index["sources"][source.id] = {
+            "source": source.source,
+            "task": source.task,
+            "domain": source.domain,
+            "content_hash": source.content_hash,
+            "concepts": source.concepts,
+            "relation_count": source.relation_count,
+            "updated_at": source.updated_at.isoformat(),
+        }
+        for token in source.tokens:
+            ids = index["tokens"].setdefault(token, [])
+            if source.id not in ids:
+                ids.append(source.id)
+        self._source_index_path.write_text(
+            json.dumps(index, indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
+
+    def load_source_index(self) -> dict:
+        if not self._source_index_path.exists():
+            return {"sources": {}, "tokens": {}}
+        data = json.loads(self._source_index_path.read_text(encoding="utf-8"))
+        if "sources" not in data:
+            data["sources"] = {}
+        if "tokens" not in data:
+            data["tokens"] = {}
+        return data
 
     # ── state ─────────────────────────────────────────────────────────
 

@@ -44,7 +44,7 @@ class TestPersistence:
         b = w2.concepts.resolve("B")
         rels = w2.relations.find_any_between(a.id, b.id)
         assert len(rels) == 1
-        assert rels[0].relation_type.value == "depends_on"
+        assert rels[0].relation_type.value == "positive"
 
     def test_reinforcement_accumulates_across_sessions(self, store_path):
         """Multiple sessions reinforce the same concept."""

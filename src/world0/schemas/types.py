@@ -3,11 +3,43 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from typing import Any
 
 from pydantic import BaseModel, Field
 
 from world0.schemas.concept import ConceptNode, Maturity
 from world0.schemas.relation import RelationEdge
+
+
+class ConceptCandidate(BaseModel):
+    """A pre-ingest concept sense, not yet a stable concept node.
+
+    ``uid`` is local to one observation/extraction response and is used
+    by relations to point at the intended sense.  The persistent concept
+    UID is assigned by ``ConceptManager`` after identity resolution.
+    """
+
+    uid: str = ""
+    name: str
+    kind: str = ""
+    sense: str = ""
+    domain: str = ""
+    description: str = ""
+    aliases: list[str] = Field(default_factory=list)
+    salience: float | None = None
+    confidence: float | None = None
+    evidence: str = ""
+
+
+class RelationPrior(BaseModel):
+    """A preset relation probability used during extraction/ingest."""
+
+    source: str
+    target: str
+    relation_type: str = "generic_relation"
+    probability: float = Field(default=0.5, ge=0.0, le=1.0)
+    strength: float = Field(default=1.0, ge=0.0)
+    rationale: str = ""
 
 
 class Observation(BaseModel):
@@ -26,15 +58,19 @@ class Observation(BaseModel):
     """
 
     concepts: list[str] = Field(default_factory=list)
+    concept_candidates: list[ConceptCandidate] = Field(default_factory=list)
     relations: list[tuple[str, str, str]] = Field(default_factory=list)
+    relation_priors: list[RelationPrior] = Field(default_factory=list)
     descriptions: dict[str, str] = Field(default_factory=dict)
     weakened: list[str] = Field(default_factory=list)
     contradicted_relations: list[tuple[str, str, str]] = Field(
         default_factory=list
     )
+    extraction_metadata: dict[str, Any] = Field(default_factory=dict)
     domain: str = ""
     task: str = ""
     source: str = ""
+    source_id: str = ""
     timestamp: datetime = Field(
         default_factory=lambda: datetime.now(timezone.utc)
     )
@@ -99,7 +135,7 @@ class Projection(BaseModel):
                 neighbors = self._neighbor_names(c.id)
                 linked = f" Linked to: {', '.join(neighbors)}." if neighbors else ""
                 lines.append(
-                    f"- **{c.name}** ({c.maturity.value}, "
+                    f"- **{c.representation()}** ({c.name}, {c.maturity.value}, "
                     f"confidence: {c.confidence:.2f}){desc}{linked}"
                 )
             lines.append("")
@@ -109,7 +145,7 @@ class Projection(BaseModel):
             for c, s in active:
                 desc = f": {c.description}" if c.description else ""
                 lines.append(
-                    f"- **{c.name}** ({c.maturity.value}, "
+                    f"- **{c.representation()}** ({c.name}, {c.maturity.value}, "
                     f"confidence: {c.confidence:.2f}){desc}"
                 )
             lines.append("")
@@ -118,20 +154,22 @@ class Projection(BaseModel):
             lines.append("### Emerging Concepts")
             for c, s in emerging:
                 lines.append(
-                    f"- **{c.name}** ({c.maturity.value}, "
+                    f"- **{c.representation()}** ({c.name}, {c.maturity.value}, "
                     f"confidence: {c.confidence:.2f})"
                 )
             lines.append("")
 
         if self.relations:
             lines.append("### Key Relations")
-            concept_names = {c.id: c.name for c in self.concepts}
+            concept_names = {c.id: c.representation() for c in self.concepts}
             for r in sorted(self.relations, key=lambda x: x.weight, reverse=True)[:10]:
                 src = concept_names.get(r.source_id, r.source_id)
                 tgt = concept_names.get(r.target_id, r.target_id)
                 lines.append(
-                    f"- {src} → {r.relation_type.value} → {tgt} "
-                    f"(strength: {r.weight:.2f}, reinforced {r.reinforcement_count}×)"
+                    f"- {src} → {r.semantic_relation} [{r.relation_type.value}] → {tgt} "
+                    f"(structural: {r.structural_strength:.2f}, "
+                    f"propagation: {r.propagation_strength:.2f}, "
+                    f"reinforced {r.reinforcement_count}×)"
                 )
             lines.append("")
 
@@ -143,7 +181,7 @@ class Projection(BaseModel):
         return "\n".join(lines)
 
     def _neighbor_names(self, concept_id: str) -> list[str]:
-        names_map = {c.id: c.name for c in self.concepts}
+        names_map = {c.id: c.representation() for c in self.concepts}
         neighbors: list[str] = []
         for r in self.relations:
             other = r.other_end(concept_id)
@@ -183,3 +221,10 @@ class WorldStatus(BaseModel):
     stable_communities: int = 0
     bridge_concepts: int = 0
     avg_color_purity: float = 1.0
+    # Network-entropy diagnostics (docs/world-network-entropy-design.md).
+    # Read-only structural signal: how diffuse vs. concentrated conceptual
+    # attention is across the typed relation graph.  0 when the world has
+    # no branching structure yet.
+    avg_network_entropy: float = 0.0
+    high_entropy_concepts: int = 0
+    relation_type_entropy: float = 0.0

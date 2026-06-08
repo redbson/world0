@@ -16,22 +16,31 @@ from __future__ import annotations
 
 
 class NameIndex:
-    """Normalized name/alias → concept_id."""
+    """Normalized name/alias → concept ids.
+
+    A lexical label is not a concept identity.  If a label maps to more
+    than one concept UID, ``get`` returns ``None`` so callers do not
+    accidentally collapse distinct senses such as Apple/company and
+    apple/fruit.
+    """
 
     def __init__(self) -> None:
-        self._map: dict[str, str] = {}
+        self._map: dict[str, set[str]] = {}
 
     def clear(self) -> None:
         self._map.clear()
 
     def get(self, name: str) -> str | None:
-        return self._map.get(name.strip().lower())
+        ids = self._map.get(name.strip().lower())
+        if not ids or len(ids) != 1:
+            return None
+        return next(iter(ids))
 
     def add(self, name: str, concept_id: str) -> None:
-        """Set the mapping unconditionally (overwriting any prior entry)."""
+        """Add ``concept_id`` to the label's candidate set."""
         normalized = name.strip().lower()
         if normalized:
-            self._map[normalized] = concept_id
+            self._map.setdefault(normalized, set()).add(concept_id)
 
     def add_unique(self, name: str, concept_id: str) -> bool:
         """Set the mapping only if it does not already point elsewhere.
@@ -42,24 +51,27 @@ class NameIndex:
         normalized = name.strip().lower()
         if not normalized:
             return False
-        existing = self._map.get(normalized)
-        if existing and existing != concept_id:
+        existing = self._map.get(normalized, set())
+        if existing and existing != {concept_id}:
             return False
-        self._map[normalized] = concept_id
+        self._map.setdefault(normalized, set()).add(concept_id)
         return True
 
     def remove_if_owned(self, name: str, concept_id: str) -> bool:
         """Remove the entry only if it currently points at ``concept_id``."""
         normalized = name.strip().lower()
-        if self._map.get(normalized) == concept_id:
-            self._map.pop(normalized, None)
+        ids = self._map.get(normalized)
+        if ids and concept_id in ids:
+            ids.discard(concept_id)
+            if not ids:
+                self._map.pop(normalized, None)
             return True
         return False
 
     def index_node(self, node) -> None:
-        """Index every alias variant of ``node`` (overwrites prior entries)."""
+        """Index every alias variant of ``node``."""
         for n in node.all_names():
-            self._map[n] = node.id
+            self._map.setdefault(n, set()).add(node.id)
 
 
 class TokenIndex:

@@ -49,7 +49,11 @@ def _node_payload(c: ConceptNode, view: WorldView) -> dict:
 
     return {
         "id": c.id,
+        "representation": c.representation(),
+        "feature": c.representation_feature(),
         "name": c.name,
+        "kind": c.kind,
+        "sense": c.sense,
         "aliases": c.aliases,
         "description": c.description,
         "domain": dominant_domain,
@@ -74,7 +78,11 @@ def _edge_payload(r, id_to_name: dict[str, str]) -> dict:
         "source": r.source_id,
         "target": r.target_id,
         "relation_type": r.relation_type.value,
+        "semantic_relation": r.semantic_relation,
+        "structural_strength": round(r.structural_strength, 4),
+        "propagation_strength": round(r.propagation_strength, 4),
         "weight": round(r.weight, 4),
+        "probability": round(r.probability, 4),
         "confidence": round(r.confidence, 4),
         "is_explicit": r.is_explicit,
         "reinforcement_count": r.reinforcement_count,

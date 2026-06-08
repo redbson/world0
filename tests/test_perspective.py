@@ -20,8 +20,8 @@ def world(tmp_path):
         w.ingest(Observation(
             concepts=["model serving", "GPU inference", "Triton"],
             relations=[
-                ("model serving", "GPU inference", "depends_on"),
-                ("model serving", "Triton", "similar_to"),
+                ("model serving", "GPU inference", "positive"),
+                ("model serving", "Triton", "parallel"),
             ],
             task="bootstrap",
             source="t",
@@ -33,11 +33,11 @@ class TestRelationTypeWeights:
     def test_debug_perspective_amplifies_dependencies(self, world):
         debug = Perspective(
             name="debug",
-            relation_type_weights={"depends_on": 1.5, "similar_to": 0.1},
+            relation_type_weights={"positive": 1.5, "parallel": 0.1},
         )
         analogy = Perspective(
             name="analogy",
-            relation_type_weights={"depends_on": 0.1, "similar_to": 1.5},
+            relation_type_weights={"positive": 0.1, "parallel": 1.5},
         )
 
         proj_debug = world.project(["model serving"], perspective=debug)

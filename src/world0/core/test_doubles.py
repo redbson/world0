@@ -34,8 +34,13 @@ from __future__ import annotations
 import uuid
 from typing import TYPE_CHECKING
 
-from world0.schemas.concept import ConceptNode, Maturity
+from world0.schemas.concept import (
+    ConceptNode,
+    Maturity,
+    build_concept_identity_key,
+)
 from world0.schemas.relation import RelationEdge, RelationType
+from world0.schemas.source import SourceRecord
 
 if TYPE_CHECKING:
     from world0.schemas.community import Community
@@ -51,6 +56,7 @@ class FakeStorageBackend:
     def __init__(self) -> None:
         self._concepts: dict[str, ConceptNode] = {}
         self._relations: dict[str, RelationEdge] = {}
+        self._sources: dict[str, SourceRecord] = {}
         self._state: dict = {}
         self.calls: list[tuple[str, tuple]] = []
 
@@ -108,6 +114,18 @@ class FakeStorageBackend:
         for rid in relation_ids:
             self._relations.pop(rid, None)
         self._record("delete_relations_batch", tuple(relation_ids))
+
+    # sources
+    def save_source(self, source: SourceRecord) -> None:
+        self._sources[source.id] = source.model_copy(deep=True)
+        self._record("save_source", source.id)
+
+    def load_source(self, source_id: str) -> SourceRecord | None:
+        source = self._sources.get(source_id)
+        return source.model_copy(deep=True) if source else None
+
+    def load_all_sources(self) -> list[SourceRecord]:
+        return [s.model_copy(deep=True) for s in self._sources.values()]
 
     # state
     def save_state(self, state: dict) -> None:
@@ -177,19 +195,70 @@ class FakeConceptStore:
         origin: str = "",
         task: str = "",
         description: str = "",
+        kind: str = "",
+        sense: str = "",
         domain: str = "",
+        aliases: list[str] | None = None,
+        identity_key: str = "",
         consolidate: bool = True,
     ) -> tuple[ConceptNode, bool]:
-        existing = self.resolve(name)
-        if existing:
-            self._record("get_or_create.existing", name)
-            return existing, False
+        has_semantic_identity = bool(
+            identity_key.strip() or kind.strip() or sense.strip()
+        )
+        effective_identity_key = identity_key.strip()
+        if not effective_identity_key and has_semantic_identity:
+            effective_identity_key = build_concept_identity_key(
+                name=name,
+                kind=kind,
+                sense=sense or description,
+                domain=domain,
+            )
+        if effective_identity_key:
+            for node in self._nodes.values():
+                if node.identity_key == effective_identity_key:
+                    self._record("get_or_create.existing", name)
+                    return node, False
+            for node in self._nodes.values():
+                candidate_aliases = {
+                    label.strip().lower() for label in (aliases or []) if label.strip()
+                }
+                candidate_name = name.strip().lower()
+                node_aliases = {label.strip().lower() for label in node.aliases}
+                node_labels = {
+                    label.strip().lower()
+                    for label in [node.name, *node.aliases]
+                    if label.strip()
+                }
+                node_name = node.name.strip().lower()
+                if (candidate_aliases & node_labels) or (
+                    candidate_name in node_aliases and candidate_name != node_name
+                ):
+                    node.aliases.extend(
+                        label
+                        for label in [name, *(aliases or [])]
+                        if label.strip()
+                        and label.strip().lower()
+                        not in [a.lower() for a in node.aliases]
+                        and label.strip().lower() != node.name.lower()
+                    )
+                    self._record("get_or_create.existing", name)
+                    return node, False
+        else:
+            existing = self.resolve(name)
+            if existing:
+                self._record("get_or_create.existing", name)
+                return existing, False
         node = ConceptNode(
             name=name,
             description=description,
+            kind=kind,
+            sense=sense,
             domain=domain,
+            identity_key=effective_identity_key,
             origin=origin,
         )
+        node.aliases = list(aliases or [])
+        node.ensure_identity_key()
         self._nodes[node.id] = node
         self._dirty.add(node.id)
         self._record("get_or_create.new", name)
@@ -389,20 +458,44 @@ class FakeRelationStore:
         self,
         source_id: str,
         target_id: str,
-        relation_type: RelationType = RelationType.RELATED_TO,
+        relation_type: RelationType = RelationType.PARALLEL,
         *,
+        semantic_relation: str = "",
         provenance: str = "",
         is_explicit: bool = True,
+        probability: float | None = None,
+        prior_probability: float | None = None,
+        prior_strength: float = 1.0,
+        evidence_strength: float = 2.0,
     ) -> tuple[RelationEdge, bool]:
         existing = self.find_between(source_id, target_id, relation_type)
         if existing:
+            if probability is not None or prior_probability is not None:
+                existing.update_probability(
+                    evidence_probability=probability,
+                    prior_probability=prior_probability,
+                    prior_strength=prior_strength,
+                    evidence_strength=evidence_strength,
+                    provenance=provenance,
+                )
+                self._dirty.add(existing.id)
             return existing, False
+        init_probability = (
+            probability
+            if probability is not None
+            else prior_probability if prior_probability is not None else 0.3
+        )
         edge = RelationEdge(
             source_id=source_id,
             target_id=target_id,
             relation_type=relation_type,
+            semantic_relation=semantic_relation or relation_type.value,
             is_explicit=is_explicit,
             provenance=provenance,
+            probability=init_probability,
+            weight=init_probability,
+            confidence=init_probability,
+            probability_observation_count=1 if probability is not None else 0,
         )
         self._edges[edge.id] = edge
         self._dirty.add(edge.id)
@@ -451,6 +544,7 @@ class FakeRelationStore:
             return None
         edge.weight = max(0.0, min(1.0, edge.weight + weight_delta))
         edge.confidence = max(0.0, min(1.0, edge.confidence + confidence_delta))
+        edge.probability = edge.confidence
         self._dirty.add(relation_id)
         return edge
 
@@ -649,14 +743,16 @@ def make_edge(
     source_id: str,
     target_id: str,
     *,
-    relation_type: RelationType = RelationType.RELATED_TO,
+    relation_type: RelationType = RelationType.PARALLEL,
     weight: float = 0.4,
 ) -> RelationEdge:
     return RelationEdge(
         source_id=source_id,
         target_id=target_id,
         relation_type=relation_type,
+        probability=weight,
         weight=weight,
+        confidence=weight,
     )
 
 

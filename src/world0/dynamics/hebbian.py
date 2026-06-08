@@ -53,7 +53,7 @@ class HebbianEngine:
         For every pair of concepts in the list:
           - If a relation exists → reinforce it
           - If no relation exists and co-occurrence < threshold → increment counter
-          - If no relation exists and co-occurrence >= threshold → create RELATED_TO
+          - If no relation exists and co-occurrence >= threshold → create PARALLEL
 
         Returns list of relation ids that were created (not reinforced).
         """
@@ -75,7 +75,7 @@ class HebbianEngine:
                     edge, is_new = self._relations.discover(
                         id_a,
                         id_b,
-                        RelationType.RELATED_TO,
+                        RelationType.PARALLEL,
                         provenance=provenance,
                         is_explicit=False,
                     )

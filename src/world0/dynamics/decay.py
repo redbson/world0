@@ -100,6 +100,7 @@ class DecayEngine:
 
             edge.weight = max(0.0, edge.weight * decay_factor)
             edge.confidence = max(0.0, edge.confidence * decay_factor)
+            edge.probability = edge.confidence
             self._relations.mark_dirty(edge.id)
 
             if edge.weight < 0.02:

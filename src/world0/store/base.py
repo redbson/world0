@@ -7,6 +7,7 @@ from datetime import datetime
 
 from world0.schemas.concept import ConceptNode
 from world0.schemas.relation import RelationEdge
+from world0.schemas.source import SourceRecord
 
 
 class Store(ABC):
@@ -63,6 +64,17 @@ class Store(ABC):
         """Delete multiple relations. Default: loop over delete_relation."""
         for rid in relation_ids:
             self.delete_relation(rid)
+
+    # ── sources ────────────────────────────────────────────────────────
+
+    def save_source(self, source: SourceRecord) -> None:
+        raise NotImplementedError
+
+    def load_source(self, source_id: str) -> SourceRecord | None:
+        raise NotImplementedError
+
+    def load_all_sources(self) -> list[SourceRecord]:
+        raise NotImplementedError
 
     # ── state ─────────────────────────────────────────────────────────
 

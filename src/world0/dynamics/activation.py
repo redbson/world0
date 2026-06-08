@@ -15,10 +15,10 @@ Activation factors:
   - propagation floor to prevent low-confidence nodes from blocking spread
 
 Inhibition:
-  CONTRASTS edges spread *negative* activation that accumulates on a
+  Negative-axis edges spread *negative* activation that accumulates on a
   separate inhibition channel.  The final score returned for each
   concept is ``max(0, activation - inhibition)``, so an aggressively
-  contrasted neighbor can disappear from projections even if it is
+  repelled neighbor can disappear from projections even if it is
   also weakly activated through other paths.
 """
 
@@ -51,12 +51,12 @@ __all__ = [
     "PROPAGATION_MIN_RATIO",
 ]
 
-# ── Inhibition coefficient for CONTRASTS ──────────────────────────────
-# CONTRASTS is treated as an *inhibitory* relation: activating the
+# ── Inhibition coefficient for negative-axis links ────────────────────
+# Negative is treated as an *inhibitory* relation: activating the
 # source produces negative activation on the target (which subtracts
 # from any positive spread on the same target).  The scalar below is
 # multiplied by the same edge/depth/task/temporal factors used for
-# excitation — contrast strength tracks the evidence behind it.
+# excitation — repulsion strength tracks the evidence behind it.
 CONTRASTS_INHIBITION_FACTOR: float = 0.6
 
 # ── Task affinity boost ──────────────────────────────────────────────
@@ -116,7 +116,7 @@ class ActivationEngine:
             * relation.temporal_relevance
             * neighbor.temporal_relevance
 
-        CONTRASTS edges use the same multiplicative chain but feed an
+        Negative-axis edges use the same multiplicative chain but feed an
         independent inhibition channel multiplied by
         CONTRASTS_INHIBITION_FACTOR.  The returned score for each
         concept is ``max(0, activation - inhibition)``.
@@ -232,8 +232,8 @@ class ActivationEngine:
                         * neighbor_freshness
                     )
 
-                    if rel.relation_type == RelationType.CONTRASTS:
-                        # Inhibitory channel: contrast spreads negative
+                    if rel.relation_type == RelationType.NEGATIVE:
+                        # Inhibitory channel: negative-axis links spread negative
                         # activation instead of weak excitation.
                         inhibition = raw * CONTRASTS_INHIBITION_FACTOR
                         if inhibition < min_activation:

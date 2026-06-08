@@ -180,7 +180,7 @@ class TestMerge:
 
         world.merge("Y", "Y_dup")
         rels = world.relations.find_any_between(x.id, y.id)
-        typed = [r for r in rels if r.relation_type.value == "depends_on"]
+        typed = [r for r in rels if r.relation_type.value == "positive"]
         assert len(typed) == 1
 
     def test_merge_unknown_returns_false(self, world):

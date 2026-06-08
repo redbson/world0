@@ -69,6 +69,8 @@ def merge_concepts(
     _merge_descriptive(keeper, absorbed)
     _merge_evidence(keeper, absorbed)
     _merge_domain_profile(keeper, absorbed)
+    _merge_source_refs(keeper, absorbed)
+    _merge_token_refs(keeper, absorbed)
 
     if relations is not None:
         relations.migrate_concept(absorbed.id, keeper.id)
@@ -125,6 +127,7 @@ def split_concept(
         confidence=min(0.3, source.confidence),
     )
     manager._concepts[new_node.id] = new_node  # type: ignore[attr-defined]
+    manager._identity_index[new_node.ensure_identity_key()] = new_node.id  # type: ignore[attr-defined]
     manager._name_index.index_node(new_node)  # type: ignore[attr-defined]
     manager._token_index.index_node(new_node)  # type: ignore[attr-defined]
     manager._token_index.index_node(source)  # type: ignore[attr-defined]
@@ -170,3 +173,36 @@ def _merge_domain_profile(keeper: ConceptNode, absorbed: ConceptNode) -> None:
     for dom, strength in absorbed.domain_profile.items():
         current = keeper.domain_profile.get(dom, 0.0)
         keeper.domain_profile[dom] = min(1.0, current + strength)
+
+
+def _merge_source_refs(keeper: ConceptNode, absorbed: ConceptNode) -> None:
+    for ref in absorbed.source_refs:
+        keeper.record_source_ref(
+            source_id=ref.source_id,
+            source=ref.source,
+            task=ref.task,
+            excerpt=ref.excerpt,
+        )
+
+
+def _merge_token_refs(keeper: ConceptNode, absorbed: ConceptNode) -> None:
+    for ref in absorbed.token_refs:
+        keeper.record_token_ref(
+            token=ref.token,
+            source_id=ref.source_id,
+            source=ref.source,
+            task=ref.task,
+            excerpt=ref.excerpt,
+            role=ref.role,
+        )
+    keeper.record_token_ref(
+        token=absorbed.name,
+        source=absorbed.origin,
+        role="merged_name",
+    )
+    for alias in absorbed.aliases:
+        keeper.record_token_ref(
+            token=alias,
+            source=absorbed.origin,
+            role="merged_alias",
+        )

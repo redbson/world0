@@ -16,6 +16,7 @@ from pydantic import BaseModel, Field
 # Signature tokenization: lowercase word tokens ≥2 chars, common English
 # stopwords removed.  Keeps the set small while preserving domain terms.
 _TOKEN_RE = re.compile(r"[a-z0-9]+", re.IGNORECASE)
+_REPRESENTATION_PART_RE = re.compile(r"[^\w]+", re.UNICODE)
 _STOPWORDS: frozenset[str] = frozenset({
     "a", "an", "the", "and", "or", "but", "if", "then", "of", "in", "on",
     "at", "to", "for", "with", "from", "by", "as", "is", "are", "was",
@@ -23,6 +24,48 @@ _STOPWORDS: frozenset[str] = frozenset({
     "it", "its", "has", "have", "had", "not", "no", "do", "does", "did",
     "can", "will", "would", "should", "could", "may", "might", "than",
 })
+
+
+def normalize_identity_part(value: str) -> str:
+    """Normalize one semantic identity component for stable comparison."""
+    lowered = value.strip().lower()
+    compact = re.sub(r"[_\W]+", " ", lowered, flags=re.UNICODE)
+    return re.sub(r"\s+", " ", compact).strip()
+
+
+def build_concept_identity_key(
+    *,
+    name: str,
+    kind: str = "",
+    sense: str = "",
+    domain: str = "",
+) -> str:
+    """Build a stable semantic identity key from non-token context.
+
+    The key intentionally combines lexical label with disambiguating
+    semantic fields.  This lets `Apple` as fruit and `Apple` as company
+    coexist while repeated observations of the same sense reinforce the
+    same concept UID.
+    """
+    normalized_kind = normalize_identity_part(kind)
+    if normalized_kind in {"core", "supporting", "background"}:
+        normalized_kind = ""
+    parts = [
+        normalize_identity_part(name),
+        normalized_kind,
+        normalize_identity_part(domain),
+        normalize_identity_part(sense),
+    ]
+    payload = "\x1f".join(parts)
+    digest = hashlib.sha1(payload.encode("utf-8")).hexdigest()[:16]
+    return f"ck_{digest}"
+
+
+def representation_part(value: str, *, fallback: str = "concept") -> str:
+    """Normalize a value for `token.feature.uid` display keys."""
+    compact = _REPRESENTATION_PART_RE.sub("-", value.strip().lower())
+    compact = re.sub(r"-+", "-", compact).strip("-")
+    return compact or fallback
 
 
 def tokenize_signature(text: str) -> set[str]:
@@ -64,6 +107,40 @@ class ReinforcementEntry(BaseModel):
     task: str = ""
 
 
+class ConceptSourceRef(BaseModel):
+    """A concept-card pointer to raw source material."""
+
+    source_id: str
+    source: str = ""
+    task: str = ""
+    excerpt: str = ""
+    first_seen_at: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc)
+    )
+    last_seen_at: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc)
+    )
+    count: int = 1
+
+
+class ConceptTokenRef(BaseModel):
+    """A token/surface-form observation attached to a concept."""
+
+    token: str
+    source_id: str = ""
+    source: str = ""
+    task: str = ""
+    excerpt: str = ""
+    role: str = "observed"
+    first_seen_at: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc)
+    )
+    last_seen_at: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc)
+    )
+    count: int = 1
+
+
 class ConceptNode(BaseModel):
     """A concept is not a static card — it is a living cognitive unit.
 
@@ -75,6 +152,9 @@ class ConceptNode(BaseModel):
     name: str
     aliases: list[str] = Field(default_factory=list)
     description: str = ""
+    kind: str = ""
+    sense: str = ""
+    identity_key: str = ""
     domain: str = ""
     domain_profile: dict[str, float] = Field(default_factory=dict)
     tags: list[str] = Field(default_factory=list)
@@ -90,11 +170,51 @@ class ConceptNode(BaseModel):
     last_weakened: datetime | None = None
     origin: str = ""
     reinforcement_log: list[ReinforcementEntry] = Field(default_factory=list)
+    source_refs: list[ConceptSourceRef] = Field(default_factory=list)
+    token_refs: list[ConceptTokenRef] = Field(default_factory=list)
 
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
     def normalized_name(self) -> str:
         return self.name.strip().lower()
+
+    def ensure_identity_key(self) -> str:
+        """Return a stable semantic identity key, creating one if absent."""
+        if not self.identity_key:
+            self.identity_key = build_concept_identity_key(
+                name=self.name,
+                kind=self.kind,
+                sense=self.sense or self.description,
+                domain=self.domain,
+            )
+        return self.identity_key
+
+    def representation_feature(self) -> str:
+        """Return the semantic feature word used in human-facing IDs."""
+        for value in (self.sense, self.kind, self.domain):
+            normalized = normalize_identity_part(value)
+            if normalized and normalized not in {"core", "supporting", "background"}:
+                return normalized
+        desc_tokens = [
+            token
+            for token in tokenize_signature(self.description)
+            if token not in tokenize_signature(self.name)
+        ]
+        if desc_tokens:
+            return sorted(desc_tokens)[0]
+        return "concept"
+
+    def representation(self) -> str:
+        """Human-facing concept representation: ``token.feature.uid``.
+
+        This is a compact display/reference form.  The persistent concept
+        UID remains ``id`` and graph relations continue to store ids.
+        """
+        return ".".join([
+            representation_part(self.name, fallback="concept"),
+            representation_part(self.representation_feature(), fallback="concept"),
+            representation_part(self.id, fallback="uid"),
+        ])
 
     def all_names(self) -> list[str]:
         return [self.normalized_name()] + [a.strip().lower() for a in self.aliases]
@@ -115,6 +235,92 @@ class ConceptNode(BaseModel):
         # If fading, revive to developing
         if self.maturity == Maturity.FADING:
             self.maturity = Maturity.DEVELOPING
+
+    def record_source_ref(
+        self,
+        *,
+        source_id: str,
+        source: str = "",
+        task: str = "",
+        excerpt: str = "",
+    ) -> None:
+        """Attach or reinforce a raw source pointer for this concept card."""
+        if not source_id:
+            return
+        now = datetime.now(timezone.utc)
+        for ref in self.source_refs:
+            if ref.source_id == source_id:
+                ref.last_seen_at = now
+                ref.count += 1
+                if source and not ref.source:
+                    ref.source = source
+                if task and not ref.task:
+                    ref.task = task
+                if excerpt and not ref.excerpt:
+                    ref.excerpt = excerpt
+                return
+        self.source_refs.append(
+            ConceptSourceRef(
+                source_id=source_id,
+                source=source,
+                task=task,
+                excerpt=excerpt,
+                first_seen_at=now,
+                last_seen_at=now,
+            )
+        )
+
+    def record_token_ref(
+        self,
+        *,
+        token: str,
+        source_id: str = "",
+        source: str = "",
+        task: str = "",
+        excerpt: str = "",
+        role: str = "observed",
+    ) -> None:
+        """Attach or reinforce a token form and its source provenance."""
+        clean = token.strip()
+        if not clean:
+            return
+        normalized = normalize_identity_part(clean)
+        now = datetime.now(timezone.utc)
+        for ref in self.token_refs:
+            same_token = normalize_identity_part(ref.token) == normalized
+            same_source = ref.source_id == source_id
+            same_task = ref.task == task
+            if same_token and same_source and same_task:
+                ref.last_seen_at = now
+                ref.count += 1
+                if source and not ref.source:
+                    ref.source = source
+                if excerpt and not ref.excerpt:
+                    ref.excerpt = excerpt
+                if role and ref.role == "observed":
+                    ref.role = role
+                return
+        self.token_refs.append(
+            ConceptTokenRef(
+                token=clean,
+                source_id=source_id,
+                source=source,
+                task=task,
+                excerpt=excerpt,
+                role=role or "observed",
+                first_seen_at=now,
+                last_seen_at=now,
+            )
+        )
+
+    def merged_token_refs(self) -> list[ConceptTokenRef]:
+        """Token refs whose token differs from the canonical name."""
+        canonical = self.normalized_name()
+        return [
+            ref
+            for ref in self.token_refs
+            if normalize_identity_part(ref.token) != canonical
+        ]
 
     def weaken(self, source: str = "", task: str = "") -> None:
         """Record a disconfirmation event — evidence *against* the concept.

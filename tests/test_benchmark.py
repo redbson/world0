@@ -960,14 +960,13 @@ class TestRelationTypeDifferentiation:
         )
 
     def test_relation_type_factor_ordering(self, world):
-        """Verify the full ordering: depends_on > supports > related_to."""
+        """Verify axis ordering: positive > parallel."""
         for _ in range(10):
             world.ingest(Observation(
-                concepts=["hub", "dep_node", "sup_node", "rel_node"],
+                concepts=["hub", "pos_node", "par_node"],
                 relations=[
-                    ("hub", "dep_node", "depends_on"),
-                    ("hub", "sup_node", "supports"),
-                    ("hub", "rel_node", "related_to"),
+                    ("hub", "pos_node", "positive"),
+                    ("hub", "par_node", "parallel"),
                 ],
                 task="test", source="bench",
             ))
@@ -975,18 +974,13 @@ class TestRelationTypeDifferentiation:
         proj = world.project(["hub"], task="test")
         scores = proj.activation_scores
 
-        dep = world.concepts.resolve("dep_node")
-        sup = world.concepts.resolve("sup_node")
-        rel = world.concepts.resolve("rel_node")
+        pos = world.concepts.resolve("pos_node")
+        par = world.concepts.resolve("par_node")
 
-        s_dep = scores.get(dep.id, 0)
-        s_sup = scores.get(sup.id, 0)
-        s_rel = scores.get(rel.id, 0)
+        s_pos = scores.get(pos.id, 0)
+        s_par = scores.get(par.id, 0)
 
-        assert s_dep > s_sup > s_rel, (
-            f"Expected depends_on > supports > related_to, "
-            f"got {s_dep:.4f} > {s_sup:.4f} > {s_rel:.4f}"
-        )
+        assert s_pos > s_par, f"Expected positive > parallel, got {s_pos:.4f} > {s_par:.4f}"
 
 
 # ═══════════════════════════════════════════════════════════════════════

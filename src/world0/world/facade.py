@@ -33,8 +33,10 @@ from world0.schemas.types import (
     Observation,
     Projection,
     ReflectResult,
+    RelationPrior,
     WorldStatus,
 )
+from world0.sources import SourceLibrary
 from world0.store.json_store import JsonStore
 from world0.visualization.renderer import visualize as _visualize
 from world0.world._identity import IdentityOps
@@ -56,7 +58,7 @@ class World:
         # Agent submits observations from its work
         w.ingest(Observation(
             concepts=["Python", "deployment", "latency"],
-            relations=[("Python", "latency", "related_to")],
+            relations=[("Python", "latency", "generic_relation")],
             task="optimize ML serving",
             source="session_001",
         ))
@@ -81,6 +83,7 @@ class World:
         # ── Stores ────────────────────────────────────────────────────
         self.concepts = Concepts(self._store)
         self.relations = RelationManager(self._store)
+        self.sources = SourceLibrary(self._store)
         self.concepts.load()
         self.relations.load()
 
@@ -141,15 +144,30 @@ class World:
         *,
         task: str = "",
         source: str = "",
+        llm: LLMProvider | None = None,
+        preset_relations: list[RelationPrior | dict] | None = None,
     ) -> IngestResult:
         """Extract concepts from raw text (LLM-powered) and ingest them."""
-        if not self._extractor:
+        extractor = (
+            ConceptExtractor(llm, prompt_registry=self._prompts)
+            if llm is not None
+            else self._extractor
+        )
+        if not extractor:
             raise RuntimeError(
                 "ingest_text() requires an LLM provider. "
                 "Pass llm=OpenAIProvider() or llm=AnthropicProvider() "
                 "when creating the World instance."
             )
-        observation = self._extractor.extract(text, task=task, source=source)
+        observation = extractor.extract(
+            text,
+            task=task,
+            source=source,
+            preset_relations=preset_relations,
+        )
+        source_record = self.sources.record_raw(text, task=task, source=source)
+        observation.source_id = source_record.id
+        self.sources.attach_observation(source_record.id, observation)
         return self.ingest(observation)
 
     def set_llm(self, llm: LLMProvider | None) -> None:

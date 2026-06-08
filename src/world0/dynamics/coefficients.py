@@ -18,21 +18,16 @@ from __future__ import annotations
 from world0.schemas.relation import RelationType
 
 # ── Relation type propagation coefficients ────────────────────────────
-# Stronger semantic relations propagate more activation.
-# "related_to" (the generic fallback) gets the lowest weight.
+# Stronger axis relations propagate more activation.
+# Positive attraction is the strongest excitatory channel, parallel
+# resonance is a moderate co-attention channel, and negative repulsion is
+# handled separately by the activation engine as inhibition.
 # Activation can override these per-Perspective; community detection
 # and color diffusion always use the defaults below.
 RELATION_TYPE_FACTOR: dict[RelationType, float] = {
-    RelationType.DEPENDS_ON: 1.0,
-    RelationType.CONTAINS: 0.95,
-    RelationType.PART_OF: 0.95,
-    RelationType.SUPPORTS: 0.85,
-    RelationType.ACTIVATES: 0.90,
-    RelationType.PRECEDES: 0.80,
-    RelationType.DERIVED_FROM: 0.80,
-    RelationType.SIMILAR_TO: 0.70,
-    RelationType.CONTRASTS: 0.60,
-    RelationType.RELATED_TO: 0.50,
+    RelationType.POSITIVE: 1.0,
+    RelationType.PARALLEL: 0.75,
+    RelationType.NEGATIVE: 0.60,
 }
 
 

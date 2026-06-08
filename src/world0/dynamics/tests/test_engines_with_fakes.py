@@ -70,7 +70,7 @@ def test_hebbian_creates_relation_after_threshold_crossed() -> None:
     assert len(new) == 1
     edge = rs.get(new[0])
     assert edge is not None
-    assert edge.relation_type == RelationType.RELATED_TO
+    assert edge.relation_type == RelationType.PARALLEL
     assert edge.is_explicit is False
 
 

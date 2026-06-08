@@ -20,6 +20,7 @@ if TYPE_CHECKING:
     from world0.schemas.concept import ConceptNode, Maturity
     from world0.schemas.context import Perspective
     from world0.schemas.relation import RelationEdge, RelationType
+    from world0.schemas.source import SourceRecord
     from world0.schemas.types import Observation, Projection
 
 
@@ -51,6 +52,11 @@ class StorageBackend(Protocol):
     def delete_relation(self, relation_id: str) -> None: ...
     def save_relations_batch(self, relations: list[RelationEdge]) -> None: ...
     def delete_relations_batch(self, relation_ids: list[str]) -> None: ...
+
+    # sources
+    def save_source(self, source: SourceRecord) -> None: ...
+    def load_source(self, source_id: str) -> SourceRecord | None: ...
+    def load_all_sources(self) -> list[SourceRecord]: ...
 
     # state
     def save_state(self, state: dict) -> None: ...
@@ -99,7 +105,11 @@ class ConceptStore(ConceptStoreReader, Protocol):
         origin: str = ...,
         task: str = ...,
         description: str = ...,
+        kind: str = ...,
+        sense: str = ...,
         domain: str = ...,
+        aliases: list[str] | None = ...,
+        identity_key: str = ...,
         consolidate: bool = ...,
     ) -> tuple[ConceptNode, bool]: ...
 
@@ -177,8 +187,13 @@ class RelationStore(RelationStoreReader, Protocol):
         target_id: str,
         relation_type: RelationType = ...,
         *,
+        semantic_relation: str = ...,
         provenance: str = ...,
         is_explicit: bool = ...,
+        probability: float | None = ...,
+        prior_probability: float | None = ...,
+        prior_strength: float = ...,
+        evidence_strength: float = ...,
     ) -> tuple[RelationEdge, bool]: ...
 
     def reinforce(
