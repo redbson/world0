@@ -16,7 +16,7 @@ from world0.core.test_doubles import (
     FakeLifecyclePolicy,
     FakeRelationStore,
 )
-from world0.schemas.types import Observation
+from world0.schemas.types import ConceptCandidate, Observation
 from world0.world._ingest import IngestPipeline
 from world0.world._reflect import ReflectPipeline
 
@@ -66,12 +66,90 @@ def test_ingest_creates_explicit_relations() -> None:
     pipeline, _, rs, _, _ = _make_ingest_pipeline()
     obs = Observation(
         concepts=["A", "B"],
-        relations=[("A", "B", "depends_on")],
+        relations=[("A", "B", "positive")],
         task="t",
     )
     result = pipeline.run(obs)
-    assert result.new_relations == ["A → depends_on → B"]
+    assert result.new_relations == ["A → mutual_reinforcement → B"]
     assert len(rs) == 1
+
+
+def test_ingest_concept_candidates_disambiguate_same_label() -> None:
+    pipeline, cs, rs, _, _ = _make_ingest_pipeline()
+    result = pipeline.run(
+        Observation(
+            concept_candidates=[
+                ConceptCandidate(
+                    uid="c1",
+                    name="Apple",
+                    kind="entity",
+                    sense="technology company",
+                    domain="technology",
+                    description="Consumer technology company",
+                ),
+                ConceptCandidate(
+                    uid="c2",
+                    name="Apple",
+                    kind="entity",
+                    sense="fruit",
+                    domain="food",
+                    description="Edible fruit",
+                ),
+            ],
+            relations=[("c1", "c2", "negative")],
+            task="disambiguation",
+        )
+    )
+
+    nodes = cs.all()
+    assert len(nodes) == 2
+    assert {n.sense for n in nodes} == {"fruit", "technology company"}
+    assert nodes[0].id != nodes[1].id
+    assert result.new_relations == ["Apple → conflict → Apple"]
+    edge = rs.all()[0]
+    assert edge.source_id != edge.target_id
+    representations = {node.representation() for node in nodes}
+    assert any(".fruit." in item for item in representations)
+    assert any(".technology-company." in item for item in representations)
+
+
+def test_ingest_concept_candidates_collapse_synonym_tokens() -> None:
+    pipeline, cs, rs, _, _ = _make_ingest_pipeline()
+    result = pipeline.run(
+        Observation(
+            concept_candidates=[
+                ConceptCandidate(
+                    uid="c1",
+                    name="retrieval augmented generation",
+                    kind="entity",
+                    sense="retrieval augmented generation architecture",
+                    domain="ai",
+                    description="Architecture that grounds generation in retrieved context.",
+                ),
+                ConceptCandidate(
+                    uid="c2",
+                    name="RAG",
+                    kind="entity",
+                    sense="retrieval augmented generation architecture",
+                    domain="ai",
+                    description="Architecture that grounds generation in retrieved context.",
+                    aliases=["retrieval augmented generation"],
+                ),
+            ],
+            relations=[("c1", "c2", "parallel")],
+            task="synonym classification",
+        )
+    )
+
+    assert len(cs.all()) == 1
+    node = cs.all()[0]
+    assert "RAG" in node.aliases
+    rag_refs = [ref for ref in node.token_refs if ref.token == "RAG"]
+    assert rag_refs
+    assert rag_refs[0].role == "synonym"
+    assert result.new_concepts == ["retrieval augmented generation"]
+    assert result.reinforced_concepts == ["retrieval augmented generation"]
+    assert rs.all() == []
 
 
 def test_ingest_invokes_hebbian_with_resolved_ids() -> None:
@@ -102,6 +180,46 @@ def test_ingest_handles_disconfirmation() -> None:
     pipeline.run(Observation(concepts=["target"], task="t"))
     result = pipeline.run(Observation(weakened=["target"], task="t"))
     assert result.weakened_concepts == ["target"]
+
+
+def test_ingest_reports_endpoint_disconfirmation_without_existing_edge() -> None:
+    # A contradicted relation whose endpoints have no edge between them
+    # weakens both endpoint concepts.  That applied disconfirmation must be
+    # reported in the result (not silently swallowed).
+    pipeline, cs, _, _, _ = _make_ingest_pipeline()
+    result = pipeline.run(
+        Observation(
+            concepts=["MongoDB", "bottleneck"],
+            contradicted_relations=[("MongoDB", "bottleneck", "membership")],
+            task="profiling",
+        )
+    )
+    assert sorted(result.weakened_concepts) == ["MongoDB", "bottleneck"]
+    assert result.weakened_relations == []
+    for node in cs.all():
+        assert node.disconfirmation_count >= 1
+
+
+def test_ingest_contradiction_weakens_existing_edge_not_concepts() -> None:
+    # When the contradicted relation *does* exist, the edge is weakened and
+    # the endpoint-concept fallback does not fire.
+    pipeline, cs, rs, _, _ = _make_ingest_pipeline()
+    pipeline.run(
+        Observation(
+            concepts=["A", "B"],
+            relations=[("A", "B", "membership")],
+            task="t",
+        )
+    )
+    result = pipeline.run(
+        Observation(
+            concepts=["A", "B"],
+            contradicted_relations=[("A", "B", "membership")],
+            task="t",
+        )
+    )
+    assert result.weakened_relations == ["A → membership → B"]
+    assert result.weakened_concepts == []
 
 
 # ── ReflectPipeline ──────────────────────────────────────────────────
