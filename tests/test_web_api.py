@@ -21,7 +21,7 @@ class FakeLLM(LLMProvider):
                 {"name": "web framework", "description": "HTTP server toolkit"},
             ],
             "relations": [
-                {"source": "python", "target": "web framework", "type": "supports"},
+                {"source": "python", "target": "web framework", "type": "enables"},
             ],
         })
 
@@ -37,6 +37,7 @@ def test_index(client):
     resp = client.get("/")
     assert resp.status_code == 200
     assert "World 0" in resp.text
+    assert "settings-prompt-select" in resp.text
 
 
 def test_status_empty(client):
@@ -111,7 +112,7 @@ def test_connect(client):
     resp = client.post("/api/connect", json={
         "source": "python",
         "target": "django",
-        "relation_type": "supports",
+        "relation_type": "enables",
     })
     assert resp.status_code == 200
     data = resp.json()
@@ -137,8 +138,10 @@ def test_graph(client):
 def test_relation_types(client):
     resp = client.get("/api/relation_types")
     data = resp.json()
-    assert "related_to" in data["types"]
-    assert "supports" in data["types"]
+    assert "membership" in data["types"]
+    assert "conflict" in data["types"]
+    assert "generic_relation" in data["types"]
+    assert data["axes"] == ["positive", "negative", "parallel"]
 
 
 def test_agent_status(client):
@@ -156,7 +159,14 @@ def test_agent_status(client):
     assert "languages" in data
     assert "providers" in data
     assert "provider_env" in data
+    assert "external_agents" in data
+    assert "last_external_consultation" in data
+    assert "codex" in data["provider_env"]
+    assert "claude" in data["provider_env"]
     assert "openai" in data["provider_env"]
+    provider_ids = {item["id"] for item in data["providers"]}
+    assert "codex" in provider_ids
+    assert "claude" in provider_ids
 
 
 def test_sessions_flow(client):
@@ -277,6 +287,50 @@ def test_settings_roundtrip(client):
     assert status["unavailable_reason"] == "No LLM provider configured."
     assert status["state"]["status"] == "blocked"
     assert status["state"]["reason"] == "No LLM provider configured."
+
+
+def test_prompt_registry_api_roundtrip(client):
+    prompt_id = "agent.answer.system"
+
+    list_resp = client.get("/api/prompts")
+    assert list_resp.status_code == 200
+    prompt_list = list_resp.json()
+    assert any(item["id"] == prompt_id for item in prompt_list["prompts"])
+    assert prompt_list["config_path"].endswith("prompts.json")
+
+    update_resp = client.post(
+        f"/api/prompts/{prompt_id}",
+        json={"template": "Custom web answer prompt."},
+    )
+    assert update_resp.status_code == 200
+    update_data = update_resp.json()
+    assert update_data["success"] is True
+    assert update_data["prompt"]["template"] == "Custom web answer prompt."
+    assert update_data["prompt"]["is_overridden"] is True
+    assert update_data["prompt"]["has_active_override"] is True
+
+    path = Path(update_data["config_path"])
+    saved = json.loads(path.read_text(encoding="utf-8"))
+    assert saved["prompts"][prompt_id]["template"] == "Custom web answer prompt."
+
+    show_resp = client.get(f"/api/prompts/{prompt_id}")
+    assert show_resp.status_code == 200
+    assert show_resp.json()["prompt"]["template"] == "Custom web answer prompt."
+
+    export_resp = client.get("/api/prompts/export")
+    assert export_resp.status_code == 200
+    assert export_resp.json()["prompts"][prompt_id]["template"] == (
+        "Custom web answer prompt."
+    )
+
+    reset_resp = client.post(f"/api/prompts/{prompt_id}/reset")
+    assert reset_resp.status_code == 200
+    reset_data = reset_resp.json()
+    assert reset_data["success"] is True
+    assert reset_data["prompt"]["has_active_override"] is False
+    assert reset_data["prompt"]["template"] == reset_data["prompt"]["default_template"]
+    reset_saved = json.loads(path.read_text(encoding="utf-8"))
+    assert prompt_id not in reset_saved["prompts"]
 
 
 def test_research_endpoint(client, monkeypatch: pytest.MonkeyPatch):

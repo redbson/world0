@@ -173,9 +173,26 @@ class TestPKMTools:
         # New autonomy tools
         assert "run_skill" in names
         assert "list_skills" in names
+        assert "consult_claude_code" in names
+        assert "consult_codex" in names
         assert "web_search" in names
         assert "web_fetch" in names
         assert "research_topic" in names
+
+    def test_consult_codex_tool(
+        self,
+        registry: ToolRegistry,
+        agent: PKMAgent,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        monkeypatch.setattr(
+            agent,
+            "consult_external_agent",
+            lambda provider, prompt, **kwargs: f"{provider}:{prompt}",
+        )
+        result = registry.execute("consult_codex", {"prompt": "inspect tests"})
+        assert result.success
+        assert result.output == "codex:inspect tests"
 
     def test_list_skills_tool(self, registry: ToolRegistry):
         result = registry.execute("list_skills", {})

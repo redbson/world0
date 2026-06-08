@@ -12,6 +12,7 @@ from world0.agents.provider import (
     MODEL_ALIASES,
     default_model_for_provider,
     detect_provider,
+    normalize_provider_name,
     suggested_models_for_provider,
 )
 
@@ -67,6 +68,16 @@ class TestDetectProvider:
         assert provider == "openai"
         assert model == "gpt-4o"
 
+    def test_alias_claude(self):
+        provider, model = detect_provider("claude")
+        assert provider == "anthropic"
+        assert model == "claude-sonnet-4-6"
+
+    def test_alias_codex(self):
+        provider, model = detect_provider("codex")
+        assert provider == "openai"
+        assert model == "gpt-5.4"
+
     def test_o1_model(self):
         provider, model = detect_provider("o1-preview")
         assert provider == "openai"
@@ -93,6 +104,8 @@ class TestDetectProvider:
 
 class TestModelAliases:
     def test_all_aliases_defined(self):
+        assert "claude" in MODEL_ALIASES
+        assert "codex" in MODEL_ALIASES
         assert "opus" in MODEL_ALIASES
         assert "sonnet" in MODEL_ALIASES
         assert "haiku" in MODEL_ALIASES
@@ -104,17 +117,26 @@ class TestModelAliases:
 
 
 class TestProviderModelCatalog:
+    def test_normalize_provider_name(self):
+        assert normalize_provider_name("claude") == "anthropic"
+        assert normalize_provider_name("codex") == "openai"
+        assert normalize_provider_name("openai") == "openai"
+
     def test_default_model_for_provider(self):
         assert default_model_for_provider("openai") == "gpt-5.4"
+        assert default_model_for_provider("codex") == "gpt-5.4"
         assert default_model_for_provider("anthropic") == "claude-sonnet-4-6"
+        assert default_model_for_provider("claude") == "claude-sonnet-4-6"
         assert default_model_for_provider("azure-openai") == "gpt-5.4"
 
     def test_suggested_models_for_provider(self):
         assert "gpt-5.4" in suggested_models_for_provider("openai")
+        assert "gpt-5.4" in suggested_models_for_provider("codex")
         assert "gpt-5.4-pro" in suggested_models_for_provider("openai")
         assert "gpt-5.4-mini" in suggested_models_for_provider("openai")
         assert "gpt-5.4-nano" in suggested_models_for_provider("openai")
         assert "claude-opus-4-6" in suggested_models_for_provider("anthropic")
+        assert "claude-sonnet-4-6" in suggested_models_for_provider("claude")
         assert "claude-sonnet-4-6" in suggested_models_for_provider("anthropic")
         assert "claude-haiku-4-5-20251001" in suggested_models_for_provider("anthropic")
         assert "gpt-5.4" in suggested_models_for_provider("azure-openai")

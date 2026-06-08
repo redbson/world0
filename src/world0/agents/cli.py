@@ -26,6 +26,7 @@ import sys
 from pathlib import Path
 
 from world0.agents.pkm import PKMAgent
+from world0.agents.provider import normalize_provider_name
 from world0.llm.base import LLMProvider
 
 
@@ -43,6 +44,109 @@ def _prompt_config_target(args: argparse.Namespace) -> Path:
             sys.exit(1)
         return prompt_config_path(registry.path_for(space.id))
     return prompt_config_path(root)
+
+
+def _model_config_target(args: argparse.Namespace) -> Path:
+    """Return the model config file targeted by CLI arguments."""
+    from world0.models import model_config_path
+    from world0.spaces import SpaceRegistry
+
+    root = Path(args.store).expanduser()
+    if args.space:
+        registry = SpaceRegistry(root)
+        space = registry.resolve(args.space)
+        if space is None:
+            print(f"error: space {args.space!r} not found", file=sys.stderr)
+            sys.exit(1)
+        return model_config_path(registry.path_for(space.id))
+    return model_config_path(root)
+
+
+def _handle_model_command(args: argparse.Namespace) -> None:
+    """Manage per-operation model overrides without constructing an LLM."""
+    from world0.models import (
+        OperationModelSpec,
+        load_operation_model_config,
+        save_operation_model_config,
+    )
+
+    config_path = _model_config_target(args)
+    config = load_operation_model_config(config_path)
+    cmd = args.model_cmd or "list"
+
+    if cmd == "list":
+        print(f"{'OPERATION':<22} {'OVERRIDE':<8} {'PROVIDER':<13} MODEL")
+        for operation in config.operations():
+            spec = config.raw(operation)
+            if spec:
+                print(
+                    f"{operation:<22} {'yes':<8} {spec.provider:<13} {spec.model}"
+                )
+            else:
+                print(f"{operation:<22} {'no':<8} {'':<13} inherited")
+        return
+
+    if cmd == "show":
+        if args.operation not in config.operations():
+            print(f"error: unknown operation {args.operation!r}", file=sys.stderr)
+            sys.exit(1)
+        spec = config.raw(args.operation)
+        data = (
+            spec.to_dict(include_operation=True)
+            if spec
+            else {
+                "operation": args.operation,
+                "enabled": False,
+                "provider": "",
+                "model": "",
+                "notes": "inherits runtime provider/model",
+            }
+        )
+        print(json.dumps(data, indent=2, ensure_ascii=False))
+        return
+
+    if cmd == "set":
+        try:
+            config.set(OperationModelSpec(
+                operation=args.operation,
+                provider=args.provider,
+                model=args.model_name,
+                enabled=not args.disabled,
+                notes=args.notes,
+            ))
+        except KeyError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            sys.exit(1)
+        issues = config.validate()
+        if issues:
+            for issue in issues:
+                print(f"error: {issue}", file=sys.stderr)
+            sys.exit(1)
+        save_operation_model_config(config_path, config)
+        print(f"Updated {args.operation} model config in {config_path}")
+        return
+
+    if cmd == "reset":
+        try:
+            config.clear(args.operation)
+        except KeyError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            sys.exit(1)
+        save_operation_model_config(config_path, config)
+        print(f"Reset {args.operation} model config in {config_path}")
+        return
+
+    if cmd == "validate":
+        issues = config.validate()
+        if not issues:
+            print(f"Model config OK: {config_path}")
+            return
+        for issue in issues:
+            print(f"error: {issue}", file=sys.stderr)
+        sys.exit(1)
+
+    print(f"Unknown model subcommand: {cmd}", file=sys.stderr)
+    sys.exit(1)
 
 
 def _handle_prompt_command(args: argparse.Namespace) -> None:
@@ -221,6 +325,7 @@ def _handle_space_command(args: argparse.Namespace) -> None:
 
 def _create_provider(provider: str, model: str | None) -> LLMProvider | None:
     """Create an LLM provider from CLI arguments."""
+    provider = normalize_provider_name(provider)
     if provider == "none":
         return None
 
@@ -265,7 +370,10 @@ Examples:
   %(prog)s ask "some question?"     Quick ask
   %(prog)s web-search "latest MCP patterns"   Quick web search
   %(prog)s explore "concept"        Quick explore
+  %(prog)s claude "review this architecture"
+  %(prog)s codex "inspect this repository for test gaps"
   %(prog)s prompt list              List configurable prompts
+  %(prog)s model list               List operation model overrides
   %(prog)s status                   Show world status
   %(prog)s reflect                  Run consolidation
 """,
@@ -278,9 +386,9 @@ Examples:
     )
     parser.add_argument(
         "--provider",
-        choices=["anthropic", "openai", "azure-openai", "none"],
+        choices=["anthropic", "claude", "openai", "codex", "azure-openai", "none"],
         default="anthropic",
-        help="LLM provider (default: anthropic)",
+        help="LLM provider (default: anthropic; claude/codex are aliases)",
     )
     parser.add_argument(
         "--model",
@@ -317,7 +425,9 @@ Examples:
     connect_parser.add_argument("source", help="Source concept")
     connect_parser.add_argument("target", help="Target concept")
     connect_parser.add_argument(
-        "--type", default="related_to", help="Relation type"
+        "--type",
+        default="generic_relation",
+        help="Semantic relation label, for example membership, inclusion, conflict, overlap",
     )
 
     # search
@@ -349,6 +459,34 @@ Examples:
 
     # reflect
     subparsers.add_parser("reflect", help="Run consolidation")
+
+    # claude
+    claude_parser = subparsers.add_parser(
+        "claude", help="Consult system Claude Code in read-only mode"
+    )
+    claude_parser.add_argument("prompt", help="Prompt for Claude Code")
+    claude_parser.add_argument("--workspace", default=".")
+    claude_parser.add_argument("--problem", default="")
+    claude_parser.add_argument("--external-model", default="")
+    claude_parser.add_argument(
+        "--no-world0-context",
+        action="store_true",
+        help="Do not prepend World 0 projection context",
+    )
+
+    # codex
+    codex_parser = subparsers.add_parser(
+        "codex", help="Consult system Codex in read-only mode"
+    )
+    codex_parser.add_argument("prompt", help="Prompt for Codex")
+    codex_parser.add_argument("--workspace", default=".")
+    codex_parser.add_argument("--problem", default="")
+    codex_parser.add_argument("--external-model", default="")
+    codex_parser.add_argument(
+        "--no-world0-context",
+        action="store_true",
+        help="Do not prepend World 0 projection context",
+    )
 
     # viz
     viz_parser = subparsers.add_parser("viz", help="Generate visualization")
@@ -403,6 +541,28 @@ Examples:
     prompt_sub.add_parser("validate", help="Validate prompt configuration")
     prompt_sub.add_parser("diff", help="Summarize prompt overrides")
 
+    # model
+    model_parser = subparsers.add_parser(
+        "model", help="Manage per-operation model configuration"
+    )
+    model_sub = model_parser.add_subparsers(dest="model_cmd")
+    model_sub.add_parser("list", help="List operation model overrides")
+    model_show = model_sub.add_parser("show", help="Show one operation override")
+    model_show.add_argument("operation")
+    model_set = model_sub.add_parser("set", help="Set one operation model override")
+    model_set.add_argument("operation")
+    model_set.add_argument("--provider", default="")
+    model_set.add_argument("--model", dest="model_name", required=True)
+    model_set.add_argument("--notes", default="")
+    model_set.add_argument(
+        "--disabled",
+        action="store_true",
+        help="Store the override but leave it disabled",
+    )
+    model_reset = model_sub.add_parser("reset", help="Remove one model override")
+    model_reset.add_argument("operation")
+    model_sub.add_parser("validate", help="Validate model configuration")
+
     args = parser.parse_args()
 
     # ── space subcommands: handled before constructing PKMAgent ───────
@@ -411,6 +571,9 @@ Examples:
         return
     if args.command == "prompt":
         _handle_prompt_command(args)
+        return
+    if args.command == "model":
+        _handle_model_command(args)
         return
 
     llm = _create_provider(args.provider, args.model)
@@ -445,6 +608,24 @@ Examples:
         print(agent.status())
     elif args.command == "reflect":
         print(agent.reflect())
+    elif args.command == "claude":
+        print(agent.consult_external_agent(
+            "claude",
+            args.prompt,
+            workspace=args.workspace,
+            problem=args.problem,
+            model=args.external_model,
+            use_world0_context=not args.no_world0_context,
+        ))
+    elif args.command == "codex":
+        print(agent.consult_external_agent(
+            "codex",
+            args.prompt,
+            workspace=args.workspace,
+            problem=args.problem,
+            model=args.external_model,
+            use_world0_context=not args.no_world0_context,
+        ))
     elif args.command == "viz":
         print(agent.visualize(output=args.output))
 

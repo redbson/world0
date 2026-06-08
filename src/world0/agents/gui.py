@@ -36,6 +36,8 @@ def _find_free_port() -> int:
 
 def _create_provider(provider: str, model: str | None):
     """Create an LLM provider."""
+    from world0.agents.provider import normalize_provider_name
+    provider = normalize_provider_name(provider)
     if provider == "none":
         return None
 
@@ -218,9 +220,9 @@ def main() -> None:
     )
     parser.add_argument(
         "--provider",
-        choices=["anthropic", "openai", "azure-openai", "none"],
+        choices=["anthropic", "claude", "openai", "codex", "azure-openai", "none"],
         default="anthropic",
-        help="LLM provider (default: anthropic)",
+        help="LLM provider (default: anthropic; claude/codex are aliases)",
     )
     parser.add_argument(
         "--model",

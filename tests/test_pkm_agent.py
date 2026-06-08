@@ -15,7 +15,7 @@ from world0.agents.session import TurnSummary
 from world0.agents.state import AgentLifecycleStatus
 from world0.llm.base import LLMProvider
 from world0.schemas.relation import RelationType
-from world0.schemas.types import Observation
+from world0.schemas.types import ConceptCandidate, Observation
 
 
 class FakeLLM(LLMProvider):
@@ -516,6 +516,48 @@ class TestExplore:
         assert card["relation_count"] >= 1
         assert "api design" in card["tasks"]
 
+    def test_concept_card_shows_merged_tokens_with_sources(
+        self, agent: PKMAgent
+    ) -> None:
+        obs = Observation(
+            concept_candidates=[
+                ConceptCandidate(
+                    uid="c1",
+                    name="retrieval augmented generation",
+                    kind="entity",
+                    sense="retrieval augmented generation architecture",
+                    domain="ai",
+                    description="Architecture that grounds generation in retrieved context.",
+                    evidence="retrieval augmented generation grounds answers",
+                ),
+                ConceptCandidate(
+                    uid="c2",
+                    name="RAG",
+                    kind="entity",
+                    sense="retrieval augmented generation architecture",
+                    domain="ai",
+                    description="Architecture that grounds generation in retrieved context.",
+                    aliases=["retrieval augmented generation"],
+                    evidence="RAG grounds answers",
+                ),
+            ],
+            task="answer grounding",
+            source="session_42",
+        )
+        agent.learn_structured(obs)
+
+        card = agent.concept_card("RAG")
+        assert card is not None
+        merged_tokens = card["merged_token_refs"]
+        rag_refs = [item for item in merged_tokens if item["token"] == "RAG"]
+        assert rag_refs
+        assert rag_refs[0]["source"] == "session_42"
+        assert rag_refs[0]["task"] == "answer grounding"
+        assert "RAG grounds answers" in rag_refs[0]["excerpt"]
+        explored = agent.explore("RAG")
+        assert "## Merged Tokens" in explored
+        assert "session_42" in explored
+
 
 class TestConnect:
     def test_connect_new_concepts(self, agent: PKMAgent) -> None:
@@ -528,7 +570,7 @@ class TestConnect:
 
     def test_connect_default_type(self, agent: PKMAgent) -> None:
         result = agent.connect("a", "b")
-        assert "related_to" in result.lower()
+        assert "parallel" in result.lower()
 
 
 class TestSearch:
@@ -655,7 +697,7 @@ class TestProjectionFeedback:
             useful=True,
             missing_concepts=["postgresql"],
             noisy_concepts=["orm"],
-            weak_relations=["fastapi -> supports -> orm"],
+            weak_relations=["fastapi -> enables -> orm"],
             notes="Need database concepts, ORM was too prominent.",
         )
 
@@ -663,7 +705,7 @@ class TestProjectionFeedback:
         assert postgres is not None
         assert "postgresql" in result["created_missing_concepts"]
         assert "orm" in result["demoted_noisy_concepts"]
-        assert "fastapi -> supports -> orm" in result["weakened_relations"]
+        assert "fastapi -> enables -> orm" in result["weakened_relations"]
         assert agent.world.concepts.resolve("orm").confidence < before_noise_conf
         assert agent.world.relations.get(rel.id).weight < before_rel_weight
         assert agent.latest_projection_feedback() is not None
@@ -696,6 +738,24 @@ class TestHandleInput:
         assert result is not None
         assert "unknown" in result.lower()
 
+    def test_claude_command(self, agent: PKMAgent, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(
+            agent,
+            "consult_external_agent",
+            lambda tool, prompt, **kwargs: f"{tool}:{prompt}",
+        )
+        result = agent.handle_input("/claude inspect the architecture")
+        assert result == "claude:inspect the architecture"
+
+    def test_codex_command(self, agent: PKMAgent, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(
+            agent,
+            "consult_external_agent",
+            lambda tool, prompt, **kwargs: f"{tool}:{prompt}",
+        )
+        result = agent.handle_input("/codex inspect test coverage")
+        assert result == "codex:inspect test coverage"
+
 
 class TestSeedExtraction:
     def test_fallback_keyword_extraction(self, agent: PKMAgent) -> None:
@@ -711,3 +771,96 @@ class TestSeedExtraction:
         seeds = agent._extract_seeds("How does machine learning work?")
         assert "machine learning" in seeds
         assert "python" in seeds
+
+
+class TestExternalAgents:
+    def test_consult_external_agent_with_world0_context(
+        self,
+        agent_with_llm: PKMAgent,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        obs = Observation(
+            concepts=["python", "fastapi"],
+            relations=[("fastapi", "python", "depends_on")],
+            task="service design",
+            source="test",
+        )
+        agent_with_llm.learn_structured(obs)
+        captured: dict[str, object] = {}
+
+        monkeypatch.setattr(
+            "world0.agents.pkm.available_external_agents",
+            lambda: {"codex": "/usr/bin/codex"},
+        )
+
+        def fake_run(agent, prompt, *, workspace=".", model="", timeout_seconds=180):
+            captured["agent"] = agent
+            captured["prompt"] = prompt
+            captured["workspace"] = workspace
+            captured["model"] = model
+            return "External review summary"
+
+        monkeypatch.setattr("world0.agents.pkm.run_external_agent", fake_run)
+
+        result = agent_with_llm.consult_external_agent(
+            "codex",
+            "Inspect the fastapi service layout in python",
+            workspace=".",
+            model="gpt-5.4",
+        )
+
+        assert "external review summary" in result.lower()
+        assert "problem workspace:" in result.lower()
+        assert captured["agent"] == "codex"
+        assert captured["model"] == "gpt-5.4"
+        assert "World 0 Cognitive Context" in str(captured["prompt"])
+        assert "python" in str(captured["prompt"]).lower()
+        workspace = Path(str(agent_with_llm.session.metadata["last_external_consultation"]["workspace"]))
+        assert workspace.exists()
+        assert (workspace / "problem.md").exists()
+        assert (workspace / "world0_context.md").exists()
+        assert (workspace / "interaction_log.md").exists()
+        assert "External review summary" in (workspace / "interaction_log.md").read_text(encoding="utf-8")
+
+    def test_consult_external_agent_reports_unavailable(
+        self,
+        agent: PKMAgent,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setattr(
+            "world0.agents.pkm.available_external_agents",
+            lambda: {},
+        )
+        result = agent.consult_external_agent("claude", "Inspect this design")
+        assert "not available" in result.lower()
+
+    def test_consult_external_agent_reuses_problem_workspace(
+        self,
+        agent: PKMAgent,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setattr(
+            "world0.agents.pkm.available_external_agents",
+            lambda: {"claude": "/usr/bin/claude"},
+        )
+        monkeypatch.setattr(
+            "world0.agents.pkm.run_external_agent",
+            lambda agent, prompt, **kwargs: "ok",
+        )
+
+        first = agent.consult_external_agent(
+            "claude",
+            "first prompt",
+            problem="shared problem",
+        )
+        first_workspace = Path(agent.session.metadata["last_external_consultation"]["workspace"])
+        second = agent.consult_external_agent(
+            "claude",
+            "second prompt",
+            problem="shared problem",
+        )
+        second_workspace = Path(agent.session.metadata["last_external_consultation"]["workspace"])
+
+        assert "problem workspace:" in first.lower()
+        assert "problem workspace:" in second.lower()
+        assert first_workspace == second_workspace

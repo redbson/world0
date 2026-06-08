@@ -18,9 +18,9 @@ def main() -> None:
     )
     parser.add_argument(
         "--provider",
-        choices=["anthropic", "openai", "azure-openai", "none"],
+        choices=["anthropic", "claude", "openai", "codex", "azure-openai", "none"],
         default="anthropic",
-        help="LLM provider (default: anthropic)",
+        help="LLM provider (default: anthropic; claude/codex are aliases)",
     )
     parser.add_argument(
         "--model",

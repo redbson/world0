@@ -41,6 +41,14 @@ from pathlib import Path
 from typing import Any
 
 from world0.agents import research as research_utils
+from world0.agents.external import (
+    ExternalAgentError,
+    append_problem_interaction,
+    available_external_agents,
+    prepare_problem_workspace,
+    run_external_agent,
+    write_problem_materials,
+)
 from world0.agents.failure import (
     FailureClass,
     FailureReport,
@@ -48,7 +56,11 @@ from world0.agents.failure import (
     classify_exception,
     turn_summary_failure_report,
 )
-from world0.agents.provider import create_provider, default_model_for_provider
+from world0.agents.provider import (
+    create_provider,
+    default_model_for_provider,
+    normalize_provider_name,
+)
 from world0.agents.state import (
     AgentLifecycleStatus,
     AgentStateSnapshot,
@@ -56,8 +68,19 @@ from world0.agents.state import (
 )
 from world0.agents.session import ProjectionFeedbackEntry
 from world0.llm.base import LLMError, LLMProvider
+from world0.models import (
+    OperationModelConfig,
+    load_operation_model_config,
+    model_config_path,
+)
 from world0.prompts import PromptRegistry, load_prompt_registry, prompt_config_path
-from world0.schemas.relation import RelationType
+from world0.schemas.relation import (
+    RelationType,
+    is_known_relation_type,
+    normalize_semantic_relation,
+    semantic_relation_spec,
+    semantic_relation_names,
+)
 from world0.schemas.types import Observation, Projection
 from world0.world import World
 
@@ -107,9 +130,13 @@ class PKMAgent:
         self._space = active
         self._store_path = Path(store_path)
         prompt_paths = [prompt_config_path(root_path)]
+        model_paths = [model_config_path(root_path)]
         if self._store_path != root_path:
             prompt_paths.append(prompt_config_path(self._store_path))
+            model_paths.append(model_config_path(self._store_path))
         self._prompts = load_prompt_registry(*prompt_paths)
+        self._operation_models = load_operation_model_config(*model_paths)
+        self._operation_llm_cache: dict[str, LLMProvider] = {}
         self._world = World(
             store_path=self._store_path,
             llm=llm,
@@ -155,6 +182,11 @@ class PKMAgent:
     def prompts(self) -> PromptRegistry:
         """Access the effective prompt registry."""
         return self._prompts
+
+    @property
+    def operation_models(self) -> OperationModelConfig:
+        """Access per-operation model overrides."""
+        return self._operation_models
 
     @property
     def space(self):
@@ -210,6 +242,9 @@ class PKMAgent:
         This enables agent_chat() with autonomous tool use.
         """
         from world0.agents.provider import ChatProvider
+        agent_spec = self._operation_models.get("agent_loop")
+        if agent_spec is not None:
+            model = agent_spec.provider_model()
         self._chat_provider = ChatProvider(
             model=model,
             api_key=api_key,
@@ -230,6 +265,18 @@ class PKMAgent:
         if self._chat_provider:
             settings["provider"] = self._chat_provider.provider_name
             settings["model"] = self._chat_provider.model
+        settings["operation_models"] = {
+            operation: (
+                spec.to_dict() if spec else {
+                    "enabled": False,
+                    "provider": "",
+                    "model": "",
+                    "notes": "",
+                }
+            )
+            for operation in self._operation_models.operations()
+            for spec in [self._operation_models.raw(operation)]
+        }
         settings["api_key_source"] = self._api_key_source(
             settings.get("provider", "none")
         )
@@ -334,6 +381,7 @@ class PKMAgent:
 
     @staticmethod
     def _api_key_source(provider: str) -> str:
+        provider = normalize_provider_name(provider)
         if provider == "openai" and os.environ.get("OPENAI_API_KEY"):
             return "env"
         if provider == "anthropic" and os.environ.get("ANTHROPIC_API_KEY"):
@@ -344,6 +392,29 @@ class PKMAgent:
         ):
             return "env"
         return "explicit" if provider != "none" else "none"
+
+    def _operation_llm(self, operation: str) -> LLMProvider | None:
+        """Return model override for an operation, falling back to global LLM."""
+        spec = self._operation_models.get(operation)
+        if spec is None:
+            return self._llm
+        key = "|".join([
+            operation,
+            spec.provider,
+            spec.model,
+            self._runtime_settings.get("base_url", ""),
+            self._runtime_settings.get("azure_endpoint", ""),
+            self._runtime_settings.get("api_version", ""),
+        ])
+        if key not in self._operation_llm_cache:
+            self._operation_llm_cache[key] = create_provider(
+                model=spec.provider_model(),
+                api_key=self._runtime_settings.get("api_key") or None,
+                base_url=self._runtime_settings.get("base_url") or None,
+                azure_endpoint=self._runtime_settings.get("azure_endpoint") or None,
+                api_version=self._runtime_settings.get("api_version") or None,
+            )
+        return self._operation_llm_cache[key]
 
     def configure_runtime(
         self,
@@ -375,9 +446,10 @@ class PKMAgent:
             self._runtime_settings["dialogue_sediment_interval"] = interval
 
         provider_name = provider or self._runtime_settings.get("provider", "none")
+        canonical_provider = normalize_provider_name(provider_name)
         fallback_model = (
-            default_model_for_provider(provider_name)
-            if provider_name != "none"
+            default_model_for_provider(canonical_provider)
+            if canonical_provider != "none"
             else ""
         )
         chosen_model = model or self._runtime_settings.get("model") or fallback_model
@@ -400,8 +472,9 @@ class PKMAgent:
             "azure_endpoint": chosen_azure_endpoint,
             "api_version": chosen_api_version,
         })
+        self._operation_llm_cache.clear()
 
-        if provider_name == "none":
+        if canonical_provider == "none":
             self._llm = None
             self._world.set_llm(None)
             self._chat_provider = None
@@ -412,8 +485,8 @@ class PKMAgent:
             return
 
         provider_model = chosen_model
-        if provider_name in ("openai", "anthropic", "azure-openai"):
-            provider_model = f"{provider_name}/{chosen_model}"
+        if canonical_provider in ("openai", "anthropic", "azure-openai"):
+            provider_model = f"{canonical_provider}/{chosen_model}"
 
         self._llm = create_provider(
             model=provider_model,
@@ -604,6 +677,8 @@ class PKMAgent:
         reinforced_missing: list[str] = []
         adjusted_noisy: list[str] = []
         adjusted_relations: list[str] = []
+        noisy_ids: set[str] = set()
+        weakened_relation_ids: set[str] = set()
 
         for name in missing_concepts:
             node, is_new = self._world.concepts.get_or_create(
@@ -634,6 +709,7 @@ class PKMAgent:
             if cid:
                 adjusted = self._world.concepts.adjust_confidence(cid, -0.05)
                 if adjusted:
+                    noisy_ids.add(adjusted.id)
                     adjusted_noisy.append(adjusted.name)
 
         projection_relations = {
@@ -652,12 +728,13 @@ class PKMAgent:
                     confidence_delta=-0.05,
                 )
                 if adjusted:
+                    weakened_relation_ids.add(adjusted.id)
                     adjusted_relations.append(label)
 
         if useful is True:
             for item in snapshot.get("concepts", [])[:5]:
                 cid = item.get("id")
-                if cid:
+                if cid and cid not in noisy_ids:
                     self._world.concepts.reinforce(
                         cid,
                         source="projection_feedback",
@@ -665,7 +742,7 @@ class PKMAgent:
                     )
             for item in snapshot.get("relations", [])[:5]:
                 rid = item.get("id")
-                if rid:
+                if rid and rid not in weakened_relation_ids:
                     self._world.relations.reinforce(
                         rid,
                         provenance=f"projection_feedback:{snapshot.get('query', '')}",
@@ -970,6 +1047,16 @@ class PKMAgent:
             lines.append(f"- **{s.name}**{param_str}: {s.description}")
         return "\n".join(lines)
 
+    def available_external_agents(self) -> dict[str, str]:
+        """Return available system-installed external coding agents."""
+        return available_external_agents()
+
+    def external_problem_root(self) -> Path:
+        """Directory used to store isolated external-agent workspaces."""
+        path = self._store_path / "external_problems"
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
     # ── Core operations ───────────────────────────────────────────────
 
     def learn(
@@ -992,7 +1079,12 @@ class PKMAgent:
         if not source:
             source = f"pkm_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}"
 
-        result = self._world.ingest_text(text, task=task, source=source)
+        result = self._world.ingest_text(
+            text,
+            task=task,
+            source=source,
+            llm=self._operation_llm("extraction"),
+        )
 
         summary_parts = []
         if result.new_concepts:
@@ -1022,9 +1114,10 @@ class PKMAgent:
         summary = "\n".join(summary_parts)
 
         # Generate LLM summary if available
-        if self._llm:
+        summary_llm = self._operation_llm("learn_summary")
+        if summary_llm:
             try:
-                llm_summary = self._llm.complete_json(
+                llm_summary = summary_llm.complete_json(
                     self._prompts.render(
                         "agent.learn_inline_summary.system",
                         language_instruction=self._language_instruction(),
@@ -1363,7 +1456,8 @@ class PKMAgent:
         basis = self._render_projection_basis(projection, seeds)
         self._remember_projection_snapshot(query, seeds, projection)
 
-        if not self._llm:
+        answer_llm = self._operation_llm("answer")
+        if not answer_llm:
             return f"{rendered}\n\n{basis}"
 
         # Generate answer using LLM + projection context
@@ -1372,7 +1466,7 @@ class PKMAgent:
                 f"## Cognitive Projection\n{rendered}\n\n"
                 f"## User Question\n{query}"
             )
-            response = self._llm.complete_json(
+            response = answer_llm.complete_json(
                 self._prompt_with_language("agent.answer.system"),
                 user_prompt,
             )
@@ -1392,8 +1486,11 @@ class PKMAgent:
             return f"Concept '{concept_name}' not found."
 
         lines = [
-            f"# {node.name}",
+            f"# {node.representation()}",
             f"",
+            f"**Name:** {node.name}",
+            f"**Feature:** {node.representation_feature()}",
+            f"**UID:** {node.id}",
             f"**Maturity:** {node.maturity.value}",
             f"**Confidence:** {node.confidence:.2f}",
             f"**Activated:** {node.activation_count} times",
@@ -1407,8 +1504,38 @@ class PKMAgent:
         if node.aliases:
             lines.extend(["", f"**Aliases:** {', '.join(node.aliases)}"])
 
+        merged_token_refs = node.merged_token_refs()
+        if merged_token_refs:
+            lines.extend(["", "## Merged Tokens", ""])
+            for ref in sorted(
+                merged_token_refs,
+                key=lambda item: item.last_seen_at,
+                reverse=True,
+            )[:8]:
+                label = ref.source or ref.source_id or "unknown source"
+                task_str = f" [{ref.task}]" if ref.task else ""
+                excerpt = f" — {ref.excerpt}" if ref.excerpt else ""
+                lines.append(
+                    f"- **{ref.token}** ({ref.role}, seen {ref.count}x) "
+                    f"from {label}{task_str}{excerpt}"
+                )
+
         if node.tags:
             lines.extend(["", f"**Tags:** {', '.join(node.tags)}"])
+
+        if node.source_refs:
+            lines.extend(["", "## Source References", ""])
+            for ref in sorted(
+                node.source_refs,
+                key=lambda item: item.last_seen_at,
+                reverse=True,
+            )[:5]:
+                label = ref.source or ref.source_id
+                task_str = f" [{ref.task}]" if ref.task else ""
+                excerpt = f" — {ref.excerpt}" if ref.excerpt else ""
+                lines.append(
+                    f"- {label}{task_str} (seen {ref.count}x){excerpt}"
+                )
 
         # Relations
         relations = self._world.relations.for_concept(node.id)
@@ -1424,8 +1551,11 @@ class PKMAgent:
 
                 direction = "→" if rel.source_id == node.id else "←"
                 lines.append(
-                    f"- {direction} **{rel.relation_type.value}** → "
-                    f"{other.name} (weight: {rel.weight:.2f}, "
+                    f"- {direction} **{rel.semantic_relation}** "
+                    f"[{rel.relation_type.value}] → "
+                    f"{other.representation()} (structural: "
+                    f"{rel.structural_strength:.2f}, propagation: "
+                    f"{rel.propagation_strength:.2f}, "
                     f"reinforced {rel.reinforcement_count}x)"
                 )
 
@@ -1459,11 +1589,16 @@ class PKMAgent:
             direction = "outgoing" if rel.source_id == node.id else "incoming"
             relation_cards.append({
                 "relation_type": rel.relation_type.value,
+                "semantic_relation": rel.semantic_relation,
                 "other_name": other.name,
                 "other_id": other.id,
+                "other_representation": other.representation(),
                 "direction": direction,
                 "weight": round(rel.weight, 4),
+                "probability": round(rel.probability, 4),
                 "confidence": round(rel.confidence, 4),
+                "structural_strength": round(rel.structural_strength, 4),
+                "propagation_strength": round(rel.propagation_strength, 4),
                 "reinforcement_count": rel.reinforcement_count,
                 "is_explicit": rel.is_explicit,
                 "provenance": rel.provenance,
@@ -1482,10 +1617,53 @@ class PKMAgent:
         ]
         sources = sorted({entry.source for entry in node.reinforcement_log if entry.source})
         tasks = sorted({entry.task for entry in node.reinforcement_log if entry.task})
+        source_refs = []
+        for ref in sorted(
+            node.source_refs,
+            key=lambda item: item.last_seen_at,
+            reverse=True,
+        ):
+            record = self._world.sources.get(ref.source_id)
+            source_refs.append({
+                "source_id": ref.source_id,
+                "source": ref.source,
+                "task": ref.task,
+                "excerpt": ref.excerpt,
+                "count": ref.count,
+                "first_seen_at": ref.first_seen_at.isoformat(),
+                "last_seen_at": ref.last_seen_at.isoformat(),
+                "raw_available": record is not None,
+                "raw_length": len(record.raw_text) if record else 0,
+            })
+        token_refs = []
+        for ref in sorted(
+            node.token_refs,
+            key=lambda item: item.last_seen_at,
+            reverse=True,
+        ):
+            record = self._world.sources.get(ref.source_id) if ref.source_id else None
+            token_refs.append({
+                "token": ref.token,
+                "role": ref.role,
+                "source_id": ref.source_id,
+                "source": ref.source,
+                "task": ref.task,
+                "excerpt": ref.excerpt,
+                "count": ref.count,
+                "first_seen_at": ref.first_seen_at.isoformat(),
+                "last_seen_at": ref.last_seen_at.isoformat(),
+                "raw_available": record is not None,
+                "raw_length": len(record.raw_text) if record else 0,
+            })
 
         return {
             "id": node.id,
+            "representation": node.representation(),
+            "feature": node.representation_feature(),
             "name": node.name,
+            "kind": node.kind,
+            "sense": node.sense,
+            "identity_key": node.identity_key,
             "description": node.description,
             "aliases": list(node.aliases),
             "domain": node.domain,
@@ -1500,6 +1678,13 @@ class PKMAgent:
             "related_names": related_names[:12],
             "relations": relation_cards[:24],
             "sources": sources[:12],
+            "source_refs": source_refs[:12],
+            "token_refs": token_refs[:24],
+            "merged_token_refs": [
+                item
+                for item in token_refs[:24]
+                if item["token"].strip().lower() != node.normalized_name()
+            ],
             "tasks": tasks[:12],
             "recent_activity": recent_activity,
         }
@@ -1508,31 +1693,31 @@ class PKMAgent:
         self,
         source: str,
         target: str,
-        relation_type: str = "related_to",
+        relation_type: str = "generic_relation",
     ) -> str:
         """Manually create a typed relation between two concepts.
 
         Creates concepts if they don't exist.
         """
-        try:
-            rel_type = RelationType(relation_type)
-        except ValueError:
-            valid = ", ".join(rt.value for rt in RelationType)
+        if not is_known_relation_type(relation_type):
+            valid = ", ".join(semantic_relation_names())
             return (
                 f"Invalid relation type: '{relation_type}'.\n"
-                f"Valid types: {valid}"
+                f"Valid relation labels: {valid}"
             )
+        semantic_relation = normalize_semantic_relation(relation_type)
+        rel_type = semantic_relation_spec(semantic_relation).axis
 
         obs = Observation(
             concepts=[source, target],
-            relations=[(source, target, relation_type)],
+            relations=[(source, target, semantic_relation)],
             task="manual connection",
             source="pkm_manual",
         )
         result = self._world.ingest(obs)
 
         return (
-            f"Connected: {source} → {rel_type.value} → {target}\n"
+            f"Connected: {source} → {semantic_relation} [{rel_type.value}] → {target}\n"
             f"New concepts: {result.new_concepts or 'none'}\n"
             f"New relations: {result.new_relations or 'none'}"
         )
@@ -1565,6 +1750,117 @@ class PKMAgent:
             lines.append("No changes — your concept world is stable.")
 
         return "\n".join(lines)
+
+    def consult_external_agent(
+        self,
+        agent: str,
+        prompt: str,
+        *,
+        workspace: str | Path = ".",
+        problem: str = "",
+        model: str = "",
+        use_world0_context: bool = True,
+        max_concepts: int = 12,
+        max_depth: int = 2,
+    ) -> str:
+        """Consult a system-installed external agent in read-only mode."""
+        clean_prompt = prompt.strip()
+        if not clean_prompt:
+            return "Please provide a prompt for the external agent."
+
+        clean_agent = agent.strip().lower()
+        source_workspace = Path(workspace).expanduser().resolve()
+        problem_scope = problem.strip() or clean_prompt
+        available = self.available_external_agents()
+        if clean_agent not in available:
+            known = ", ".join(sorted(available)) or "none"
+            return (
+                f"External agent '{clean_agent}' is not available on this system. "
+                f"Available: {known}."
+            )
+
+        rendered_context = ""
+        seeds: list[str] = []
+        if use_world0_context:
+            seeds = self._extract_seeds(clean_prompt)
+            if seeds:
+                projection = self._world.project(
+                    seeds,
+                    task=problem_scope,
+                    max_concepts=max_concepts,
+                    max_depth=max_depth,
+                )
+                if projection.concepts:
+                    rendered_context = (
+                        f"{projection.render()}\n\n"
+                        f"{self._render_projection_basis(projection, seeds)}"
+                    )
+
+        problem_workspace = prepare_problem_workspace(
+            self.external_problem_root(),
+            agent=clean_agent,
+            problem=problem_scope,
+        )
+
+        external_prompt = self._build_external_agent_prompt(
+            agent=clean_agent,
+            prompt=clean_prompt,
+            problem=problem_scope,
+            rendered_context=rendered_context,
+            workspace=problem_workspace.workspace,
+            source_workspace=source_workspace,
+        )
+        write_problem_materials(
+            problem_workspace,
+            agent=clean_agent,
+            problem=problem_scope,
+            prompt=external_prompt,
+            rendered_context=rendered_context,
+            source_workspace=source_workspace,
+            session_id=self.session.id,
+        )
+        append_problem_interaction(
+            problem_workspace,
+            role="pkm",
+            content=external_prompt,
+        )
+        try:
+            reply = run_external_agent(
+                clean_agent,
+                external_prompt,
+                workspace=problem_workspace.workspace,
+                model=model,
+            )
+        except ExternalAgentError as exc:
+            append_problem_interaction(
+                problem_workspace,
+                role="error",
+                content=str(exc),
+            )
+            return f"External agent '{clean_agent}' failed: {exc}"
+        append_problem_interaction(
+            problem_workspace,
+            role=clean_agent,
+            content=reply,
+        )
+        self.session.metadata["last_external_consultation"] = {
+            "agent": clean_agent,
+            "problem_id": problem_workspace.problem_id,
+            "workspace": str(problem_workspace.workspace),
+            "source_workspace": str(source_workspace),
+            "problem": problem_scope,
+            "model": model,
+            "used_world0_context": use_world0_context,
+            "seed_concepts": seeds,
+        }
+        self.save_session()
+        return "\n".join([
+            f"## {clean_agent.title()} Response",
+            "",
+            f"Problem workspace: {problem_workspace.workspace}",
+            "",
+            reply.strip(),
+        ])
 
     def status(self) -> str:
         """Overview of the concept world."""
@@ -1727,6 +2023,16 @@ class PKMAgent:
                 return "Usage: /search <query>"
             return self.search(arg)
 
+        if command == "/claude":
+            if not arg:
+                return "Usage: /claude <prompt>"
+            return self.consult_external_agent("claude", arg)
+
+        if command == "/codex":
+            if not arg:
+                return "Usage: /codex <prompt>"
+            return self.consult_external_agent("codex", arg)
+
         if command == "/web-search":
             if not arg:
                 return "Usage: /web-search <query>"
@@ -1748,7 +2054,7 @@ class PKMAgent:
         if not arg:
             return (
                 "Usage: /connect <source> <target> [relation_type]\n"
-                f"Types: {', '.join(rt.value for rt in RelationType)}"
+                f"Types: {', '.join(semantic_relation_names())}"
             )
 
         parts = arg.split()
@@ -1757,7 +2063,7 @@ class PKMAgent:
 
         source = parts[0]
         target = parts[1]
-        rel_type = parts[2] if len(parts) > 2 else "related_to"
+        rel_type = parts[2] if len(parts) > 2 else "parallel"
 
         return self.connect(source, target, rel_type)
 
@@ -1967,9 +2273,14 @@ class PKMAgent:
             tgt = concept_names.get(relation.target_id, relation.target_id)
             relation_items.append({
                 "id": relation.id,
-                "label": f"{src} -> {relation.relation_type.value} -> {tgt}",
+                "label": f"{src} -> {relation.semantic_relation} -> {tgt}",
                 "source_id": relation.source_id,
                 "target_id": relation.target_id,
+                "relation_type": relation.relation_type.value,
+                "semantic_relation": relation.semantic_relation,
+                "structural_strength": relation.structural_strength,
+                "propagation_strength": relation.propagation_strength,
+                "probability": relation.probability,
             })
         self.session.metadata["last_projection"] = {
             "query": query,
@@ -1994,15 +2305,31 @@ class PKMAgent:
         target = self._world.concepts.resolve(target_name)
         if not source or not target:
             return None
-        try:
-            rel_type = RelationType(rel_type_name.strip().lower())
-        except ValueError:
-            rel_type = None
-        relation = self._world.relations.find_between(
-            source.id,
-            target.id,
-            rel_type,
+        semantic_relation = (
+            normalize_semantic_relation(rel_type_name.strip().lower())
+            if is_known_relation_type(rel_type_name)
+            else ""
         )
+        rel_type = (
+            semantic_relation_spec(semantic_relation).axis
+            if semantic_relation
+            else None
+        )
+        relation = None
+        if semantic_relation:
+            for candidate in self._world.relations.find_any_between(
+                source.id,
+                target.id,
+            ):
+                if candidate.semantic_relation == semantic_relation:
+                    relation = candidate
+                    break
+        if relation is None:
+            relation = self._world.relations.find_between(
+                source.id,
+                target.id,
+                rel_type,
+            )
         if relation is None and rel_type is not None:
             relation = self._world.relations.find_between(source.id, target.id, None)
         return relation.id if relation else None
@@ -2114,11 +2441,12 @@ class PKMAgent:
             "recommended_sources": fallback_sources,
         }
 
-        if not self._llm:
+        search_llm = self._operation_llm("search_brief")
+        if not search_llm:
             return fallback
 
         try:
-            raw = self._llm.complete_json(
+            raw = search_llm.complete_json(
                 self._prompt_with_language("agent.search_brief.system"),
                 (
                     f"Query: {query}\n"
@@ -2179,7 +2507,10 @@ class PKMAgent:
         }
 
         try:
-            raw = self._llm.complete_json(
+            source_llm = self._operation_llm("research_source")
+            if source_llm is None:
+                return fallback
+            raw = source_llm.complete_json(
                 self._prompt_with_language("agent.research_source.system"),
                 (
                     f"Topic: {topic}\n"
@@ -2232,7 +2563,10 @@ class PKMAgent:
             )
 
         try:
-            raw = self._llm.complete_json(
+            report_llm = self._operation_llm("research_report")
+            if report_llm is None:
+                return fallback
+            raw = report_llm.complete_json(
                 self._prompt_with_language("agent.research_report.system"),
                 (
                     f"Topic: {topic}\n"
@@ -2253,7 +2587,8 @@ class PKMAgent:
     def _prepare_session_for_agentic(self) -> None:
         """Compact older session context before agentic runs."""
         session = self._ensure_session()
-        if not self._llm:
+        compaction_llm = self._operation_llm("session_compaction")
+        if not compaction_llm:
             return
         if not session.needs_compaction():
             return
@@ -2271,7 +2606,7 @@ class PKMAgent:
         fallback = self._fallback_session_compaction(session, covered_messages)
 
         try:
-            raw = self._llm.complete_json(
+            raw = compaction_llm.complete_json(
                 self._prompt_with_language("agent.session_compaction.system"),
                 transcript,
             )
@@ -2351,9 +2686,10 @@ class PKMAgent:
 
         Uses LLM if available, falls back to keyword extraction.
         """
-        if self._llm:
+        seed_llm = self._operation_llm("query_extract")
+        if seed_llm:
             try:
-                raw = self._llm.complete_json(
+                raw = seed_llm.complete_json(
                     self._prompts.render("agent.query_extract.system"),
                     query,
                 )
@@ -2418,7 +2754,7 @@ class PKMAgent:
                 src = concept_names.get(rel.source_id, rel.source_id)
                 tgt = concept_names.get(rel.target_id, rel.target_id)
                 key_relations.append(
-                    f"{src} → {rel.relation_type.value} → {tgt}"
+                    f"{src} → {rel.semantic_relation} [{rel.relation_type.value}] → {tgt}"
                 )
             lines.append(f"- Key relation paths: {'; '.join(key_relations)}")
 
@@ -2434,6 +2770,43 @@ class PKMAgent:
         return f"{prompt}\n\n{self._language_instruction()}"
 
     @staticmethod
+    def _build_external_agent_prompt(
+        *,
+        agent: str,
+        prompt: str,
+        problem: str,
+        rendered_context: str,
+        workspace: str | Path,
+        source_workspace: str | Path,
+    ) -> str:
+        lines = [
+            f"You are {agent} acting as a read-only external consultant for World 0 PKM.",
+            "Do not modify files, apply patches, or claim to have executed changes.",
+            "Use the provided cognitive context when it is relevant, and say when it is insufficient.",
+            f"Workspace: {Path(workspace).expanduser().resolve()}",
+            f"Source workspace reference: {Path(source_workspace).expanduser().resolve()}",
+            "Read the local files `problem.md`, `world0_context.md`, and `interaction_log.md` in the current workspace before answering.",
+            "Treat the current workspace as the only writable/operational space for this problem.",
+            "",
+            "## Problem Space",
+            problem,
+            "",
+        ]
+        if rendered_context:
+            lines.extend([
+                "## World 0 Cognitive Context",
+                rendered_context,
+                "",
+            ])
+        lines.extend([
+            "## User Request",
+            prompt,
+            "",
+            "Respond with findings, recommendations, and uncertainties only.",
+        ])
+        return "\n".join(lines)
+
+    @staticmethod
     def _help_text() -> str:
         return """\
 ## World 0 PKM Agent — Commands
@@ -2445,14 +2818,20 @@ class PKMAgent:
 | `/explore <concept>` | Deep dive into a concept |
 | `/connect <a> <b> [type]` | Create a relation |
 | `/search <query>` | Search concepts by name |
+| `/claude <prompt>` | Consult system Claude Code in read-only mode |
+| `/codex <prompt>` | Consult system Codex in read-only mode |
 | `/reflect` | Run consolidation (decay/promote/prune) |
 | `/status` | Show world overview |
 | `/viz` | Generate interactive visualization |
 | `/help` | Show this help |
 | `/quit` | Exit |
 
-**Relation types:** contains, part_of, depends_on, supports, \
-contrasts, similar_to, activates, precedes, derived_from, related_to
+**Relation labels:** membership, inclusion, functional_map, co_creation,
+mutual_reinforcement, future_coupling, enables, dependence, disjointness,
+complement, exclusion, incompatible_ontology, violates_constraint, conflict,
+instability, adversarial_prediction, equivalence, quotient_map,
+approximate_equivalence, overlap, similarity_kernel, recursive_co_modeling,
+persistent_attention, co_membership, generic_relation
 
 **Tips:**
 - Just type naturally to ask a question (no /ask needed)

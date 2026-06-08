@@ -21,7 +21,7 @@ from world0.agents.provider import (
 )
 from world0.agents.state import AgentLifecycleStatus
 from world0.llm.base import LLMProvider
-from world0.schemas.relation import RelationType
+from world0.schemas.relation import RelationType, semantic_relation_names
 
 # Lazy import — FastAPI is an optional dependency
 _app = None
@@ -52,7 +52,7 @@ class ResearchRequest(BaseModel):
 class ConnectRequest(BaseModel):
     source: str
     target: str
-    relation_type: str = "related_to"
+    relation_type: str = "generic_relation"
 
 
 class SearchRequest(BaseModel):
@@ -74,6 +74,10 @@ class SettingsRequest(BaseModel):
     api_version: str = "2024-10-21"
     auto_sediment_dialogue: bool = True
     dialogue_sediment_interval: int = 1
+
+
+class PromptOverrideRequest(BaseModel):
+    template: str
 
 
 class SessionResumeRequest(BaseModel):
@@ -207,6 +211,57 @@ def create_app(
                 for s in registry.list()
             ],
             "active_space_id": active.id if active else None,
+        }
+
+    def _prompt_config_paths() -> list[Path]:
+        from world0.prompts import prompt_config_path
+
+        root = _agent._root_path
+        paths = [prompt_config_path(root)]
+        if _agent._store_path != root:
+            paths.append(prompt_config_path(_agent._store_path))
+        return paths
+
+    def _prompt_config_target() -> Path:
+        from world0.prompts import prompt_config_path
+
+        return prompt_config_path(_agent._store_path)
+
+    def _reload_prompt_registry() -> None:
+        """Reload prompt config and rewire prompt consumers in the agent."""
+        from world0.prompts import load_prompt_registry
+
+        registry = load_prompt_registry(*_prompt_config_paths())
+        _agent._prompts = registry
+        _agent.world._prompts = registry
+        extractor = getattr(_agent.world, "_extractor", None)
+        if extractor is not None:
+            extractor._prompts = registry
+        _agent._skill_registry = None
+        _agent._skill_executor = None
+
+    def _target_prompt_overrides() -> dict[str, Any]:
+        from world0.prompts import load_prompt_registry
+
+        return load_prompt_registry(_prompt_config_target()).overrides()
+
+    def _prompt_payload(prompt_id: str) -> dict[str, Any]:
+        active_overrides = _target_prompt_overrides()
+        spec = _agent.prompts.get(prompt_id)
+        base = _agent.prompts.default(prompt_id)
+        active = active_overrides.get(prompt_id)
+        return {
+            **spec.to_dict(),
+            "default_template": base.template,
+            "is_overridden": _agent.prompts.is_overridden(prompt_id),
+            "has_active_override": active is not None,
+            "active_override_template": active.template if active else "",
+        }
+
+    def _prompt_list_payload() -> dict[str, Any]:
+        return {
+            "config_path": str(_prompt_config_target()),
+            "prompts": [_prompt_payload(spec.id) for spec in _agent.prompts.all()],
         }
 
     def _rebuild_agent(target_space_id: str) -> None:
@@ -411,6 +466,8 @@ def create_app(
             "results": [
                 {
                     "id": c.id,
+                    "representation": c.representation(),
+                    "feature": c.representation_feature(),
                     "name": c.name,
                     "description": c.description,
                     "maturity": c.maturity.value,
@@ -457,6 +514,8 @@ def create_app(
             "top_concepts": [
                 {
                     "id": c.id,
+                    "representation": c.representation(),
+                    "feature": c.representation_feature(),
                     "name": c.name,
                     "maturity": c.maturity.value,
                     "confidence": round(c.confidence, 3),
@@ -474,6 +533,8 @@ def create_app(
             "concepts": [
                 {
                     "id": c.id,
+                    "representation": c.representation(),
+                    "feature": c.representation_feature(),
                     "name": c.name,
                     "maturity": c.maturity.value,
                     "confidence": round(c.confidence, 3),
@@ -500,12 +561,15 @@ def create_app(
         concepts = _agent.world.concepts.all()
         relations = _agent.world.relations.all()
         id_to_name = {c.id: c.name for c in concepts}
+        id_to_representation = {c.id: c.representation() for c in concepts}
 
         nodes = []
         for c in concepts:
             connections = len(_agent.world.relations.for_concept(c.id))
             nodes.append({
                 "id": c.id,
+                "representation": c.representation(),
+                "feature": c.representation_feature(),
                 "name": c.name,
                 "confidence": round(c.confidence, 4),
                 "maturity": c.maturity.value,
@@ -521,17 +585,26 @@ def create_app(
                     "source": r.source_id,
                     "target": r.target_id,
                     "relation_type": r.relation_type.value,
+                    "semantic_relation": r.semantic_relation,
+                    "structural_strength": round(r.structural_strength, 4),
+                    "propagation_strength": round(r.propagation_strength, 4),
                     "weight": round(r.weight, 4),
+                    "probability": round(r.probability, 4),
                     "reinforcement_count": r.reinforcement_count,
                     "source_name": id_to_name[r.source_id],
                     "target_name": id_to_name[r.target_id],
+                    "source_representation": id_to_representation[r.source_id],
+                    "target_representation": id_to_representation[r.target_id],
                 })
 
         return {"nodes": nodes, "edges": edges}
 
     @app.get("/api/relation_types")
     async def relation_types():
-        return {"types": [rt.value for rt in RelationType]}
+        return {
+            "types": semantic_relation_names(),
+            "axes": [rt.value for rt in RelationType],
+        }
 
     # ── Agentic endpoints ─────────────────────────────────────────
 
@@ -604,11 +677,21 @@ def create_app(
             ),
             "providers": [
                 {"id": "none", "label": "None"},
+                {"id": "claude", "label": "Claude (Anthropic)"},
+                {"id": "codex", "label": "Codex (OpenAI)"},
                 {"id": "openai", "label": "OpenAI"},
                 {"id": "anthropic", "label": "Anthropic"},
                 {"id": "azure-openai", "label": "Azure OpenAI"},
             ],
             "provider_env": {
+                "codex": {
+                    "api_key_env": "OPENAI_API_KEY",
+                    "available": bool(os.environ.get("OPENAI_API_KEY")),
+                },
+                "claude": {
+                    "api_key_env": "ANTHROPIC_API_KEY",
+                    "available": bool(os.environ.get("ANTHROPIC_API_KEY")),
+                },
                 "openai": {
                     "api_key_env": "OPENAI_API_KEY",
                     "available": bool(os.environ.get("OPENAI_API_KEY")),
@@ -631,10 +714,16 @@ def create_app(
                 {"id": "en", "label": "English"},
             ],
             "suggested_models": {
+                "codex": suggested_models_for_provider("codex"),
+                "claude": suggested_models_for_provider("claude"),
                 "openai": suggested_models_for_provider("openai"),
                 "anthropic": suggested_models_for_provider("anthropic"),
                 "azure-openai": suggested_models_for_provider("azure-openai"),
             },
+            "external_agents": _agent.available_external_agents(),
+            "last_external_consultation": _agent.session.metadata.get(
+                "last_external_consultation"
+            ),
             "current_session": {
                 "id": current_session.id,
                 "title": current_session.title or "Untitled",
@@ -695,6 +784,78 @@ def create_app(
                 {"success": False, "error": str(e)},
                 status_code=400,
             )
+
+    # ── Prompt configuration endpoints ─────────────────────────────
+
+    @app.get("/api/prompts")
+    async def list_prompts():
+        return _prompt_list_payload()
+
+    @app.get("/api/prompts/export")
+    async def export_prompts():
+        from world0.prompts import export_prompt_config
+
+        return export_prompt_config(_agent.prompts)
+
+    @app.get("/api/prompts/{prompt_id}")
+    async def get_prompt(prompt_id: str):
+        try:
+            return {"prompt": _prompt_payload(prompt_id)}
+        except KeyError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=404)
+
+    @app.post("/api/prompts/{prompt_id}")
+    async def update_prompt(prompt_id: str, req: PromptOverrideRequest):
+        from world0.prompts import (
+            PromptSpec,
+            load_prompt_registry,
+            save_prompt_overrides,
+        )
+
+        template = req.template
+        if not template.strip():
+            return JSONResponse(
+                {"success": False, "error": "prompt template must not be empty"},
+                status_code=400,
+            )
+
+        target = _prompt_config_target()
+        target_registry = load_prompt_registry(target)
+        try:
+            base = target_registry.default(prompt_id)
+        except KeyError as exc:
+            return JSONResponse({"success": False, "error": str(exc)}, status_code=404)
+
+        data = base.to_dict(include_id=False)
+        data["template"] = template
+        data["variables"] = []
+        target_registry.set_override(PromptSpec.from_dict(prompt_id, data))
+        save_prompt_overrides(target, target_registry)
+        _reload_prompt_registry()
+        return {
+            "success": True,
+            "config_path": str(target),
+            "prompt": _prompt_payload(prompt_id),
+        }
+
+    @app.post("/api/prompts/{prompt_id}/reset")
+    async def reset_prompt(prompt_id: str):
+        from world0.prompts import load_prompt_registry, save_prompt_overrides
+
+        target = _prompt_config_target()
+        target_registry = load_prompt_registry(target)
+        try:
+            target_registry.default(prompt_id)
+        except KeyError as exc:
+            return JSONResponse({"success": False, "error": str(exc)}, status_code=404)
+        target_registry.clear_override(prompt_id)
+        save_prompt_overrides(target, target_registry)
+        _reload_prompt_registry()
+        return {
+            "success": True,
+            "config_path": str(target),
+            "prompt": _prompt_payload(prompt_id),
+        }
 
     # ── Session endpoints ─────────────────────────────────────────
 
@@ -1600,7 +1761,8 @@ body {
   font-weight: 700;
 }
 .field-group input,
-.field-group select {
+.field-group select,
+.field-group textarea {
   width: 100%;
   padding: 8px 10px;
   border-radius: var(--radius-md);
@@ -1610,14 +1772,77 @@ body {
   font-size: 12px;
   outline: none;
 }
+.field-group textarea {
+  min-height: 180px;
+  resize: vertical;
+  line-height: 1.5;
+  font-family: "SF Mono", Menlo, monospace;
+}
 .field-group input:focus,
-.field-group select:focus {
+.field-group select:focus,
+.field-group textarea:focus {
   border-color: var(--mode-color);
 }
 .field-help {
   color: var(--text-muted);
   font-size: 11px;
   line-height: 1.45;
+}
+.prompt-settings {
+  display: grid;
+  grid-template-columns: minmax(180px, 240px) 1fr;
+  gap: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+.prompt-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.prompt-list select {
+  min-height: 220px;
+}
+.prompt-editor {
+  display: grid;
+  gap: 8px;
+}
+.prompt-meta-row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+.prompt-badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 22px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+}
+.prompt-badge.active {
+  border-color: var(--orange);
+  color: var(--orange);
+}
+.prompt-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+@media (max-width: 760px) {
+  .prompt-settings {
+    grid-template-columns: 1fr;
+  }
+  .prompt-list select {
+    min-height: 120px;
+  }
 }
 
 /* ── Graph panel ── */
@@ -2137,6 +2362,21 @@ const I18N = {
     autoSedimentDialogueHelp: "When enabled, chat turns are periodically extracted into concepts and relations.",
     dialogueSedimentInterval: "Dialogue sediment interval",
     dialogueSedimentIntervalHelp: "Extract once every 1-20 turns.",
+    promptRegistry: "Prompt Registry",
+    promptSelect: "Prompt",
+    promptTemplate: "Override Template",
+    promptDefault: "Default",
+    promptEffective: "Effective",
+    promptOverridden: "Overridden",
+    promptActiveOverride: "Active Space Override",
+    savePrompt: "Save Override",
+    resetPrompt: "Reset",
+    exportPrompts: "Export JSON",
+    promptSaved: "Prompt override saved: {id}",
+    promptReset: "Prompt override reset: {id}",
+    promptExported: "Prompt registry exported.",
+    promptActionFailed: "Prompt update failed: {message}",
+    noPromptsAvailable: "No configurable prompts.",
     saveSettings: "Save Settings",
     close: "Close",
     sessionsTitle: "Recent Sessions",
@@ -2258,6 +2498,21 @@ const I18N = {
     autoSedimentDialogueHelp: "开启后，系统会按间隔把对话轮次抽取为概念与关系。",
     dialogueSedimentInterval: "对话沉淀间隔",
     dialogueSedimentIntervalHelp: "每 1-20 轮对话执行一次抽取。",
+    promptRegistry: "Prompt Registry",
+    promptSelect: "Prompt",
+    promptTemplate: "覆盖模板",
+    promptDefault: "默认",
+    promptEffective: "当前生效",
+    promptOverridden: "已覆盖",
+    promptActiveOverride: "当前空间覆盖",
+    savePrompt: "保存覆盖",
+    resetPrompt: "重置",
+    exportPrompts: "导出 JSON",
+    promptSaved: "Prompt 覆盖已保存：{id}",
+    promptReset: "Prompt 覆盖已重置：{id}",
+    promptExported: "Prompt registry 已导出。",
+    promptActionFailed: "Prompt 更新失败：{message}",
+    noPromptsAvailable: "当前没有可配置 prompt。",
     saveSettings: "保存设置",
     close: "关闭",
     sessionsTitle: "最近会话",
@@ -2323,10 +2578,9 @@ const MATURITY_COLORS = {
 };
 
 const RELATION_COLORS = {
-  depends_on: "#f85149", contains: "#d29922", part_of: "#d29922",
-  supports: "#3fb950", activates: "#58a6ff", precedes: "#bc8cff",
-  derived_from: "#f778ba", similar_to: "#39d2c0", contrasts: "#d29922",
-  related_to: "#484f58",
+  positive: "#3fb950",
+  negative: "#f85149",
+  parallel: "#39d2c0",
 };
 
 // ── Helpers ──
@@ -2439,11 +2693,16 @@ function fieldValue(id) {
   return el ? el.value.trim() : "";
 }
 
+function rawFieldValue(id) {
+  const el = document.getElementById(id);
+  return el ? el.value : "";
+}
+
 function renderModeContext() {
   const mode = $("#mode-select").value;
   const host = $("#mode-context");
   const skill = selectedSkill();
-  const relationOptions = (relationTypes.length ? relationTypes : ["related_to"])
+  const relationOptions = (relationTypes.length ? relationTypes : ["parallel"])
     .map(type => `<option value="${escapeHtml(type)}">${escapeHtml(type)}</option>`)
     .join("");
 
@@ -2517,7 +2776,7 @@ function renderModeContext() {
           <input id="explore-concept" placeholder="e.g. PostgreSQL" />
         </div>
       </div>
-      <div class="field-help">${currentLanguage === "zh" ? "检查一个概念在世界中的角色：它依赖什么、支撑什么、与什么形成边界。" : "Inspect how a concept behaves in the world: what it depends on, supports, and borders."}</div>
+      <div class="field-help">${currentLanguage === "zh" ? "检查一个概念在世界中的轴向关系：吸引、排斥或共振。" : "Inspect a concept's axis links: attraction, repulsion, or resonance."}</div>
     `;
     return;
   }
@@ -2732,7 +2991,7 @@ function parseConnect(text) {
     return {
       source: sourceField,
       target: targetField,
-      relation_type: relationField || "related_to",
+      relation_type: relationField || "generic_relation",
     };
   }
 
@@ -2741,7 +3000,7 @@ function parseConnect(text) {
     return {
       source: arrowMatch[1].trim(),
       target: arrowMatch[2].trim(),
-      relation_type: arrowMatch[3] || "related_to",
+      relation_type: arrowMatch[3] || "generic_relation",
     };
   }
   const parts = text.split(/\s+/);
@@ -2749,7 +3008,7 @@ function parseConnect(text) {
     return {
       source: parts[0],
       target: parts[1],
-      relation_type: parts[2] || "related_to",
+      relation_type: parts[2] || "generic_relation",
     };
   }
   return {
@@ -3191,11 +3450,153 @@ function modelOptionsForProvider(provider, selectedModel = "") {
   return options.join("");
 }
 
+function buildPromptSettingsPanel(promptsData) {
+  const prompts = promptsData?.prompts || [];
+  if (!prompts.length) {
+    return `<div class="mode-note">${t("noPromptsAvailable")}</div>`;
+  }
+  const options = prompts.map(prompt => `
+    <option value="${escapeHtml(prompt.id)}">
+      ${escapeHtml(prompt.id)}${prompt.is_overridden ? " *" : ""}
+    </option>
+  `).join("");
+  return `
+    <div class="prompt-settings">
+      <div class="prompt-list field-group">
+        <label for="settings-prompt-select">${t("promptSelect")}</label>
+        <select id="settings-prompt-select" size="10" onchange="refreshPromptEditor()">
+          ${options}
+        </select>
+        <div class="field-help">${escapeHtml(promptsData?.config_path || "")}</div>
+        <button type="button" class="modal-close" onclick="exportPrompts()">${t("exportPrompts")}</button>
+      </div>
+      <div class="prompt-editor">
+        <div class="prompt-meta-row" id="settings-prompt-meta"></div>
+        <div class="field-group">
+          <label for="settings-prompt-template">${t("promptTemplate")}</label>
+          <textarea id="settings-prompt-template" spellcheck="false"></textarea>
+        </div>
+        <details>
+          <summary style="color:var(--text-secondary);cursor:pointer">${t("promptDefault")}</summary>
+          <pre id="settings-prompt-default" style="white-space:pre-wrap;margin-top:8px;color:var(--text-secondary);font-size:11px;"></pre>
+        </details>
+        <div class="prompt-actions">
+          <button type="button" class="modal-close" onclick="savePromptOverride()">${t("savePrompt")}</button>
+          <button type="button" class="modal-close" onclick="resetPromptOverride()">${t("resetPrompt")}</button>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function selectedPromptRecord() {
+  const selectedId = fieldValue("settings-prompt-select");
+  const prompts = window._promptSettings?.prompts || [];
+  return prompts.find(prompt => prompt.id === selectedId) || prompts[0] || null;
+}
+
+function refreshPromptEditor() {
+  const prompt = selectedPromptRecord();
+  const select = document.getElementById("settings-prompt-select");
+  const meta = document.getElementById("settings-prompt-meta");
+  const editor = document.getElementById("settings-prompt-template");
+  const defaultBox = document.getElementById("settings-prompt-default");
+  if (!prompt || !select || !meta || !editor || !defaultBox) return;
+  if (!select.value) select.value = prompt.id;
+  editor.value = prompt.template || "";
+  defaultBox.textContent = prompt.default_template || "";
+  const variables = (prompt.variables || []).join(", ") || "—";
+  const badges = [
+    `<span class="prompt-badge">${escapeHtml(prompt.output || "text")}</span>`,
+    `<span class="prompt-badge">${escapeHtml(variables)}</span>`,
+  ];
+  if (prompt.is_overridden) {
+    badges.push(`<span class="prompt-badge active">${t("promptOverridden")}</span>`);
+  }
+  if (prompt.has_active_override) {
+    badges.push(`<span class="prompt-badge active">${t("promptActiveOverride")}</span>`);
+  }
+  meta.innerHTML = `
+    <strong style="color:var(--text-primary)">${escapeHtml(prompt.id)}</strong>
+    ${badges.join("")}
+    <span style="color:var(--text-secondary);font-size:12px">${escapeHtml(prompt.description || "")}</span>
+  `;
+}
+
+function updatePromptRecord(prompt) {
+  if (!window._promptSettings || !prompt) return;
+  const prompts = window._promptSettings.prompts || [];
+  const index = prompts.findIndex(item => item.id === prompt.id);
+  if (index >= 0) {
+    prompts[index] = prompt;
+  } else {
+    prompts.push(prompt);
+  }
+  const select = document.getElementById("settings-prompt-select");
+  if (select) {
+    [...select.options].forEach(option => {
+      if (option.value === prompt.id) {
+        option.textContent = `${prompt.id}${prompt.is_overridden ? " *" : ""}`;
+      }
+    });
+  }
+}
+
+async function savePromptOverride() {
+  const prompt = selectedPromptRecord();
+  if (!prompt) return;
+  try {
+    const data = await apiCall(`/api/prompts/${encodeURIComponent(prompt.id)}`, {
+      method: "POST",
+      body: JSON.stringify({ template: rawFieldValue("settings-prompt-template") }),
+    });
+    updatePromptRecord(data.prompt);
+    refreshPromptEditor();
+    addMessage("system", t("promptSaved", { id: prompt.id }));
+  } catch (err) {
+    addMessage("error", t("promptActionFailed", { message: err.message }));
+  }
+}
+
+async function resetPromptOverride() {
+  const prompt = selectedPromptRecord();
+  if (!prompt) return;
+  try {
+    const data = await apiCall(`/api/prompts/${encodeURIComponent(prompt.id)}/reset`, {
+      method: "POST",
+    });
+    updatePromptRecord(data.prompt);
+    refreshPromptEditor();
+    addMessage("system", t("promptReset", { id: prompt.id }));
+  } catch (err) {
+    addMessage("error", t("promptActionFailed", { message: err.message }));
+  }
+}
+
+async function exportPrompts() {
+  try {
+    const data = await apiCall("/api/prompts/export");
+    const blob = new Blob([JSON.stringify(data, null, 2) + "\n"], {
+      type: "application/json",
+    });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = "world0-prompts.json";
+    link.click();
+    URL.revokeObjectURL(url);
+    addMessage("system", t("promptExported"));
+  } catch (err) {
+    addMessage("error", t("promptActionFailed", { message: err.message }));
+  }
+}
+
 async function showSettingsModal() {
   try {
-    const [meta, spacesData] = await Promise.all([
+    const [meta, spacesData, promptsData] = await Promise.all([
       apiCall("/api/agent/status"),
       apiCall("/api/spaces").catch(() => ({ spaces: [], active_space_id: null })),
+      apiCall("/api/prompts").catch(() => ({ prompts: [] })),
     ]);
     const settings = meta.settings || {};
     const providerEnv = meta.provider_env || {};
@@ -3254,6 +3655,7 @@ async function showSettingsModal() {
     );
     const autoSedimentChecked = settings.auto_sediment_dialogue !== false ? "checked" : "";
     const sedimentInterval = Number(settings.dialogue_sediment_interval || 1);
+    const promptPanel = buildPromptSettingsPanel(promptsData);
     const body = `
       <div class="mode-fields">
         ${spacesPanel}
@@ -3271,7 +3673,7 @@ async function showSettingsModal() {
         </div>
         <div class="field-group">
           <label for="settings-model">${t("customModel")}</label>
-          <input id="settings-model" value="" placeholder="gpt-5.4 / claude-sonnet-4-6 / your deployment name" />
+          <input id="settings-model" value="" placeholder="codex / gpt-5.4 / claude / claude-sonnet-4-6 / your deployment name" />
           <div class="field-help">${currentLanguage === "zh" ? `当前生效模型：${escapeHtml(settings.model || "") || "—"}` : `Current effective model: ${escapeHtml(settings.model || "") || "—"}`}</div>
         </div>
         <div class="field-group">
@@ -3316,6 +3718,12 @@ async function showSettingsModal() {
           <div class="field-help">${t("dialogueSedimentIntervalHelp")}</div>
         </div>
       </div>
+      <div style="margin-top:16px">
+        <div class="field-group">
+          <label>${t("promptRegistry")}</label>
+        </div>
+        ${promptPanel}
+      </div>
       <div class="field-help" id="settings-model-hint">
         ${suggested ? `Suggested: ${escapeHtml(suggested)}` : ""}
       </div>
@@ -3324,8 +3732,10 @@ async function showSettingsModal() {
       </div>
     `;
     showModal("settings-modal", t("settingsTitle"), body);
+    window._promptSettings = promptsData;
     refreshSettingsModelHint();
     refreshDialogueSedimentFields();
+    refreshPromptEditor();
   } catch (err) {
     addMessage("error", t("updateSettingsFailed", { message: err.message }));
   }
@@ -3583,9 +3993,10 @@ async function showConceptCard(name) {
     const relations = (c.relations || []).map(rel => `
       <div class="concept-relation-row">
         <span>${rel.direction === "outgoing" ? "→" : "←"}</span>
-        <strong>${escapeHtml(rel.relation_type)}</strong>
+        <strong>${escapeHtml(rel.semantic_relation || rel.relation_type)}</strong>
+        <span style="color:var(--text-muted)">[${escapeHtml(rel.relation_type)}]</span>
         <span>${escapeHtml(rel.other_name)}</span>
-        <span class="weight">w ${Number(rel.weight || 0).toFixed(2)}</span>
+        <span class="weight">p ${Number(rel.propagation_strength || rel.weight || 0).toFixed(2)}</span>
       </div>
     `).join("") || `<div class="empty">${t("noRelations")}</div>`;
 
@@ -3809,7 +4220,7 @@ function renderGraph(data) {
   const linkLabel = g.append("g").selectAll("text")
     .data(data.edges).join("text")
     .attr("class", "graph-link-label")
-    .text(d => d.relation_type);
+    .text(d => d.semantic_relation || d.relation_type);
 
   const node = g.append("g").selectAll("g")
     .data(data.nodes).join("g")

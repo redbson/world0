@@ -24,13 +24,27 @@ from typing import Any
 
 from world0.llm.base import LLMError, LLMProvider
 
+# ── Provider aliases ─────────────────────────────────────────────────
+# Logical agent names map onto canonical provider ids, so callers can say
+# "claude"/"codex" (the external coding agents) and resolve to the
+# underlying LLM provider.
+
+PROVIDER_ALIASES: dict[str, str] = {
+    "claude": "anthropic",
+    "codex": "openai",
+}
+
 # ── Model aliases (claw-code style) ─────────────────────────────────
 
 MODEL_ALIASES: dict[str, str] = {
+    "claude": "claude-sonnet-4-6",
     "opus": "claude-opus-4-6",
     "sonnet": "claude-sonnet-4-6",
     "haiku": "claude-haiku-4-5-20251001",
     "claude-haiku-4-5": "claude-haiku-4-5-20251001",
+    # OpenAI's latest-model guide states gpt-5.4 is the newest model
+    # powering Codex and Codex CLI; use that as the generic Codex alias.
+    "codex": "gpt-5.4",
     "gpt5": "gpt-5.4",
     "gpt5-pro": "gpt-5.4-pro",
     "gpt5-mini": "gpt-5.4-mini",
@@ -75,14 +89,22 @@ PROVIDER_MODEL_CATALOG: dict[str, dict[str, Any]] = {
 }
 
 
+def normalize_provider_name(provider: str) -> str:
+    """Normalize provider aliases to canonical provider ids."""
+    clean = provider.strip().lower()
+    return PROVIDER_ALIASES.get(clean, clean)
+
+
 def default_model_for_provider(provider: str) -> str:
     """Return the default model name for a provider."""
-    return PROVIDER_MODEL_CATALOG.get(provider, {}).get("default", "")
+    canonical = normalize_provider_name(provider)
+    return PROVIDER_MODEL_CATALOG.get(canonical, {}).get("default", "")
 
 
 def suggested_models_for_provider(provider: str) -> list[str]:
     """Return suggested model names for a provider."""
-    return list(PROVIDER_MODEL_CATALOG.get(provider, {}).get("models", []))
+    canonical = normalize_provider_name(provider)
+    return list(PROVIDER_MODEL_CATALOG.get(canonical, {}).get("models", []))
 
 # ── Provider detection ───────────────────────────────────────────────
 
@@ -96,7 +118,7 @@ def detect_provider(model: str) -> tuple[str, str]:
     # Explicit prefix routing (highest priority, like claw-code)
     if "/" in model:
         provider, name = model.split("/", 1)
-        return provider.lower(), name
+        return normalize_provider_name(provider), name
 
     # Alias resolution
     resolved = MODEL_ALIASES.get(model.lower(), model)
@@ -133,6 +155,7 @@ def create_provider(
 ) -> LLMProvider:
     """Create an LLM provider with auto-detection from model name."""
     provider_name, clean_model = detect_provider(model)
+    provider_name = normalize_provider_name(provider_name)
 
     if provider_name == "anthropic":
         from world0.llm.anthropic import AnthropicProvider

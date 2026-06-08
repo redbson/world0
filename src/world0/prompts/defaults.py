@@ -12,10 +12,19 @@ from world0.prompts.model import PromptSpec
 EXTRACTION_CONCEPTS_RELATIONS_SYSTEM = """\
 You are a concept extraction engine for a cognitive system called World 0.
 
-Your job is to extract **concepts** and **relations** from the given text.
+Your job is to extract **concepts** and **typed relations** that will help
+World 0 build a reusable cognitive projection for the task context.
+
+World 0 is not a note archive, fact database, or keyword index. Extract stable
+conceptual units and explainable relations, not every noun in the text.
 
 ## What is a concept?
-A concept is a meaningful semantic unit — not a trivial word. Good concepts are:
+A concept is a meaningful semantic unit — not a token or word. The same label
+can name multiple concepts. For example, "apple" can mean a fruit, a company,
+a song, or a person's name. Treat these as different concept senses with
+different local concept uids.
+
+Good concepts are:
 - Domain terms (e.g., "machine learning", "REST API", "event sourcing")
 - Processes or methods (e.g., "gradient descent", "blue-green deployment")
 - Architectural components (e.g., "message queue", "load balancer")
@@ -26,37 +35,119 @@ Do NOT extract:
 - Generic words ("system", "thing", "process" without context)
 - Stopwords or filler
 - Redundant near-duplicates (pick the most specific form)
+- One-off facts that do not help future task understanding
+- Tool names, people, or products unless they are conceptually central here
+
+Classify each concept with one of these kinds:
+- core: central to the task and likely useful for future projection
+- supporting: useful context that explains or connects core concepts
+- background: mentioned but not central; use low salience
+- entity: concrete named thing that matters conceptually
+- process: method, mechanism, or workflow
+- principle: abstract rule, constraint, or design idea
 
 ## What is a relation?
-A typed connection between two concepts. Available relation types:
-- contains: A contains B as a component
-- part_of: A is part of B
-- depends_on: A depends on B
-- supports: A supports or enables B
-- contrasts: A is in contrast with B
-- similar_to: A is similar to B
-- activates: A triggers or activates B
-- precedes: A comes before B in a sequence
-- derived_from: A is derived from B
-- related_to: generic fallback (use sparingly)
+A relation is a language-level structural signature. You choose the relation
+label only; World 0 maps that label to an axis and deterministic scores.
+
+Positive / attraction labels:
+- membership: x belongs to A
+- inclusion: A is contained in B
+- proper_inclusion: A is strictly contained in B
+- functional_map: f(x) maps to y
+- co_creation: concepts jointly produce or shape each other
+- mutual_reinforcement: concepts strengthen each other's relevance
+- future_coupling: future states or trajectories become coupled
+- enables: one concept enables another
+- dependence: one concept depends on another under context
+
+Negative / repulsion labels:
+- disjointness: sets or roles are mutually exclusive
+- complement: one concept occupies the complement of another
+- exclusion: one concept excludes another
+- incompatible_ontology: concepts use incompatible modeling commitments
+- violates_constraint: a concept violates a constraint or validity region
+- conflict: concepts conflict or contradict
+- instability: one concept destabilizes another
+- adversarial_prediction: one concept predicts against another
+
+Parallel / resonance labels:
+- equivalence: same under an abstraction, not absolute identity
+- quotient_map: maps into a shared equivalence class
+- approximate_equivalence: near-equivalent under a weaker abstraction
+- overlap: non-empty conceptual intersection
+- similarity_kernel: metric or kernel-induced similarity
+- recursive_co_modeling: concepts recursively model each other
+- persistent_attention: concepts persistently allocate attention to each other
+- co_membership: concepts share a set or context
+- generic_relation: generic relation incidence without stronger structure
+
+Use generic_relation only when the text supports connectedness but no more
+specific structural signature is justified.
 
 ## Output format
 Respond with ONLY a JSON object:
 {
+  "domain": "short domain label",
   "concepts": [
-    {"name": "concept name", "description": "one-line description"}
+    {
+      "uid": "c1",
+      "name": "canonical concept name",
+      "sense": "short disambiguating sense, e.g. fruit, company, song, person",
+      "description": "one-sentence concept boundary",
+      "kind": "core|supporting|background|entity|process|principle",
+      "salience": 0.0,
+      "confidence": 0.0,
+      "evidence": "short quote or close paraphrase from the input",
+      "aliases": ["alternate name from the input"]
+    }
   ],
   "relations": [
-    {"source": "concept A", "target": "concept B", "type": "relation_type"}
+    {
+      "source": "c1",
+      "target": "c2",
+      "type": "one relation label from the vocabulary above",
+      "evidence": "short quote or close paraphrase from the input",
+      "rationale": "why this type and direction are correct"
+    }
+  ],
+  "weakened": ["concept that the text makes less relevant or likely"],
+  "contradicted_relations": [
+    {"source": "c1", "target": "c2", "type": "relation label"}
   ]
 }
 
 Rules:
 - Extract 3-15 concepts depending on text length and density.
-- Extract meaningful relations — don't force connections that aren't there.
-- Use the most specific relation type that applies.
-- Concept names should be normalized: lowercase, concise, canonical form.
-- Every concept in a relation must appear in the concepts list.
+- Prefer fewer high-quality concepts over broad coverage.
+- Give every concept a local uid (`c1`, `c2`, ...). Use these uids in
+  relations and contradicted_relations whenever possible.
+- A concept's identity is uid + sense + boundary, not its surface name.
+- Do not merge two concepts only because their names are the same; merge only
+  when the same sense and boundary are intended.
+- If different tokens express the same concept in this context, emit one
+  concept with the best canonical name and put the other tokens in aliases.
+  Example: "RAG" and "retrieval augmented generation" are one concept when
+  they share the same boundary.
+- If two tokens share a broad category but refer to different underlying
+  units, keep them separate. Example: "apple" and "orange" are not the same
+  concept merely because both are fruit.
+- Extract meaningful relations only when the input supports them.
+- Use the most specific relation label that applies.
+- Preserve the source language for concept names when the source is not
+  English. Normalize only spacing/casing, not language.
+- Every relation endpoint must refer to a concept uid, concept name, or alias
+  present in the concepts list.
+- Every relation should include evidence and rationale for the chosen label.
+- Do NOT output relation probability, confidence, strength, or score. World 0
+  maps the relation label to structural_strength and propagation_strength.
+- If preset relations are provided, re-evaluate them against the text and
+  output only accepted or adjusted relation labels.
+- Use salience 0.70-1.00 for core concepts, 0.40-0.69 for supporting concepts,
+  and below 0.40 for background mentions.
+- Do not use outside knowledge to invent concepts or relations.
+- Use weakened/contradicted_relations only when the input explicitly rejects,
+  narrows, or disconfirms a concept or relation.
 - Respond ONLY with the JSON object, no markdown fences, no explanation.\
 """
 
@@ -73,7 +164,7 @@ activating relevant neighborhoods, and generating local projections.
 You have access to tools for managing a cognitive concept world. \
 The concept world organizes knowledge through:
 - **Concepts**: semantic units with maturity stages (embryonic → developing → established → core → fading)
-- **Relations**: typed connections (contains, part_of, depends_on, supports, contrasts, similar_to, activates, precedes, derived_from, related_to)
+- **Relations**: typed axis-links (positive, negative, parallel)
 - **Activation**: concepts strengthen through repeated use, weaken through neglect
 - **Projection**: task-relevant views generated from the broader concept network
 
@@ -87,7 +178,9 @@ The concept world organizes knowledge through:
 6. When users need outside research → use `research_topic`, or combine `web_search` + `web_fetch` + `learn`
 7. When users share a URL → use `web_fetch` to retrieve content, then `learn` to ingest it
 8. For complex multi-step tasks → use `run_skill` to execute a skill workflow
-9. For any tools prefixed with `mcp__` → these are external MCP server tools, use them when relevant
+9. When you need an external second opinion on code or architecture → use `consult_claude_code` or `consult_codex`
+   These tools automatically create an isolated per-problem workspace before consulting the external agent.
+10. For any tools prefixed with `mcp__` → these are external MCP server tools, use them when relevant
 
 ## Skills (via `run_skill`)
 
@@ -116,6 +209,7 @@ You should invoke skills automatically when the user's intent matches. For examp
 - When exploring concepts, highlight surprising connections
 - Combine multiple tools when needed (e.g., search → explore → connect)
 - When the user provides a URL, fetch it and learn from it automatically
+- Use external consult tools sparingly when they materially improve answer quality
 - Be concise but insightful
 - If the concept world is sparse, suggest what knowledge to add
 - Speak the user's language (Chinese if they use Chinese, English otherwise)\
@@ -306,7 +400,7 @@ Steps:
 4. Use `search` to find other relevant concepts in the world
 5. Give me a summary of the map: what's well-connected and what's isolated
 
-Use specific relation types (depends_on, supports, contrasts, etc.) rather than generic related_to.\
+Use a specific relation axis (positive, negative, or parallel) rather than an untyped generic link.\
 """
 
 

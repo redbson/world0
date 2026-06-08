@@ -16,7 +16,7 @@ from world0.agents.tools.registry import (
     ToolRegistry,
     ToolResult,
 )
-from world0.schemas.relation import RelationType
+from world0.schemas.relation import semantic_relation_names
 from world0.schemas.types import Observation
 
 if TYPE_CHECKING:
@@ -116,7 +116,7 @@ def build_pkm_tools(agent: PKMAgent) -> ToolRegistry:
 
     # ── Connect ───────────────────────────────────────────────────────
     def connect(
-        source: str, target: str, relation_type: str = "related_to"
+        source: str, target: str, relation_type: str = "generic_relation"
     ) -> ToolResult:
         result = agent.connect(source, target, relation_type)
         ok = "invalid" not in result.lower()
@@ -134,9 +134,9 @@ def build_pkm_tools(agent: PKMAgent) -> ToolRegistry:
             ToolParam("target", "Target concept name", required=True),
             ToolParam(
                 "relation_type",
-                "Type of relation",
+                "Relation axis",
                 required=False,
-                enum=[rt.value for rt in RelationType],
+                enum=semantic_relation_names(),
             ),
         ],
         handler=connect,
@@ -185,7 +185,7 @@ def build_pkm_tools(agent: PKMAgent) -> ToolRegistry:
         top = sorted(all_c, key=lambda c: c.activation_count, reverse=True)[:int(limit)]
         if not top:
             return ToolResult(success=True, output="No concepts found.")
-        lines = [f"**{c.name}** ({c.maturity.value}, conf: {c.confidence:.2f}, activated: {c.activation_count}x)"
+        lines = [f"**{c.representation()}** ({c.name}, {c.maturity.value}, conf: {c.confidence:.2f}, activated: {c.activation_count}x)"
                  for c in top]
         return ToolResult(success=True, output="\n".join(lines))
 
@@ -289,6 +289,92 @@ def build_pkm_tools(agent: PKMAgent) -> ToolRegistry:
         ),
         parameters=[],
         handler=list_available_skills,
+        permission=Permission.READ,
+    ))
+
+    # ── External Agents ──────────────────────────────────────────────
+    def _truthy(value: object) -> bool:
+        if isinstance(value, bool):
+            return value
+        return str(value).strip().lower() not in {"false", "0", "no", "off", ""}
+
+    def consult_claude_code(
+        prompt: str,
+        workspace: str = ".",
+        problem: str = "",
+        model: str = "",
+        use_world0_context: bool = True,
+    ) -> ToolResult:
+        try:
+            rendered = agent.consult_external_agent(
+                "claude",
+                prompt,
+                workspace=workspace,
+                problem=problem,
+                model=model,
+                use_world0_context=_truthy(use_world0_context),
+            )
+            ok = "not available on this system" not in rendered.lower()
+            return ToolResult(success=ok, output=rendered)
+        except Exception as e:
+            return ToolResult(success=False, output=f"Claude consult error: {e}")
+
+    registry.register(Tool(
+        name="consult_claude_code",
+        description=(
+            "Consult the system-installed Claude Code CLI in read-only mode. "
+            "Useful for getting a second opinion on code, architecture, or debugging "
+            "while optionally grounding the question in World 0 cognitive context. "
+            "Each consultation runs inside an isolated per-problem workspace."
+        ),
+        parameters=[
+            ToolParam("prompt", "Question or task for Claude Code", required=True),
+            ToolParam("workspace", "Workspace path Claude may inspect (default: current directory)", required=False),
+            ToolParam("problem", "Stable problem identifier to reuse the same isolated workspace", required=False),
+            ToolParam("model", "Optional Claude model override", required=False),
+            ToolParam("use_world0_context", "Whether to prepend World 0 projection context", type="boolean", required=False),
+        ],
+        handler=consult_claude_code,
+        permission=Permission.READ,
+    ))
+
+    def consult_codex(
+        prompt: str,
+        workspace: str = ".",
+        problem: str = "",
+        model: str = "",
+        use_world0_context: bool = True,
+    ) -> ToolResult:
+        try:
+            rendered = agent.consult_external_agent(
+                "codex",
+                prompt,
+                workspace=workspace,
+                problem=problem,
+                model=model,
+                use_world0_context=_truthy(use_world0_context),
+            )
+            ok = "not available on this system" not in rendered.lower()
+            return ToolResult(success=ok, output=rendered)
+        except Exception as e:
+            return ToolResult(success=False, output=f"Codex consult error: {e}")
+
+    registry.register(Tool(
+        name="consult_codex",
+        description=(
+            "Consult the system-installed Codex CLI in read-only mode. "
+            "Useful for repository-aware analysis, debugging, or codebase questions "
+            "while optionally grounding the question in World 0 cognitive context. "
+            "Each consultation runs inside an isolated per-problem workspace."
+        ),
+        parameters=[
+            ToolParam("prompt", "Question or task for Codex", required=True),
+            ToolParam("workspace", "Workspace path Codex may inspect (default: current directory)", required=False),
+            ToolParam("problem", "Stable problem identifier to reuse the same isolated workspace", required=False),
+            ToolParam("model", "Optional Codex/OpenAI model override", required=False),
+            ToolParam("use_world0_context", "Whether to prepend World 0 projection context", type="boolean", required=False),
+        ],
+        handler=consult_codex,
         permission=Permission.READ,
     ))
 
