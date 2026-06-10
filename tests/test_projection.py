@@ -128,3 +128,56 @@ class TestProjectionScoring:
         for c in proj.concepts:
             if c.id != py.id:
                 assert proj.activation_scores.get(c.id, 0) <= py_score
+
+
+class TestDefaultRenderSnapshot:
+    """The default render shape is a stable contract for prompt injection.
+
+    Renderer styles (compact/detailed) are additive — the default output
+    structure must not drift when they evolve.
+    """
+
+    def test_default_render_structure(self, world):
+        proj = world.project(["Python", "Machine Learning"], task="ML work")
+        rendered = proj.render()
+        lines = rendered.split("\n")
+
+        # Exact header and section ordering.
+        assert lines[0] == "## Cognitive Context"
+        assert lines[1] == ""
+        section_order = [
+            ln for ln in lines if ln.startswith("### ")
+        ]
+        allowed = [
+            "### Core Understanding",
+            "### Active Concepts",
+            "### Emerging Concepts",
+            "### Key Relations",
+            "### Task Context",
+        ]
+        assert section_order == [s for s in allowed if s in section_order]
+
+        # Concept lines keep the historical format.
+        concept_lines = [ln for ln in lines if ln.startswith("- **")]
+        assert concept_lines, "no concept lines rendered"
+        for ln in concept_lines:
+            assert "confidence: " in ln
+
+        # Relation lines keep the historical format.
+        rel_lines = [
+            ln for ln in lines
+            if ln.startswith("- ") and "→" in ln and "structural" in ln
+        ]
+        for ln in rel_lines:
+            assert "propagation: " in ln
+            assert "reinforced " in ln
+
+        # Task context footer.
+        assert "Concepts activated for: ML work" in rendered
+
+    def test_default_render_ends_with_trailing_newline_block(self, world):
+        proj = world.project(["Python"], task="x")
+        rendered = proj.render()
+        # Historical shape: every section appends "", so render ends
+        # with an empty line after the task context.
+        assert rendered.endswith("Concepts activated for: x\n")

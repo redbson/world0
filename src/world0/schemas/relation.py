@@ -475,11 +475,19 @@ class RelationEdge(BaseModel):
             return 0.5
         return alpha / total
 
-    def hours_since_reinforced(self) -> float:
-        delta = datetime.now(timezone.utc) - self.last_reinforced
+    def hours_since_reinforced(
+        self, *, now: datetime | None = None
+    ) -> float:
+        reference = now if now is not None else datetime.now(timezone.utc)
+        delta = reference - self.last_reinforced
         return delta.total_seconds() / 3600.0
 
-    def temporal_relevance(self, half_life_hours: float = 72.0) -> float:
+    def temporal_relevance(
+        self,
+        half_life_hours: float = 72.0,
+        *,
+        now: datetime | None = None,
+    ) -> float:
         """Time-based relevance score in [0, 1].
 
         Returns 1.0 for a just-reinforced relation and decays
@@ -491,8 +499,10 @@ class RelationEdge(BaseModel):
         Args:
             half_life_hours: Base half-life in hours.
                 Default 72 h (3 days).
+            now: Injectable clock for deterministic evaluation;
+                ``None`` (the default) uses the wall clock.
         """
-        hours = self.hours_since_reinforced()
+        hours = self.hours_since_reinforced(now=now)
         if hours <= 0 or half_life_hours <= 0:
             return 1.0
         effective_hl = half_life_hours * (1.0 + self.reinforcement_count * 0.5)

@@ -29,101 +29,54 @@ The current agent development priorities are tracked in [`TODO.md`](TODO.md).
 
 ## Documentation / 文档
 
+- [`docs/world0-core-concepts.md`](docs/world0-core-concepts.md) — authoritative design doc for the core concepts (Concept/Relation/Context/Activation/Projection/Perspective + dynamics, with exact formulas & coefficients) / 核心概念权威设计文档（含与代码一致的公式与系数）
+- [`docs/world0-paper.md`](docs/world0-paper.md) — the World 0 paper: system model, dynamics, evaluation, related work / World 0 论文：系统模型、动力学、评测与相关工作
 - [`docs/world0-usage.md`](docs/world0-usage.md) — operational usage guide for World 0 / World 0 操作与使用文档
 - [`docs/world0-color-field-dynamics.md`](docs/world0-color-field-dynamics.md) — dynamics-first design for community-born color fields / 基于动力学的群落生色与褪色设计
 - [`docs/extraction-model-prompt-eval.md`](docs/extraction-model-prompt-eval.md) — model × prompt extraction-quality evaluation (why gpt-5.4-nano is the default) / 模型×prompt 提取质量评测（为何默认 gpt-5.4-nano）
+- [`docs/projection-eval-baseline.md`](docs/projection-eval-baseline.md) — offline projection-quality metrics (P@k / NDCG / noise / inhibition) / 离线投影质量指标
+- [`docs/projection-sweep-baseline.md`](docs/projection-sweep-baseline.md) — coefficient sensitivity report for activation/projection tuning / 激活/投影系数敏感性报告
 - [`DesignPhilosophy.md`](DesignPhilosophy.md) — design rationale and framing / 设计哲学与边界
 - [`TODO.md`](TODO.md) — current implementation priorities / 当前实现优先级
 
+> **Repository split / 仓库拆分.** World 0 is the **cognitive core library**. The PKM / Agent application layer — terminal CLI, browser UI, native GUI, MCP server, research, and the autonomous digital individual — now lives in its own project, [**`world0-pkm`**](../world0-pkm), which depends on this package. / World 0 是**认知核心库**。PKM / Agent 应用层（CLI、浏览器界面、原生 GUI、MCP、研究、自主数字个体）已迁出为独立项目 [**`world0-pkm`**](../world0-pkm)，它依赖本包。
+
 ## Quickstart / 快速开始
 
-The repository includes a launcher that can set up a local virtualenv and
-run the CLI, browser UI, native GUI, tests, and one-shot agent commands:
+World 0 is a Python library. Install it (optionally with an LLM provider for `ingest_text`):
 
-本仓库包含一个启动器，可用于创建本地虚拟环境，并启动 CLI、浏览器界面、
-原生 GUI、测试和一次性 Agent 命令：
+World 0 是一个 Python 库。安装它（如需 `ingest_text` 文本提取再加 LLM provider 扩展）：
 
 ```bash
-./start_world0.sh setup
-./start_world0.sh
-./start_world0.sh web --provider none
-./start_world0.sh ask "What concepts matter here?"
-./start_world0.sh test -- -k projection
+pip install -e .                 # core only / 仅核心
+pip install -e ".[openai]"       # + OpenAI for LLM extraction
+pip install -e ".[anthropic]"    # + Anthropic
+pip install -e ".[dev]"          # + test tooling / 测试工具
 ```
 
-For a resident browser-based GUI service:
+```python
+from world0 import World, Observation
 
-如需启动常驻的浏览器 GUI 服务：
-
-```bash
-./start_world0.sh service-start --provider none
-./start_world0.sh service-status
-./start_world0.sh service-logs -f
-./start_world0.sh service-stop
+w = World(store_path=".world0")
+w.ingest(Observation(
+    concepts=["FastAPI", "PostgreSQL"],
+    relations=[("FastAPI", "PostgreSQL", "depends_on")],
+    task="design backend API",
+))
+print(w.project(["FastAPI"], task="optimize query performance").render())
 ```
 
-You can still use the installed Python entry points directly:
+For interactive interfaces (CLI / web / GUI) and agentic / autonomous modes, install the
+[`world0-pkm`](../world0-pkm) project, which provides `pkm`, `pkm-web`, and `pkm-gui`.
 
-你也可以继续直接使用 Python 安装后的入口：
+如需交互界面（CLI / web / GUI）与 agentic / 自主模式，请安装 [`world0-pkm`](../world0-pkm) 项目，
+它提供 `pkm`、`pkm-web`、`pkm-gui` 入口。
 
-```bash
-pip install -e .
-```
+For a task-oriented walkthrough of the Python API, persistence layout, and recommended
+workflows, see [`docs/world0-usage.md`](docs/world0-usage.md).
 
-If you want the browser UI:
-
-如果你希望使用浏览器界面：
-
-```bash
-pip install -e ".[web]"
-pkm-web --provider none
-```
-
-If you want the native macOS window:
-
-如果你希望使用 macOS 原生窗口：
-
-```bash
-pip install -e ".[gui]"
-pkm-gui
-```
-
-If you want LLM-powered extraction or agentic mode, also install a provider extra:
-
-如果你希望使用 LLM 提取或 agentic 模式，还需要安装 provider 扩展：
-
-```bash
-pip install -e ".[openai,web]"
-# or / 或
-pip install -e ".[anthropic,web]"
-```
-
-### Interface Modes / 交互入口
-
-- `pkm` — terminal interface / 终端交互
-- `pkm-web` — browser interface / 浏览器界面
-- `pkm-gui` — native GUI / 原生 GUI
-- `World(...)` — Python library API / Python 库接口
-
-For a task-oriented walkthrough of the Python API, CLI, Web/UI launchers,
-LLM provider setup, persistence layout, and recommended workflows, see
-[`docs/world0-usage.md`](docs/world0-usage.md).
-
-如果你需要面向任务的完整使用说明，包括 Python API、CLI、Web/UI 启动、
-LLM provider 配置、持久化目录结构与推荐工作流，请查看
+面向任务的完整使用说明（Python API、持久化目录、推荐工作流）见
 [`docs/world0-usage.md`](docs/world0-usage.md)。
-
-### Research Workflow / 研究工作流
-
-The browser UI now includes a dedicated `Research` mode. It can:
-
-浏览器界面现在包含独立的 `Research` 模式。它可以：
-
-- search the public web for a topic / 为主题搜索公开网页
-- fetch and read candidate sources / 抓取并阅读候选来源
-- distill findings into concept-first notes / 将结果提炼为概念优先的笔记
-- optionally learn those findings into World 0 / 可选择把研究结果学习进 World 0
-- project the updated concept-world back into an Agent-facing brief / 将更新后的概念世界重新投影为 Agent 可用简报
 
 ### Think With World 0 / 用 World 0 思考
 
@@ -295,6 +248,85 @@ Projection uses spreading activation with task-affinity boosting and MMR (Maxima
 
 投影使用扩散激活与任务亲和度加权，并通过 MMR（最大边际相关性）选择策略保证多样性。
 
+### Perspectives — role-conditioned lenses / 视角：角色化透镜
+
+The **same** concept-world yields different projections under different perspectives. A perspective re-weights how individual *semantic relations* (not just the three axes) carry activation, biases in-focus domains, and chooses a render style — so the world answers differently when debugged, designed against, or researched.
+
+**同一个**概念世界在不同视角下产出不同投影。视角重新加权单个*语义关系*（不止三轴）的激活传播、偏置在焦域，并选择渲染风格——于是世界在“调试 / 设计 / 研究”时给出不同回答。
+
+```python
+# Built-in profiles: default / debug / design / research
+proj = w.project(["model serving"], perspective="debug")     # by name
+print(w.perspectives.names())
+
+# Or an inline / custom perspective
+from world0 import Perspective
+lens = Perspective(
+    name="oncall",
+    active_domains=["infra"],
+    semantic_relation_weights={"dependence": 1.6, "overlap": 0.4},  # per-relation
+    render_style="compact",
+)
+proj = w.project(["model serving"], perspective=lens)
+w.perspectives.put(lens)        # persist a custom profile to the store
+```
+
+### Projection explainability / 投影可解释性
+
+Every projected concept carries its **best activation path** — why it was reached from the seeds — and the projection renders in three styles.
+
+每个投影概念都携带其**最佳激活路径**——它为何从种子被激活到——投影支持三种渲染风格。
+
+```python
+proj = w.project(["model serving"], max_depth=3)
+print(proj.explain("kv cache"))
+# kv cache ←(dependence, positive, ×0.42)— request batching ←(...)— model serving [seed] (score 0.31)
+
+print(proj.render("compact"))    # dense, for tight token budgets
+print(proj.render("detailed"))   # adds "Why included" traces + counter-signals
+print(proj.render())             # "default" — unchanged maturity-grouped view
+
+print(proj.seed_resolution)      # {"model servng": "model serving (fuzzy:0.67)"}  ← typo recovered
+```
+
+Seeds resolve robustly: exact name/alias → domain disambiguation → fuzzy token match, recorded transparently in `seed_resolution` so a guessed or missed seed is never silent.
+
+种子稳健解析：精确名/别名 → 领域消歧 → 模糊 token 匹配，并透明记录在 `seed_resolution` 中，从而被猜测或未命中的种子绝不静默。
+
+### `apply_feedback(...)` — Close the loop / 闭环反馈
+
+Tell World 0 what helped and what misled: useful concepts get reinforced, missing ones created, noisy ones demoted, weak relations weakened — all through the public facade (the same API the autonomous individual uses).
+
+告诉 World 0 什么有用、什么误导：有用概念被强化、缺失概念被创建、噪声概念被降权、弱关系被削弱——全部经由公开接口（与自主个体所用相同的 API）。
+
+```python
+w.apply_feedback(
+    useful_concepts=["inference engine"],
+    missing_concepts=["speculative decoding"],   # created + reinforced
+    noisy_concepts=["serving flags"],            # demoted
+    weak_relations=["model serving -> dependence -> serving env"],
+    task="serving optimization",
+)
+```
+
+### Evaluation harnesses / 评测工具
+
+Two LLM-free, deterministic harnesses keep projection quality honest:
+
+两个无需 LLM、确定性的工具用于持续校准投影质量：
+
+```bash
+# Offline retrieval metrics (P@k / NDCG / noise / typed-ratio / inhibition)
+python scripts/eval_projection_matrix.py --md docs/projection-eval-baseline.md
+
+# Coefficient sensitivity report (a tuning aid, not an auto-tuner)
+python scripts/sweep_projection_quality.py \
+    --param projection.mmr_lambda=0.0,0.3,0.6 \
+    --param activation.propagation_min_ratio=0.03,0.1,0.3
+```
+
+Baselines live in [`docs/projection-eval-baseline.md`](docs/projection-eval-baseline.md) and [`docs/projection-sweep-baseline.md`](docs/projection-sweep-baseline.md).
+
 ### `reflect()` — Consolidate / 巩固
 
 ```python
@@ -306,6 +338,14 @@ print(f"Pruned:   {len(result.pruned_concepts)}")
 Call after a task is complete. Decays unused concepts, promotes frequently activated ones through maturity stages, and prunes noise.
 
 在任务完成后调用。衰减未使用的概念，将频繁激活的概念通过成熟度阶段晋升，修剪噪声。
+
+## Digital Individual / 数字个体
+
+The PKM layer can run as an autonomous **digital individual** that tends and grows its own concept-world — with a *self* (persona seed → emergent self), a *will* (four intrinsic drives), and a *life* (`perceive → deliberate → act → reflect`). This lives entirely in the agent layer and acts only through the public `World` facade, so the cognitive core is never modified and "World 0 is not a memory system" stays true.
+
+PKM 层可作为一个自主的**数字个体**运行，照料并生长自己的概念世界——拥有*自我*（人格种子→涌现自我）、*意志*（四种内在驱力）与*生命*（`感知 → 抉择 → 行动 → 反思`）。它完全位于 agent 层，只通过公开的 `World` 接口行动，因此认知核心从不被修改。
+
+The digital individual now lives in the [**`world0-pkm`**](../world0-pkm) project (`pkm/autonomy/`). See its README for usage. / 数字个体现位于 [**`world0-pkm`**](../world0-pkm) 项目（`pkm/autonomy/`），用法见其 README。
 
 ## Concept Lifecycle / 概念生命周期
 
@@ -362,24 +402,11 @@ The **recommended default extraction model is `gpt-5.4-nano`** (via Azure OpenAI
 
 **推荐的默认提取模型是 `gpt-5.4-nano`**（经 Azure OpenAI）。一项覆盖 9 个模型、各 3 轮的真实 `模型×prompt` 评测发现：在生产提取 prompt 下，结构质量基本与模型无关，`gpt-5.4-nano` 以最低成本/延迟达到第一梯队。完整证据见 [`docs/extraction-model-prompt-eval.md`](docs/extraction-model-prompt-eval.md)。
 
-Set it as your per-operation default (writes `<store>/models.json`):
+When you construct a `World` with an LLM provider, pass the model you want directly. Good alternatives for extraction: `azure-openai/DeepSeek-V4-Pro` (strong Chinese, low cost) and `glm-5.1`. Avoid `claude-sonnet-4-6` for bilingual corpora — it does not reliably preserve Chinese concept names.
 
-```bash
-pkm model set extraction --provider azure-openai --model gpt-5.4-nano
-# or copy the template:
-cp models.example.json ~/.pkm_world/models.json
-```
+构造带 LLM provider 的 `World` 时直接传入所需模型。提取的其他优选：`azure-openai/DeepSeek-V4-Pro`（中文强、便宜）、`glm-5.1`。双语语料避免用 `claude-sonnet-4-6`——它不能稳定保留中文概念名。
 
-Required environment for Azure / 所需 Azure 环境变量:
-
-```bash
-export AZURE_OPENAI_ENDPOINT="https://<resource>.openai.azure.com/"
-export AZURE_OPENAI_KEY="<key>"      # or AZURE_OPENAI_API_KEY
-```
-
-Per-operation overrides (`extraction`, `answer`, `query_extract`, …) let you route each cognitive operation to a different model. Use `pkm model list` / `pkm model validate` to inspect. Good alternatives for extraction: `azure-openai/DeepSeek-V4-Pro` (strong Chinese, low cost) and `glm-5.1`. Avoid `claude-sonnet-4-6` for bilingual corpora — it does not reliably preserve Chinese concept names.
-
-每个操作（`extraction` / `answer` / `query_extract` …）都可路由到不同模型；用 `pkm model list` / `pkm model validate` 查看。提取的其他优选：`azure-openai/DeepSeek-V4-Pro`（中文强、便宜）、`glm-5.1`。双语语料避免用 `claude-sonnet-4-6`——它不能稳定保留中文概念名。
+> Per-operation model routing (`extraction` / `answer` / `query_extract`, the `pkm model …` CLI, and `models.json`) is part of the agent layer in [`world0-pkm`](../world0-pkm). / 分操作模型路由（`pkm model …` CLI 与 `models.json`）属于 [`world0-pkm`](../world0-pkm) 的 agent 层。
 
 ## Architecture / 架构
 
@@ -406,17 +433,16 @@ src/world0/
 ├── extraction/extractor.py  # LLM-powered extraction / LLM 驱动提取
 ├── sources/library.py    # Raw source provenance / 原始来源溯源
 ├── metrics/entropy.py    # Network-entropy diagnostics / 网络熵诊断
-├── models/config.py      # Per-operation model config / 分操作模型配置
 ├── prompts/              # Configurable prompt registry / 可配置 prompt 注册表
-├── agents/               # Agent interfaces / Agent 接口
-│   ├── pkm.py · cli.py · web.py · gui.py
-│   ├── external.py       # Read-only claude/codex consultations / 只读外部咨询
-│   ├── tools/ · mcp/ · research.py
 ├── llm/                  # base.py · openai.py · anthropic.py · azure_openai.py
 ├── schemas/              # concept · relation · types · context · community · space · source
 ├── store/                # base.py · json_store.py — pluggable persistence / 可插拔持久化
 └── visualization/renderer.py  # Interactive HTML graph / 交互式 HTML 图
 ```
+
+The PKM / Agent application layer (`pkm` package: CLI, web, GUI, MCP, tools, research, external consultations, `models/` model-routing, and `autonomy/` the digital individual) lives in the separate [`world0-pkm`](../world0-pkm) project, which depends on this package.
+
+PKM / Agent 应用层（`pkm` 包：CLI、web、GUI、MCP、工具、研究、外部咨询、`models/` 模型路由、`autonomy/` 数字个体）位于独立的 [`world0-pkm`](../world0-pkm) 项目，它依赖本包。
 
 ### Data Flow / 数据流
 
@@ -472,7 +498,7 @@ Writes use a dirty-flag mechanism: in-memory mutations are batched and flushed a
 
 ```bash
 pip install -e ".[dev]"
-pytest                        # 554 tests (546 passing, 8 skipped without an LLM key), ~15s / 554 个测试（546 通过，8 个在无 LLM key 时跳过），约 15 秒
+pytest                        # 811 tests (803 passing, 8 skipped without an LLM key), ~8s / 811 个测试（803 通过，8 个在无 LLM key 时跳过），约 8 秒
 pytest tests/test_benchmark.py -v   # cognitive quality benchmarks / 认知质量基准
 pytest tests/test_benchmark_e2e.py -v -s   # end-to-end scenario / 端到端场景
 ANTHROPIC_API_KEY=sk-... pytest tests/test_extraction_quality_llm.py -v   # real-LLM extraction quality / 真实 LLM 提取质量
@@ -485,9 +511,9 @@ ANTHROPIC_API_KEY=sk-... pytest tests/test_extraction_quality_llm.py -v   # real
 | `test_benchmark.py` | 43 | Activation precision, projection relevance, confidence dynamics, decay curves, Hebbian convergence, cross-domain separation, scale behavior, lifecycle thresholds, persistence fidelity, projection stability, task sensitivity, relation type differentiation, alias management / 激活精度、投影相关性、置信度动态、衰减曲线、Hebbian 收敛、跨域分离、规模行为、生命周期阈值、持久化保真、投影稳定性、任务敏感性、关系类型区分、别名管理 |
 | `test_benchmark_e2e.py` | 24 | Multi-session Agent scenario: knowledge accumulation, cross-session coherence, projection focus, reflect consolidation, render quality, full lifecycle simulation, quantitative report / 多会话 Agent 场景：知识积累、跨会话一致性、投影聚焦、反思巩固、渲染质量、全生命周期模拟、量化报告 |
 | `test_extraction_quality_llm.py` | 8 | Real-LLM extraction quality: synonym/acronym dedup, generic-noise filtering, relation direction, domain-sense split, contradiction handling, Chinese language preservation, cross-text identity (skipped without an LLM key) / 真实 LLM 提取质量：同义词/缩写去重、泛词噪声过滤、关系方向、领域义项拆分、矛盾处理、中文保持、跨文本身份（无 LLM key 时跳过） |
-| Other tests / 其他测试 | ~479 | Unit/integration tests for concepts, relations, dynamics (incl. color-field & communities), spaces, sources, metrics, projection, extraction, agents (PKM/CLI/web/external), LLM providers, persistence / 概念、关系、动力学（含色场与群落）、空间、来源、指标、投影、提取、Agent（PKM/CLI/web/外部）、LLM 提供者、持久化的单元与集成测试 |
+| Other tests / 其他测试 | ~736 | Unit/integration tests for concepts, relations, dynamics (incl. color-field & communities), perspectives, projection (incl. explainability & render styles), seed resolution, coefficient config, context/task-affinity, usage feedback, spaces, sources, metrics, extraction, LLM providers, persistence / 概念、关系、动力学（含色场与群落）、视角、投影（含可解释性与渲染风格）、种子解析、系数配置、上下文/任务亲和、使用反馈、空间、来源、指标、提取、LLM 提供者、持久化的单元与集成测试 |
 
-Total: 554 tests (546 passing, 8 skipped without an LLM provider). / 共 554 个测试（546 通过，8 个在无 LLM provider 时跳过）。
+Total: 811 tests (803 passing, 8 skipped without an LLM provider). The PKM / Agent layer tests live in [`world0-pkm`](../world0-pkm). / 共 811 个测试（803 通过，8 个在无 LLM provider 时跳过）。PKM / Agent 层测试位于 [`world0-pkm`](../world0-pkm)。
 
 ## Requirements / 依赖
 

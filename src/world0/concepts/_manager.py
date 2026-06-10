@@ -367,6 +367,103 @@ class ConceptManager:
             return self._concepts.get(cid)
         return None
 
+    def resolve_candidates(self, name: str) -> list[ConceptNode]:
+        """Every sense registered under this label (may be ambiguous)."""
+        ids = self._name_index.get_all(name)
+        return [
+            self._concepts[cid]
+            for cid in sorted(ids)
+            if cid in self._concepts
+        ]
+
+    def resolve_fuzzy(
+        self,
+        name: str,
+        *,
+        domain: str = "",
+        min_similarity: float = 0.45,
+        limit: int = 3,
+    ) -> list[tuple[ConceptNode, float]]:
+        """Signature lookup for labels that don't resolve exactly.
+
+        Uses token *containment* (fraction of the seed label's tokens
+        found in a concept) rather than symmetric Jaccard: a short seed
+        is the subset, the concept is the superset.  Conservative by
+        design — callers surface *how* a label resolved rather than
+        treating fuzzy hits as exact.
+        """
+        return self._matcher.find_by_containment(
+            tokenize_signature(name),
+            domain=domain,
+            min_containment=min_similarity,
+            limit=limit,
+        )
+
+    def resolve_in_context(
+        self,
+        name_or_id: str,
+        *,
+        active_domains: list[str] | None = None,
+        fuzzy: bool = True,
+        min_similarity: float = 0.45,
+    ) -> tuple[ConceptNode | None, str]:
+        """Resolve a label with context and graceful degradation.
+
+        Resolution order, each returning ``(node, method)``:
+
+        1. exact id or unique name/alias → ``"exact"``
+        2. ambiguous label, single candidate matching an active domain
+           → ``"disambiguated"``
+        3. best fuzzy signature match ≥ threshold → ``"fuzzy:<score>"``
+        4. nothing → ``(None, "")``
+        """
+        node = self.resolve(name_or_id)
+        if node is not None:
+            return node, "exact"
+
+        # Ambiguous label: try domain disambiguation.
+        candidates = self.resolve_candidates(name_or_id)
+        if len(candidates) > 1 and active_domains:
+            in_domain = [
+                c
+                for c in candidates
+                if self._concept_domain_matches(c, active_domains)
+            ]
+            if len(in_domain) == 1:
+                return in_domain[0], "disambiguated"
+
+        if fuzzy:
+            domain = ""
+            if active_domains and len(active_domains) == 1:
+                domain = active_domains[0]
+            matches = self.resolve_fuzzy(
+                name_or_id,
+                domain=domain,
+                min_similarity=min_similarity,
+                limit=1,
+            )
+            if matches:
+                best, score = matches[0]
+                return best, f"fuzzy:{score:.2f}"
+
+        return None, ""
+
+    @staticmethod
+    def _concept_domain_matches(
+        node: ConceptNode, active_domains: list[str]
+    ) -> bool:
+        """Dominant-domain match against a plain list of domain labels."""
+        norm = {d.strip().lower() for d in active_domains if d.strip()}
+        if not norm:
+            return False
+        if node.domain_profile:
+            top_domain, _ = max(
+                node.domain_profile.items(), key=lambda item: item[1]
+            )
+            if top_domain.strip().lower() in norm:
+                return True
+        return node.domain.strip().lower() in norm
+
     def all(self) -> list[ConceptNode]:
         return list(self._concepts.values())
 

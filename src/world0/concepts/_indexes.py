@@ -36,6 +36,15 @@ class NameIndex:
             return None
         return next(iter(ids))
 
+    def get_all(self, name: str) -> set[str]:
+        """Every concept id registered under this label.
+
+        Exposes ambiguity instead of hiding it behind ``get() -> None``,
+        so callers can disambiguate (e.g. by active domain) rather than
+        give up.
+        """
+        return set(self._map.get(name.strip().lower(), set()))
+
     def add(self, name: str, concept_id: str) -> None:
         """Add ``concept_id`` to the label's candidate set."""
         normalized = name.strip().lower()

@@ -7,7 +7,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from world0.schemas.concept import ConceptNode, Maturity
+from world0.schemas.concept import ConceptNode
 from world0.schemas.relation import RelationEdge
 
 
@@ -88,6 +88,45 @@ class IngestResult(BaseModel):
     hebbian_relations: list[str] = Field(default_factory=list)
 
 
+class ActivationStep(BaseModel):
+    """One hop in the best activation path that reached a concept."""
+
+    from_id: str
+    relation_id: str
+    semantic_relation: str = ""
+    axis: str = ""
+    contribution: float = 0.0
+    # True when PROPAGATION_MIN_RATIO lifted the raw score to the floor —
+    # the concept is structurally connected but weakly driven.
+    floored: bool = False
+
+
+class ActivationTrace(BaseModel):
+    """Why a concept appears in a projection: its best activation path.
+
+    Best-path only, not a full provenance DAG — enough to answer
+    "why am I seeing this" without recording every spread event.
+    """
+
+    seed_id: str
+    score: float = 0.0
+    inhibition: float = 0.0
+    inhibition_source: str = ""
+    steps: list[ActivationStep] = Field(default_factory=list)
+
+    def extended_with(
+        self, step: ActivationStep, score: float
+    ) -> "ActivationTrace":
+        """A new trace with one more hop appended (traces are immutable)."""
+        return ActivationTrace(
+            seed_id=self.seed_id,
+            score=score,
+            inhibition=self.inhibition,
+            inhibition_source=self.inhibition_source,
+            steps=[*self.steps, step],
+        )
+
+
 class Projection(BaseModel):
     """A local cognitive view — the operational output of World 0.
 
@@ -98,6 +137,13 @@ class Projection(BaseModel):
     relations: list[RelationEdge] = Field(default_factory=list)
     activation_scores: dict[str, float] = Field(default_factory=dict)
     task: str = ""
+    # ── Provenance (additive; all default-empty for back-compat) ─────
+    seeds: list[str] = Field(default_factory=list)
+    # seed label → how it resolved ("exact", "fuzzy:0.52", "unresolved").
+    seed_resolution: dict[str, str] = Field(default_factory=dict)
+    perspective_name: str = ""
+    # concept_id → best activation path that reached it.
+    traces: dict[str, ActivationTrace] = Field(default_factory=dict)
 
     def top_concepts(self, n: int = 5) -> list[ConceptNode]:
         ranked = sorted(
@@ -107,78 +153,58 @@ class Projection(BaseModel):
         )
         return ranked[:n]
 
-    def render(self) -> str:
-        """Render as LLM-prompt-ready markdown."""
-        lines: list[str] = ["## Cognitive Context", ""]
+    def render(self, style: str = "default") -> str:
+        """Render as LLM-prompt-ready markdown.
 
-        # Group by maturity
-        core = []
-        active = []
-        emerging = []
-        for c in sorted(
-            self.concepts,
-            key=lambda x: self.activation_scores.get(x.id, 0),
-            reverse=True,
-        ):
-            score = self.activation_scores.get(c.id, 0)
-            if c.maturity in (Maturity.CORE, Maturity.ESTABLISHED):
-                core.append((c, score))
-            elif c.maturity == Maturity.DEVELOPING:
-                active.append((c, score))
-            else:
-                emerging.append((c, score))
+        ``style`` selects a renderer from ``world0.projection.render``
+        ("default", "compact", "detailed"); unknown styles fall back to
+        "default", whose output is byte-identical to the historical
+        single-style render.
+        """
+        # Lazy import: schemas must stay importable without dragging in
+        # the projection package (which itself imports schemas.types).
+        from world0.projection.render import render_projection
 
-        if core:
-            lines.append("### Core Understanding")
-            for c, s in core:
-                desc = f": {c.description}" if c.description else ""
-                neighbors = self._neighbor_names(c.id)
-                linked = f" Linked to: {', '.join(neighbors)}." if neighbors else ""
-                lines.append(
-                    f"- **{c.representation()}** ({c.name}, {c.maturity.value}, "
-                    f"confidence: {c.confidence:.2f}){desc}{linked}"
-                )
-            lines.append("")
+        return render_projection(self, style=style)
 
-        if active:
-            lines.append("### Active Concepts")
-            for c, s in active:
-                desc = f": {c.description}" if c.description else ""
-                lines.append(
-                    f"- **{c.representation()}** ({c.name}, {c.maturity.value}, "
-                    f"confidence: {c.confidence:.2f}){desc}"
-                )
-            lines.append("")
+    def explain(self, concept_ref: str) -> str:
+        """Why is this concept in the projection?  Best-path rendering.
 
-        if emerging:
-            lines.append("### Emerging Concepts")
-            for c, s in emerging:
-                lines.append(
-                    f"- **{c.representation()}** ({c.name}, {c.maturity.value}, "
-                    f"confidence: {c.confidence:.2f})"
-                )
-            lines.append("")
+        ``concept_ref`` may be a concept id, name, or representation.
+        Returns a one-line provenance string, or a fallback note when
+        the concept is a seed / has no recorded trace.
+        """
+        node = None
+        for c in self.concepts:
+            if concept_ref in (c.id, c.name, c.representation()):
+                node = c
+                break
+        if node is None:
+            return f"{concept_ref}: not in this projection"
 
-        if self.relations:
-            lines.append("### Key Relations")
-            concept_names = {c.id: c.representation() for c in self.concepts}
-            for r in sorted(self.relations, key=lambda x: x.weight, reverse=True)[:10]:
-                src = concept_names.get(r.source_id, r.source_id)
-                tgt = concept_names.get(r.target_id, r.target_id)
-                lines.append(
-                    f"- {src} → {r.semantic_relation} [{r.relation_type.value}] → {tgt} "
-                    f"(structural: {r.structural_strength:.2f}, "
-                    f"propagation: {r.propagation_strength:.2f}, "
-                    f"reinforced {r.reinforcement_count}×)"
-                )
-            lines.append("")
+        names = {c.id: c.name for c in self.concepts}
+        trace = self.traces.get(node.id)
+        score = self.activation_scores.get(node.id, 0.0)
+        if trace is None or not trace.steps:
+            return f"{node.name}: seed concept (score {score:.2f})"
 
-        if self.task:
-            lines.append(f"### Task Context")
-            lines.append(f"Concepts activated for: {self.task}")
-            lines.append("")
-
-        return "\n".join(lines)
+        # Walk the path backwards: target ←(relation)— source ... [seed]
+        parts = [node.name]
+        for step in reversed(trace.steps):
+            origin = names.get(step.from_id, step.from_id)
+            floored = ", floored" if step.floored else ""
+            parts.append(
+                f"←({step.semantic_relation}, {step.axis}, "
+                f"×{step.contribution:.2f}{floored})— {origin}"
+            )
+        parts[-1] += " [seed]"
+        line = " ".join(parts) + f" (score {score:.2f}"
+        if trace.inhibition > 0:
+            suppressor = names.get(
+                trace.inhibition_source, trace.inhibition_source
+            )
+            line += f", suppressed {trace.inhibition:.2f} by {suppressor}"
+        return line + ")"
 
     def _neighbor_names(self, concept_id: str) -> list[str]:
         names_map = {c.id: c.representation() for c in self.concepts}
@@ -188,6 +214,22 @@ class Projection(BaseModel):
             if other and other in names_map:
                 neighbors.append(names_map[other])
         return neighbors
+
+
+class FeedbackResult(BaseModel):
+    """Outcome of applying usage feedback to the world.
+
+    Feedback is how a consumer (an agent, the autonomy loop, a human)
+    tells World 0 that a projection helped or misled: useful concepts
+    get reinforced, missing ones created, noisy ones demoted, weak
+    relations weakened — all through the public facade.
+    """
+
+    reinforced_concepts: list[str] = Field(default_factory=list)
+    created_concepts: list[str] = Field(default_factory=list)
+    demoted_concepts: list[str] = Field(default_factory=list)
+    reinforced_relations: list[str] = Field(default_factory=list)
+    weakened_relations: list[str] = Field(default_factory=list)
 
 
 class ReflectResult(BaseModel):

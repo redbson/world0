@@ -364,11 +364,19 @@ class ConceptNode(BaseModel):
             return 0.5
         return alpha / total
 
-    def hours_since_activation(self) -> float:
-        delta = datetime.now(timezone.utc) - self.last_activated
+    def hours_since_activation(
+        self, *, now: datetime | None = None
+    ) -> float:
+        reference = now if now is not None else datetime.now(timezone.utc)
+        delta = reference - self.last_activated
         return delta.total_seconds() / 3600.0
 
-    def temporal_relevance(self, half_life_hours: float = 168.0) -> float:
+    def temporal_relevance(
+        self,
+        half_life_hours: float = 168.0,
+        *,
+        now: datetime | None = None,
+    ) -> float:
         """Time-based relevance score in [0, 1].
 
         Returns 1.0 for a just-activated concept and decays exponentially
@@ -378,8 +386,10 @@ class ConceptNode(BaseModel):
         Args:
             half_life_hours: Hours after which relevance halves.
                 Default 168 h (1 week).
+            now: Injectable clock for deterministic evaluation;
+                ``None`` (the default) uses the wall clock.
         """
-        hours = self.hours_since_activation()
+        hours = self.hours_since_activation(now=now)
         if hours <= 0 or half_life_hours <= 0:
             return 1.0
         raw = math.pow(0.5, hours / half_life_hours)

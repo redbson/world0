@@ -11,40 +11,21 @@ dependencies = [
     "pydantic>=2.0",
 ]
 
+# LLM providers power core text extraction (ingest_text). The agent/web/gui
+# interfaces and their extras now live in the separate `world0-pkm` project.
 [project.optional-dependencies]
 openai = ["openai>=1.0"]
 anthropic = ["anthropic>=0.30"]
-gui = [
-    "fastapi>=0.100",
-    "uvicorn>=0.20",
-    "pywebview>=4.0",
-]
-web = [
-    "fastapi>=0.100",
-    "uvicorn>=0.20",
-]
 all = [
     "openai>=1.0",
     "anthropic>=0.30",
-    "fastapi>=0.100",
-    "uvicorn>=0.20",
-    "pywebview>=4.0",
 ]
 dev = [
     "pytest>=7.0",
     "pytest-cov",
-    "playwright>=1.48",
     "openai>=1.0",
     "anthropic>=0.30",
-    "fastapi>=0.100",
-    "uvicorn>=0.20",
-    "httpx>=0.24",
 ]
-
-[project.scripts]
-pkm = "world0.agents.cli:main"
-pkm-gui = "world0.agents.gui:main"
-pkm-web = "world0.agents.web_main:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

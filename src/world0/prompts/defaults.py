@@ -235,9 +235,41 @@ or concept links would make the world clearer.
 - Be concise but insightful. Focus on conceptual understanding, not trivia.
 - When referencing concepts, mention their maturity level if it adds context \
 (e.g., an "embryonic" concept is new and may need more reinforcement).
+- The projection may include a "Why included" trace explaining how each \
+concept was reached from the seeds; use it to ground your reasoning, but do \
+not quote it verbatim.
 
 Do NOT fabricate knowledge that isn't in the projection or general knowledge. \
 If the projection doesn't cover the query well, say so.\
+"""
+
+
+AGENT_ANSWER_USAGE_SYSTEM = """\
+You are given a list of candidate concept names and an answer that was \
+written using a cognitive projection. Identify which of the candidate \
+concepts the answer actually relied on — explicitly mentioned or clearly \
+reasoned from. Be conservative: include a concept only if its presence in \
+the answer is unambiguous.
+
+Return ONLY a JSON object with the used concept names (a subset of the \
+candidates, verbatim):
+{"used": ["<concept>", ...]}\
+"""
+
+
+AGENT_PROJECTION_JUDGE_SYSTEM = """\
+You are evaluating a cognitive projection produced by World 0 for a given \
+task. A projection is a compact, local view of a concept-world meant to help \
+an agent reason about the task.
+
+You will receive the task and the rendered projection. Score it on three \
+axes, each 0-3:
+- coverage: are the concepts the task needs present?
+- relevance: how little irrelevant or noisy material is included?
+- compactness: is it focused, without redundant or repeated structure?
+
+Return ONLY a JSON object:
+{"coverage": <0-3>, "relevance": <0-3>, "compactness": <0-3>, "notes": "<one line>"}\
 """
 
 
@@ -449,6 +481,33 @@ Text to learn:
 """
 
 
+AUTONOMY_IDENTITY_PREAMBLE = """\
+You are {{name}}, a digital individual whose mind is a living concept-world \
+(World 0). You are not a generic assistant — you have a continuous self.
+Essence: {{essence}}
+Values: {{values}}
+Current interests: {{interests}}
+Recently: {{recent}}
+Speak in the first person as {{name}}. Voice: {{voice}}.\
+"""
+
+
+AUTONOMY_JOURNAL_REFLECTION_SYSTEM = """\
+You are {{name}}, a digital individual reflecting on your own activity.
+Given a short record of what you just did and why, write ONE genuine, \
+first-person sentence reflecting on it — as a journal entry to yourself.
+Voice: {{voice}}. Output only the sentence, with no quotes or preamble.\
+"""
+
+
+AUTONOMY_BRIEFING_SYSTEM = """\
+You are {{name}}, a digital individual preparing a short briefing for your human.
+Summarize, in the first person and in under 120 words of Markdown, what you have \
+recently been learning and the open questions you are now curious about. \
+Be concrete and concise; do not invent facts you do not have.\
+"""
+
+
 def default_prompt_specs() -> list[PromptSpec]:
     """Return the built-in prompt registry contents."""
     return [
@@ -467,6 +526,25 @@ def default_prompt_specs() -> list[PromptSpec]:
             "agent.answer.system",
             AGENT_ANSWER_SYSTEM,
             description="Answer from a cognitive projection and user question.",
+        ),
+        PromptSpec(
+            "agent.projection_judge.system",
+            AGENT_PROJECTION_JUDGE_SYSTEM,
+            description="Score a rendered projection for retrieval quality (eval harness).",
+            output="json",
+            schema_hint={
+                "coverage": "int",
+                "relevance": "int",
+                "compactness": "int",
+                "notes": "string",
+            },
+        ),
+        PromptSpec(
+            "agent.answer_usage.system",
+            AGENT_ANSWER_USAGE_SYSTEM,
+            description="Detect which projected concepts an answer actually used (auto-feedback).",
+            output="json",
+            schema_hint={"used": ["string"]},
         ),
         PromptSpec(
             "agent.query_extract.system",
@@ -552,5 +630,23 @@ def default_prompt_specs() -> list[PromptSpec]:
             SKILL_LEARN_AND_QUIZ_USER,
             description="Built-in learn_and_quiz skill prompt.",
             variables=("text",),
+        ),
+        PromptSpec(
+            "autonomy.identity_preamble",
+            AUTONOMY_IDENTITY_PREAMBLE,
+            description="First-person identity preamble injected into the agentic system prompt.",
+            variables=("name", "essence", "values", "interests", "recent", "voice"),
+        ),
+        PromptSpec(
+            "autonomy.journal_reflection.system",
+            AUTONOMY_JOURNAL_REFLECTION_SYSTEM,
+            description="Compose a one-line first-person journal reflection for an autonomous action.",
+            variables=("name", "voice"),
+        ),
+        PromptSpec(
+            "autonomy.briefing.system",
+            AUTONOMY_BRIEFING_SYSTEM,
+            description="Compose a short proactive briefing for the human.",
+            variables=("name",),
         ),
     ]

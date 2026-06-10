@@ -79,6 +79,46 @@ class SignatureMatcher:
         scored.sort(key=lambda item: item[1], reverse=True)
         return scored[:limit]
 
+    def find_by_containment(
+        self,
+        probe_tokens: set[str],
+        *,
+        domain: str = "",
+        min_containment: float = 0.5,
+        limit: int = 3,
+    ) -> list[tuple[ConceptNode, float]]:
+        """Rank candidates by how much of the *probe* they contain.
+
+        Asymmetric on purpose: a short seed label ("vector db") should
+        match a richly-described concept it is effectively a subset of —
+        symmetric Jaccard punishes that size gap and misses the match.
+        Containment = ``|probe ∩ node| / |probe|``.
+        """
+        if not probe_tokens:
+            return []
+        domain_lower = domain.strip().lower()
+        scored: list[tuple[ConceptNode, float]] = []
+        for cid in self._tokens.candidates(probe_tokens):
+            node = self._get(cid)
+            if not node:
+                continue
+            node_tokens = node.signature_tokens()
+            if not node_tokens:
+                continue
+            containment = len(probe_tokens & node_tokens) / len(probe_tokens)
+            node_domain = node.domain.strip().lower()
+            if domain_lower and node_domain and domain_lower != node_domain:
+                containment *= DOMAIN_MISMATCH_PENALTY
+            if containment >= min_containment:
+                scored.append((node, containment))
+        # Tie-break by signature size so a tighter (more specific) concept
+        # wins over a sprawling one at equal containment — deterministic.
+        scored.sort(
+            key=lambda item: (item[1], -len(item[0].signature_tokens())),
+            reverse=True,
+        )
+        return scored[:limit]
+
     def _iter_scored(
         self, probe_tokens: set[str], *, domain: str
     ):

@@ -2,7 +2,6 @@
 
 import json
 
-from world0.agents.skill import SkillRegistry, register_builtin_skills
 from world0.extraction.extractor import ConceptExtractor
 from world0.llm.base import LLMProvider
 from world0.prompts import (
@@ -85,15 +84,3 @@ def test_concept_extractor_uses_configured_prompt():
 
     assert llm.system == "Extract for test."
     assert obs.concepts == ["python"]
-
-
-def test_builtin_skills_use_configured_prompt():
-    registry = PromptRegistry(overrides=[
-        PromptSpec("skill.digest_article.user", "Digest custom: {{text}}")
-    ])
-    skills = SkillRegistry()
-    register_builtin_skills(skills, registry)
-
-    prompt = skills.get("digest_article").render_prompt(text="sample")
-
-    assert prompt == "Digest custom: sample"

@@ -16,12 +16,18 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
+    from datetime import datetime
+
     from world0.schemas.community import Community
     from world0.schemas.concept import ConceptNode, Maturity
     from world0.schemas.context import Perspective
     from world0.schemas.relation import RelationEdge, RelationType
     from world0.schemas.source import SourceRecord
-    from world0.schemas.types import Observation, Projection
+    from world0.schemas.types import (
+        ActivationTrace,
+        Observation,
+        Projection,
+    )
 
 
 # ── Persistence ───────────────────────────────────────────────────────
@@ -246,7 +252,22 @@ class ActivationProvider(Protocol):
         task: str = ...,
         record: bool = ...,
         perspective: Perspective | None = ...,
+        now: datetime | None = ...,
     ) -> dict[str, float]: ...
+
+    def activate_traced(
+        self,
+        seed_ids: list[str],
+        *,
+        max_depth: int = ...,
+        decay: float = ...,
+        min_activation: float = ...,
+        source: str = ...,
+        task: str = ...,
+        record: bool = ...,
+        perspective: Perspective | None = ...,
+        now: datetime | None = ...,
+    ) -> tuple[dict[str, float], dict[str, ActivationTrace]]: ...
 
 
 @runtime_checkable
@@ -323,6 +344,11 @@ class Projector(Protocol):
         max_concepts: int = ...,
         min_activation: float = ...,
         task: str = ...,
+        perspective: Perspective | None = ...,
+        traces: dict[str, ActivationTrace] | None = ...,
+        max_relations: int | None = ...,
+        min_relation_signal: float | None = ...,
+        now: datetime | None = ...,
     ) -> Projection: ...
 
 

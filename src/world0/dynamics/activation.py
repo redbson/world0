@@ -24,15 +24,27 @@ Inhibition:
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import TYPE_CHECKING
 
+from world0.dynamics.affinity import (
+    concept_in_perspective_domain,
+    task_affinity,
+)
 from world0.dynamics.coefficients import (
     CONCEPT_TEMPORAL_HL,
+    CONTRASTS_INHIBITION_FACTOR,
+    MIN_TASK_AFFINITY,
+    PROPAGATION_FLOOR,
+    PROPAGATION_MIN_RATIO,
     RELATION_TEMPORAL_HL,
     RELATION_TYPE_FACTOR,
+    TASK_AFFINITY_BOOST,
+    ActivationConfig,
 )
 from world0.schemas.context import Perspective
 from world0.schemas.relation import RelationType
+from world0.schemas.types import ActivationStep, ActivationTrace
 
 if TYPE_CHECKING:
     from world0.core import ConceptStore, RelationStore
@@ -42,39 +54,16 @@ if TYPE_CHECKING:
 # importing each other's modules.
 __all__ = [
     "ActivationEngine",
+    "ActivationConfig",
     "RELATION_TYPE_FACTOR",
     "CONCEPT_TEMPORAL_HL",
     "RELATION_TEMPORAL_HL",
     "CONTRASTS_INHIBITION_FACTOR",
     "TASK_AFFINITY_BOOST",
+    "MIN_TASK_AFFINITY",
     "PROPAGATION_FLOOR",
     "PROPAGATION_MIN_RATIO",
 ]
-
-# ── Inhibition coefficient for negative-axis links ────────────────────
-# Negative is treated as an *inhibitory* relation: activating the
-# source produces negative activation on the target (which subtracts
-# from any positive spread on the same target).  The scalar below is
-# multiplied by the same edge/depth/task/temporal factors used for
-# excitation — repulsion strength tracks the evidence behind it.
-CONTRASTS_INHIBITION_FACTOR: float = 0.6
-
-# ── Task affinity boost ──────────────────────────────────────────────
-# When the current task matches a concept's or relation's history,
-# propagation is multiplied by this factor.
-TASK_AFFINITY_BOOST: float = 1.5
-
-# ── Propagation floor ────────────────────────────────────────────────
-# Low-confidence nodes still allow propagation to pass through at
-# this minimum readiness level, preventing "dead node" blockage.
-PROPAGATION_FLOOR: float = 0.3
-
-# ── Propagation minimum ratio ────────────────────────────────────────
-# Ensures propagated score is at least this fraction of the *seed*
-# score at each depth step, preventing the multiplicative chain from
-# zeroing out signal too early.  This widens the cognitive horizon
-# from ~1 hop to 3-4 hops.
-PROPAGATION_MIN_RATIO: float = 0.03
 
 
 class ActivationEngine:
@@ -88,9 +77,11 @@ class ActivationEngine:
         self,
         concepts: "ConceptStore",
         relations: "RelationStore",
+        config: ActivationConfig | None = None,
     ) -> None:
         self._concepts = concepts
         self._relations = relations
+        self._cfg = config if config is not None else ActivationConfig()
 
     def activate(
         self,
@@ -103,7 +94,39 @@ class ActivationEngine:
         task: str = "",
         record: bool = True,
         perspective: Perspective | None = None,
+        now: datetime | None = None,
     ) -> dict[str, float]:
+        """Spread activation from seeds; scores only (no traces).
+
+        Thin wrapper over :meth:`activate_traced` — see there for the
+        propagation model.
+        """
+        net, _ = self.activate_traced(
+            seed_ids,
+            max_depth=max_depth,
+            decay=decay,
+            min_activation=min_activation,
+            source=source,
+            task=task,
+            record=record,
+            perspective=perspective,
+            now=now,
+        )
+        return net
+
+    def activate_traced(
+        self,
+        seed_ids: list[str],
+        *,
+        max_depth: int = 2,
+        decay: float = 0.6,
+        min_activation: float = 0.01,
+        source: str = "",
+        task: str = "",
+        record: bool = True,
+        perspective: Perspective | None = None,
+        now: datetime | None = None,
+    ) -> tuple[dict[str, float], dict[str, ActivationTrace]]:
         """Spread activation from seeds with excitation + inhibition.
 
         Propagation strength (excitatory edges) =
@@ -130,15 +153,30 @@ class ActivationEngine:
                 Plain ``task`` is honored for backward compatibility
                 when no perspective is passed.
 
-        Returns concept_id → *net* activation score mapping.
+        Returns ``(net_scores, traces)`` where ``net_scores`` maps
+        concept_id → net activation and ``traces`` maps concept_id →
+        the best activation path that produced that score.
         """
         # Unify legacy (task: str) and new (Perspective) arguments.
         if perspective is None:
             perspective = Perspective(task=task)
         task_lower = (perspective.task or task).strip().lower()
 
+        # Hot-loop coefficients as locals (config reads once per call).
+        cfg = self._cfg
+        relation_type_factor = cfg.relation_type_factor
+        inhibition_factor = cfg.inhibition_factor
+        boost_amplitude = cfg.task_affinity_boost - 1.0
+        min_task_affinity = cfg.min_task_affinity
+        propagation_floor = cfg.propagation_floor
+        propagation_min_ratio = cfg.propagation_min_ratio
+        concept_temporal_hl = cfg.concept_temporal_hl
+        relation_temporal_hl = cfg.relation_temporal_hl
+
         activations: dict[str, float] = {}
-        inhibitions: dict[str, float] = {}
+        # concept_id → (inhibition value, inhibiting source concept id)
+        inhibitions: dict[str, tuple[float, str]] = {}
+        traces: dict[str, ActivationTrace] = {}
 
         # Seed concepts activate at their own confidence level
         seed_score_max = 0.0
@@ -147,9 +185,12 @@ class ActivationEngine:
             if not node:
                 continue
             score = node.confidence
-            # Boost seeds that have task affinity
-            if task_lower and self._concept_has_task(node, task_lower):
-                score = min(1.0, score * TASK_AFFINITY_BOOST)
+            # Boost seeds that have task affinity (graded)
+            if task_lower:
+                affinity = self._concept_task_affinity(node, task_lower)
+                if affinity >= min_task_affinity:
+                    boost = 1.0 + boost_amplitude * affinity
+                    score = min(1.0, score * boost)
             # Domain affinity stacks on top — a concept whose dominant
             # domain is "in focus" for the perspective is boosted too.
             if self._concept_in_perspective_domain(node, perspective):
@@ -157,13 +198,14 @@ class ActivationEngine:
                     1.0, score * perspective.domain_affinity_boost
                 )
             activations[cid] = score
+            traces[cid] = ActivationTrace(seed_id=cid, score=score)
             if score > seed_score_max:
                 seed_score_max = score
             if record:
                 node.activate(source=source, task=task)
 
         # Propagation floor: minimum signal that can still pass through
-        prop_floor = seed_score_max * PROPAGATION_MIN_RATIO
+        prop_floor = seed_score_max * propagation_min_ratio
 
         # BFS propagation with decay
         frontier = list(seed_ids)
@@ -185,29 +227,30 @@ class ActivationEngine:
                     if neighbor is None:
                         continue
 
-                    default_type_factor = RELATION_TYPE_FACTOR.get(
+                    default_type_factor = relation_type_factor.get(
                         rel.relation_type, 0.5
                     )
-                    type_factor = perspective.weight_for(
-                        rel.relation_type.value, default_type_factor
+                    type_factor = perspective.weight_for_relation(
+                        rel.semantic_relation,
+                        rel.relation_type.value,
+                        default_type_factor,
                     )
                     edge_strength = rel.weight * type_factor
 
                     neighbor_readiness = max(
-                        neighbor.confidence, PROPAGATION_FLOOR
+                        neighbor.confidence, propagation_floor
                     )
 
                     task_boost = 1.0
                     if task_lower:
-                        rel_match = any(
-                            task_lower in t.lower()
-                            for t in rel.task_history
+                        affinity = max(
+                            task_affinity(task_lower, rel.task_history),
+                            self._concept_task_affinity(
+                                neighbor, task_lower
+                            ),
                         )
-                        node_match = self._concept_has_task(
-                            neighbor, task_lower
-                        )
-                        if rel_match or node_match:
-                            task_boost = TASK_AFFINITY_BOOST
+                        if affinity >= min_task_affinity:
+                            task_boost = 1.0 + boost_amplitude * affinity
 
                     # Domain affinity boost for perspective-focused domains
                     domain_boost = 1.0
@@ -216,9 +259,11 @@ class ActivationEngine:
                     ):
                         domain_boost = perspective.domain_affinity_boost
 
-                    rel_freshness = rel.temporal_relevance(RELATION_TEMPORAL_HL)
+                    rel_freshness = rel.temporal_relevance(
+                        relation_temporal_hl, now=now
+                    )
                     neighbor_freshness = neighbor.temporal_relevance(
-                        CONCEPT_TEMPORAL_HL
+                        concept_temporal_hl, now=now
                     )
 
                     raw = (
@@ -235,20 +280,24 @@ class ActivationEngine:
                     if rel.relation_type == RelationType.NEGATIVE:
                         # Inhibitory channel: negative-axis links spread negative
                         # activation instead of weak excitation.
-                        inhibition = raw * CONTRASTS_INHIBITION_FACTOR
+                        inhibition = raw * inhibition_factor
                         if inhibition < min_activation:
                             continue
-                        old = inhibitions.get(neighbor_id, 0.0)
-                        if inhibition > old:
-                            inhibitions[neighbor_id] = inhibition
+                        old_inhibition, _ = inhibitions.get(
+                            neighbor_id, (0.0, "")
+                        )
+                        if inhibition > old_inhibition:
+                            inhibitions[neighbor_id] = (inhibition, cid)
                         continue
 
                     propagated = raw
+                    floored = False
                     # Apply propagation minimum floor — ensures distant
                     # but structurally connected concepts still receive
                     # enough signal to participate in projections.
                     if propagated < prop_floor and propagated > 0:
                         propagated = prop_floor
+                        floored = True
 
                     if propagated < min_activation:
                         continue
@@ -256,6 +305,23 @@ class ActivationEngine:
                     old = activations.get(neighbor_id, 0.0)
                     if propagated > old:
                         activations[neighbor_id] = propagated
+                        source_trace = traces.get(cid)
+                        if source_trace is not None:
+                            step = ActivationStep(
+                                from_id=cid,
+                                relation_id=rel.id,
+                                semantic_relation=rel.semantic_relation,
+                                axis=rel.relation_type.value,
+                                contribution=(
+                                    propagated / source_score
+                                    if source_score > 0
+                                    else 0.0
+                                ),
+                                floored=floored,
+                            )
+                            traces[neighbor_id] = source_trace.extended_with(
+                                step, propagated
+                            )
                         next_frontier.append(neighbor_id)
                         if record:
                             neighbor.activate(source=source, task=task)
@@ -268,37 +334,37 @@ class ActivationEngine:
         # projection selection is deterministic across process runs.
         net: dict[str, float] = {}
         for cid, excitation in activations.items():
-            score = excitation - inhibitions.get(cid, 0.0)
+            inhibition, inhibitor = inhibitions.get(cid, (0.0, ""))
+            score = excitation - inhibition
             if score > min_activation:
                 net[cid] = score
-        for cid, inhibition in inhibitions.items():
+                trace = traces.get(cid)
+                if trace is not None:
+                    trace.score = score
+                    if inhibition > 0:
+                        trace.inhibition = inhibition
+                        trace.inhibition_source = inhibitor
+        for cid, (inhibition, _) in inhibitions.items():
             if cid in activations:
                 continue
             score = -inhibition
             if score > min_activation:
                 net[cid] = score
-        return net
+        # Only return traces for concepts that survived netting.
+        surviving_traces = {
+            cid: trace for cid, trace in traces.items() if cid in net
+        }
+        return net, surviving_traces
 
     @staticmethod
     def _concept_in_perspective_domain(
         node, perspective: Perspective
     ) -> bool:
-        if not perspective.active_domains:
-            return False
-        # Prefer the dominant domain in the concept's profile, fall
-        # back to its static ``domain`` field.
-        if node.domain_profile:
-            top_domain, _ = max(
-                node.domain_profile.items(), key=lambda item: item[1]
-            )
-            if perspective.domain_match(top_domain):
-                return True
-        return perspective.domain_match(node.domain)
+        return concept_in_perspective_domain(node, perspective)
 
     @staticmethod
-    def _concept_has_task(node, task_lower: str) -> bool:
-        """Check if a concept has been activated under a matching task."""
-        for entry in node.reinforcement_log:
-            if task_lower in entry.task.lower():
-                return True
-        return False
+    def _concept_task_affinity(node, task_lower: str) -> float:
+        """Graded affinity between the task and the concept's history."""
+        return task_affinity(
+            task_lower, (entry.task for entry in node.reinforcement_log)
+        )

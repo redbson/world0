@@ -56,7 +56,8 @@ The project is organized Lego-style — every cross-module call depends only on 
 | 编排 / Orchestration | `world/` | `facade.World` + 三条流水线：`IngestPipeline`、`ReflectPipeline`、`IdentityOps` |
 | 提取 / Extraction | `extraction/` | 从原始文本抽取 `Observation` |
 | LLM 适配 / LLM | `llm/` | OpenAI、Anthropic、Azure OpenAI provider |
-| 上层 Agent | `agents/` | `pkm`（CLI）、`pkm-web`（浏览器）、`pkm-gui`（macOS 原生）、MCP 服务端 |
+
+上层 Agent（`pkm` CLI、`pkm-web`、`pkm-gui`、MCP、研究、自主个体）位于独立项目 [`world0-pkm`](../../world0-pkm)。 / The agent layer (`pkm` CLI, `pkm-web`, `pkm-gui`, MCP, research, autonomy) lives in the separate [`world0-pkm`](../../world0-pkm) project.
 
 每个积木都自带 `tests/` 子目录，用 `world0.core.test_doubles` 提供的 Protocol 假实现做单元测试 —— 不需要启动真实存储或其它模块。
 
@@ -82,21 +83,7 @@ Development:
 pip install -e ".[dev]"
 ```
 
-浏览器 UI：
-
-Browser UI:
-
-```bash
-pip install -e ".[web]"
-```
-
-macOS 原生窗口：
-
-Native macOS window:
-
-```bash
-pip install -e ".[gui]"
-```
+> 浏览器 UI / 原生 GUI 属于 [`world0-pkm`](../../world0-pkm)（`pip install -e ".[web]"` / `".[gui]"` 在该项目中）。 / The browser UI / native GUI belong to [`world0-pkm`](../../world0-pkm).
 
 LLM 提取：
 
@@ -336,79 +323,13 @@ Environment variables:
 
 ---
 
-## 8. CLI 使用 / CLI Usage
+## 8. CLI / Web / GUI — 见 world0-pkm
 
-安装后可用 `pkm` 命令。默认存储目录是 `~/.pkm_world`，默认 provider 是 `anthropic`。
+CLI（`pkm`）、浏览器界面（`pkm-web`）、原生 GUI（`pkm-gui`）、研究模式与自主数字个体属于 **PKM / Agent 应用层**，已迁出为独立项目 [`world0-pkm`](../../world0-pkm)（导入包 `pkm`，依赖本核心库）。这些交互入口的用法见该项目的 README。
 
-After install, `pkm` is available. Default store: `~/.pkm_world`. Default provider: `anthropic`.
+The CLI (`pkm`), browser UI (`pkm-web`), native GUI (`pkm-gui`), research mode, and the autonomous digital individual belong to the **PKM / Agent application layer**, which now lives in the separate [`world0-pkm`](../../world0-pkm) project (imported as `pkm`, depending on this core library). See that project's README for those interfaces.
 
-### 8.1 全局参数 / Global Flags
-
-```
---store <path>                # 存储目录
---provider {anthropic,openai,azure-openai,none}
---model   <name>              # 覆盖默认模型
-```
-
-### 8.2 子命令 / Subcommands
-
-```bash
-# 从文本学习（需 provider）
-pkm --provider openai learn "Transformers use self-attention."
-
-# 问答（基于当前概念世界做局部投影）
-pkm --provider none ask "What do I know about FastAPI?"
-
-# 探索单个概念
-pkm --provider none explore "FastAPI"
-
-# 手工建立关系
-pkm --provider none connect "FastAPI" "PostgreSQL" --type depends_on
-
-# 搜索概念
-pkm --provider none search "latency"
-
-# 公网搜索 + 可选抓取摘要
-pkm --provider anthropic web-search "latest MCP patterns" \
-    --limit 5 --fetch-pages --domains "modelcontextprotocol.io"
-
-# 查看状态
-pkm --provider none status
-
-# 跑一次巩固
-pkm --provider none reflect
-
-# 生成可视化
-pkm --provider none viz --output world0_viz.html
-```
-
-不带子命令启动则进入交互终端。
-
-Running `pkm` without a subcommand enters the interactive terminal.
-
----
-
-## 9. Web / GUI
-
-浏览器版：
-
-Browser:
-
-```bash
-pkm-web --provider none --host 127.0.0.1 --port 8420
-```
-
-macOS 原生窗口：
-
-Native macOS window:
-
-```bash
-pkm-gui --provider none
-```
-
-两者都接受和 `pkm` 一样的 `--store` / `--provider` / `--model`。
-
-Both accept the same `--store` / `--provider` / `--model` flags as `pkm`.
+This document covers the **core library** only (the `World` Python API).
 
 ---
 
