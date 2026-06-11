@@ -23,12 +23,13 @@ if TYPE_CHECKING:
         ConceptStore,
         HebbianLearner,
         RelationStore,
+        SimilarityLinkerP,
     )
 
 
 class IngestPipeline:
-    """Six-step ingest: concepts → relations → hebbian → descriptions →
-    disconfirmation → color seeding.
+    """Seven-step ingest: concepts → relations → hebbian → similarity →
+    descriptions → disconfirmation → color seeding.
 
     The pipeline never touches persistence directly — the caller (the
     ``World`` facade) is responsible for flushing dirty state once the
@@ -43,20 +44,26 @@ class IngestPipeline:
         relations: RelationStore,
         hebbian: HebbianLearner,
         color: ColorField,
+        similarity: SimilarityLinkerP | None = None,
     ) -> None:
         self._concepts = concepts
         self._relations = relations
         self._hebbian = hebbian
         self._color = color
+        self._similarity = similarity
 
     def run(self, observation: Observation) -> IngestResult:
         result = IngestResult()
         resolved_ids: list[str] = []
+        new_ids: list[str] = []
         local_refs: dict[str, str] = {}
 
-        self._step_concepts(observation, result, resolved_ids, local_refs)
+        self._step_concepts(
+            observation, result, resolved_ids, local_refs, new_ids
+        )
         self._step_relations(observation, result, local_refs)
         self._step_hebbian(observation, resolved_ids, result)
+        self._step_similarity(observation, new_ids, result)
         self._step_descriptions(observation, local_refs)
         self._step_disconfirmation(observation, result, local_refs)
         self._step_color(observation, resolved_ids)
@@ -71,6 +78,7 @@ class IngestPipeline:
         result: IngestResult,
         resolved_ids: list[str],
         local_refs: dict[str, str],
+        new_ids: list[str],
     ) -> None:
         candidates = observation.concept_candidates or [
             ConceptCandidate(
@@ -129,6 +137,8 @@ class IngestPipeline:
                 node.name
             )
             resolved_ids.append(node.id)
+            if is_new:
+                new_ids.append(node.id)
 
     def _record_token_refs(
         self,
@@ -252,6 +262,33 @@ class IngestPipeline:
             tgt = self._concepts.get(edge.target_id)
             if src and tgt:
                 result.hebbian_relations.append(f"{src.name} ↔ {tgt.name}")
+
+    def _step_similarity(
+        self,
+        observation: Observation,
+        new_ids: list[str],
+        result: IngestResult,
+    ) -> None:
+        """Link newly created concepts to existing near-duplicates.
+
+        Only *new* concepts are probed — re-ingesting a known concept
+        cannot produce a similarity link it does not already have.
+        """
+        if self._similarity is None or not new_ids:
+            return
+        created = self._similarity.link(
+            new_ids, provenance=observation.task
+        )
+        for rid in created:
+            edge = self._relations.get(rid)
+            if not edge:
+                continue
+            src = self._concepts.get(edge.source_id)
+            tgt = self._concepts.get(edge.target_id)
+            if src and tgt:
+                result.similarity_relations.append(
+                    f"{src.name} ≈ {tgt.name}"
+                )
 
     def _step_descriptions(
         self, observation: Observation, local_refs: dict[str, str]

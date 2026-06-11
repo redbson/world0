@@ -90,6 +90,19 @@ def render_default(p: "Projection") -> str:
             )
         lines.append("")
 
+    # Exposed counter-signals (negative visibility policy "expose").
+    # Empty for worlds without constraint-class negatives, keeping the
+    # historical default output byte-identical in that case.
+    if p.counter_signals:
+        lines.append("### Constraint Warnings")
+        for sig in p.counter_signals:
+            lines.append(
+                f"- ⚠ {sig.source_name} ✕ {sig.target_name} "
+                f"({sig.semantic_relation}, "
+                f"structural: {sig.structural_strength:.2f})"
+            )
+        lines.append("")
+
     if p.task:
         lines.append(f"### Task Context")
         lines.append(f"Concepts activated for: {p.task}")
@@ -121,6 +134,13 @@ def render_compact(p: "Projection") -> str:
             tgt = concept_names.get(r.target_id, r.target_id)
             lines.append(f"- {src} —{r.semantic_relation}→ {tgt}")
 
+    # Constraint warnings survive compaction — a counter-signal the
+    # agent never sees cannot prevent a violation.
+    for sig in p.counter_signals:
+        lines.append(
+            f"⚠ {sig.source_name} ✕ {sig.target_name} ({sig.semantic_relation})"
+        )
+
     if p.task:
         lines.append(f"Task: {p.task}")
 
@@ -150,6 +170,9 @@ def render_detailed(p: "Projection") -> str:
 
     # Negative-axis relations are counter-signals: things the world
     # believes pull *apart* — worth surfacing explicitly when reasoning.
+    # The detailed style shows ALL in-view negatives regardless of
+    # visibility policy (it is the explain style); policy-exposed
+    # signals to suppressed concepts already render in the default body.
     negatives = [
         r for r in p.relations if r.relation_type == RelationType.NEGATIVE
     ]

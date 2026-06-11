@@ -86,6 +86,7 @@ class IngestResult(BaseModel):
     reinforced_relations: list[str] = Field(default_factory=list)
     weakened_relations: list[str] = Field(default_factory=list)
     hebbian_relations: list[str] = Field(default_factory=list)
+    similarity_relations: list[str] = Field(default_factory=list)
 
 
 class ActivationStep(BaseModel):
@@ -127,6 +128,26 @@ class ActivationTrace(BaseModel):
         )
 
 
+class CounterSignal(BaseModel):
+    """A negative relation surfaced as an explicit warning.
+
+    The flagged endpoint usually did *not* survive selection — that is
+    the point: inhibition removed it from the main view, and the
+    counter-signal tells the agent why the path is closed instead of
+    hiding the constraint entirely.
+    """
+
+    source_id: str
+    source_name: str
+    target_id: str
+    target_name: str
+    semantic_relation: str
+    # Explanation-channel salience — deliberately structural_strength,
+    # not weight: "how strong is this constraint as a structural fact".
+    structural_strength: float = 0.0
+    provenance: str = ""
+
+
 class Projection(BaseModel):
     """A local cognitive view — the operational output of World 0.
 
@@ -144,6 +165,12 @@ class Projection(BaseModel):
     perspective_name: str = ""
     # concept_id → best activation path that reached it.
     traces: dict[str, ActivationTrace] = Field(default_factory=dict)
+    # Negative relations exposed as warnings (visibility policy "expose").
+    counter_signals: list[CounterSignal] = Field(default_factory=list)
+    # Governance: share of generic_relation edges among projected
+    # relations — high pressure means untyped structure is polluting
+    # the operational output.
+    generic_pressure: float = 0.0
 
     def top_concepts(self, n: int = 5) -> list[ConceptNode]:
         ranked = sorted(
@@ -241,6 +268,9 @@ class ReflectResult(BaseModel):
     pruned_concepts: list[str] = Field(default_factory=list)
     decayed_relations: list[str] = Field(default_factory=list)
     pruned_relations: list[str] = Field(default_factory=list)
+    # Generic-relation governance (reflect-time refinement).
+    retyped_relations: list[str] = Field(default_factory=list)
+    co_attention_relations: list[str] = Field(default_factory=list)
     # Color-field dynamics (doc §29 Stage A observation layer).
     new_communities: list[str] = Field(default_factory=list)
     stable_communities: list[str] = Field(default_factory=list)

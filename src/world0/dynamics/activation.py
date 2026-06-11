@@ -11,6 +11,11 @@ Activation factors:
     the Perspective receive an extra boost
   - temporal relevance: recently active concepts and relations propagate
     more strongly than stale ones
+  - seed specificity: rarer seed concepts (attested by fewer distinct
+    sources) are more discriminative, so common seeds are blended down
+    relative to the rarest seed in the set (IDF-like, HippoRAG-style)
+  - fan dilution: high-fan hub concepts spread less per edge (ACT-R fan
+    effect), preventing over-connected nodes from flooding the network
   - depth decay with configurable falloff
   - propagation floor to prevent low-confidence nodes from blocking spread
 
@@ -24,6 +29,7 @@ Inhibition:
 
 from __future__ import annotations
 
+import math
 from datetime import datetime
 from typing import TYPE_CHECKING
 
@@ -34,11 +40,14 @@ from world0.dynamics.affinity import (
 from world0.dynamics.coefficients import (
     CONCEPT_TEMPORAL_HL,
     CONTRASTS_INHIBITION_FACTOR,
+    FAN_DILUTION_STRENGTH,
+    FAN_DILUTION_THRESHOLD,
     MIN_TASK_AFFINITY,
     PROPAGATION_FLOOR,
     PROPAGATION_MIN_RATIO,
     RELATION_TEMPORAL_HL,
     RELATION_TYPE_FACTOR,
+    SEED_SPECIFICITY_WEIGHT,
     TASK_AFFINITY_BOOST,
     ActivationConfig,
 )
@@ -63,6 +72,9 @@ __all__ = [
     "MIN_TASK_AFFINITY",
     "PROPAGATION_FLOOR",
     "PROPAGATION_MIN_RATIO",
+    "SEED_SPECIFICITY_WEIGHT",
+    "FAN_DILUTION_THRESHOLD",
+    "FAN_DILUTION_STRENGTH",
 ]
 
 
@@ -138,6 +150,13 @@ class ActivationEngine:
             * domain_affinity
             * relation.temporal_relevance
             * neighbor.temporal_relevance
+            * fan_dilution(source)   [hubs past FAN_DILUTION_THRESHOLD
+                                      spread less per edge]
+
+        Seed scores are additionally scaled by relative seed
+        specificity: rarer seeds (fewer distinct evidence sources) stay
+        at full strength while ubiquitous seeds are blended down by
+        SEED_SPECIFICITY_WEIGHT.
 
         Negative-axis edges use the same multiplicative chain but feed an
         independent inhibition channel multiplied by
@@ -172,6 +191,8 @@ class ActivationEngine:
         propagation_min_ratio = cfg.propagation_min_ratio
         concept_temporal_hl = cfg.concept_temporal_hl
         relation_temporal_hl = cfg.relation_temporal_hl
+        fan_threshold = cfg.fan_dilution_threshold
+        fan_strength = cfg.fan_dilution_strength
 
         activations: dict[str, float] = {}
         # concept_id → (inhibition value, inhibiting source concept id)
@@ -179,7 +200,7 @@ class ActivationEngine:
         traces: dict[str, ActivationTrace] = {}
 
         # Seed concepts activate at their own confidence level
-        seed_score_max = 0.0
+        seeded: list[tuple[str, object, float]] = []
         for cid in seed_ids:
             node = self._concepts.get(cid)
             if not node:
@@ -197,6 +218,34 @@ class ActivationEngine:
                 score = min(
                     1.0, score * perspective.domain_affinity_boost
                 )
+            seeded.append((cid, node, score))
+
+        # Seed specificity: rarer seeds (fewer distinct evidence
+        # sources) are more discriminative.  Normalized across the seed
+        # set so the rarest seed keeps full score and ubiquitous seeds
+        # are blended toward (1 - weight).  Neutral for a single seed.
+        specificity_weight = cfg.seed_specificity_weight
+        if specificity_weight > 0.0 and len(seeded) > 1:
+            raw_specs = [
+                1.0 / self._source_count(node) for _, node, _ in seeded
+            ]
+            max_spec = max(raw_specs)
+            seeded = [
+                (
+                    cid,
+                    node,
+                    score
+                    * (
+                        1.0
+                        - specificity_weight
+                        + specificity_weight * (raw / max_spec)
+                    ),
+                )
+                for (cid, node, score), raw in zip(seeded, raw_specs)
+            ]
+
+        seed_score_max = 0.0
+        for cid, node, score in seeded:
             activations[cid] = score
             traces[cid] = ActivationTrace(seed_id=cid, score=score)
             if score > seed_score_max:
@@ -218,7 +267,19 @@ class ActivationEngine:
                 if source_score < min_activation:
                     continue
 
-                for rel in self._relations.for_concept(cid):
+                rels = self._relations.for_concept(cid)
+
+                # Fan dilution (ACT-R fan effect): a hub with many
+                # edges spreads less per edge.  Smooth log dilution —
+                # unlike ACT-R's smax - ln(fan) it never flips negative.
+                fan_factor = 1.0
+                fan = len(rels)
+                if fan_strength > 0.0 and fan > fan_threshold:
+                    fan_factor = 1.0 / (
+                        1.0 + fan_strength * math.log(fan / fan_threshold)
+                    )
+
+                for rel in rels:
                     neighbor_id = rel.other_end(cid)
                     if neighbor_id is None:
                         continue
@@ -275,6 +336,7 @@ class ActivationEngine:
                         * domain_boost
                         * rel_freshness
                         * neighbor_freshness
+                        * fan_factor
                     )
 
                     if rel.relation_type == RelationType.NEGATIVE:
@@ -355,6 +417,21 @@ class ActivationEngine:
             cid: trace for cid, trace in traces.items() if cid in net
         }
         return net, surviving_traces
+
+    @staticmethod
+    def _source_count(node) -> int:
+        """Distinct evidence sources attesting a concept (always ≥ 1).
+
+        Prefers ``source_refs`` (deduplicated by source id at record
+        time); falls back to distinct sources in the reinforcement log
+        for concepts ingested before source tracking existed.
+        """
+        if node.source_refs:
+            return len(node.source_refs)
+        sources = {
+            entry.source for entry in node.reinforcement_log if entry.source
+        }
+        return max(1, len(sources))
 
     @staticmethod
     def _concept_in_perspective_domain(

@@ -209,6 +209,16 @@ class RelationStore(RelationStoreReader, Protocol):
         self, relation_id: str, provenance: str = ...
     ) -> RelationEdge | None: ...
     def refine_type(self, relation_id: str, new_type: RelationType) -> None: ...
+    def retype_semantic(
+        self,
+        relation_id: str,
+        semantic_relation: str,
+        *,
+        flip_direction: bool = ...,
+    ) -> RelationEdge | None: ...
+    def set_refinement_state(
+        self, relation_id: str, state: str
+    ) -> RelationEdge | None: ...
     def adjust_strength(
         self,
         relation_id: str,
@@ -275,6 +285,15 @@ class HebbianLearner(Protocol):
     """Co-activation → relation discovery / reinforcement."""
 
     def learn(
+        self, concept_ids: list[str], *, provenance: str = ...
+    ) -> list[str]: ...
+
+
+@runtime_checkable
+class SimilarityLinkerP(Protocol):
+    """Signature similarity → explicit ``similarity_kernel`` edges."""
+
+    def link(
         self, concept_ids: list[str], *, provenance: str = ...
     ) -> list[str]: ...
 

@@ -6,6 +6,90 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Design-review adoptions** (from the 2026-06 external design review;
+  full assessment in `docs/world0-relation-optimization.md` §6):
+  - *Negative visibility policy + counter-signals* — negative relations
+    now distinguish propagation (always inhibit) from projection
+    visibility (`NEGATIVE_VISIBILITY_DEFAULTS`: suppress / expose /
+    conditional per semantic relation).  Exposed relations surface as
+    `Projection.counter_signals` and render as a `### Constraint
+    Warnings` section — the agent sees *why a path is closed* even
+    though inhibition removed the concept from the view.
+    `violates_constraint` exposes by default; `conflict`/`instability`/
+    `incompatible_ontology` are conditional, opted in per Perspective
+    (`negative_visibility`; the built-in debug profile exposes
+    conflict + instability).  Default render is byte-identical when no
+    signals exist.
+  - *Reflect-time generic-relation refinement* — a budgeted
+    `RelationRefiner` re-judges the stock of `generic_relation` edges
+    each `reflect()` cycle through the shared `RelationTypingJudge`
+    (same prompt as ingest-time Hebbian typing): nameable structure is
+    re-typed in place (evidence preserved, direction flippable);
+    pairs with no nameable structure demote to `co_attention_only`,
+    which halves their projection salience — frequent co-occurrence
+    must not masquerade as semantic structure.  Results surface in
+    `ReflectResult.retyped_relations` / `co_attention_relations`.
+  - *Governance metrics* — `Projection.generic_pressure` (share of
+    generic edges among projected relations) makes typed-structure
+    pollution observable per projection.
+  - *Agent-context ablation harness*
+    (`scripts/eval_agent_ablation.py`) — scores six context variants
+    (none / raw history / lexical recall / graph neighbors /
+    projection / projection+counter-signals) on coverage,
+    token cost and silent-constraint-violation rate over a fixture
+    world; CI smoke test locks the mechanism facts (raw dumps and
+    naive 1-hop neighborhoods leak forbidden concepts silently;
+    projections never do).
+  - *Score-semantics consumption boundaries* documented as an
+    invariant (`docs/world0-core-concepts.md` §4.2b): each of
+    structural_strength / propagation_strength / weight / confidence /
+    probability has exactly one consumer class.
+- **Relation-usage optimizations** (research-backed; evidence and
+  rationale in `docs/world0-relation-optimization.md`):
+  - *Seed specificity* — activation seeds are weighted by concept
+    rarity (IDF-like, HippoRAG node specificity): seeds attested by
+    fewer distinct sources keep full activation while ubiquitous seeds
+    are blended down relative to the rarest seed in the set.  Tunable
+    via `ActivationConfig.seed_specificity_weight`; neutral for a
+    single seed.
+  - *Fan dilution* — high-fan hub concepts spread less activation per
+    edge (ACT-R fan effect), preventing over-connected nodes from
+    flooding the network under fixed declared edge strengths.  Smooth
+    log dilution past `FAN_DILUTION_THRESHOLD` (default 7) — unlike
+    ACT-R's `smax − ln(fan)` it never flips inhibitory.
+  - *Similarity linking* — `SimilarityLinker` (`dynamics/similarity.py`,
+    `SimilarityLinkerP` protocol) creates explicit PARALLEL similarity
+    edges between newly ingested concepts and existing near-duplicates,
+    as a new ingest step reported in
+    `IngestResult.similarity_relations`.  Two-stage (A-MEM/Mem0-style):
+    signature-token matching recalls candidates cheaply, then — when an
+    LLM provider is configured — the new `similarity.judge.system`
+    prompt judges *meaning*, choosing `equivalence` /
+    `approximate_equivalence` / `similarity_kernel` per pair.  The
+    judge links zero-stem-overlap pairs ("vector database" ≈ "vector
+    store", cross-language pairs) and rejects token lookalikes
+    ("chain_2" vs "chain_3").  Without an LLM a strict lexical rule
+    applies (Jaccard ≥ 0.5, single-token signatures never linked);
+    judge failures fall back to that rule so ingest never breaks.
+    Similarity strength is encoded as the edge weight, capped at the
+    Hebbian ceiling (0.7) so implicit evidence never outranks declared
+    relations.
+  - *LLM-typed Hebbian relations* — co-occurrence pairs crossing the
+    Hebbian threshold are now typed by the system LLM (new
+    `relation.typing.system` prompt): the model picks the most specific
+    semantic relation from the canonical 26-type inventory with
+    direction and confidence, or rejects coincidental pairs (`"none"` →
+    no edge; the pair re-accumulates and is re-judged if it keeps
+    co-occurring).  This closes the last untyped relation-creation path
+    (Rule 3: generic only as fallback) — with an LLM configured, every
+    semantic decision (text extraction, similarity judging, discovered-
+    relation typing) now runs through the same system-selected model.
+    Without an LLM, or on judge failure, the original untyped PARALLEL
+    edge is created as before.  Shared LLM-output parsing moved to
+    `llm/parsing.py` (`extract_json`), used by extraction, similarity
+    and relation typing alike.
+
 ### Changed
 - **Repository split — World 0 is now the pure cognitive core.** The PKM /
   Agent application layer (`agents/` and `models/`) has been extracted into a

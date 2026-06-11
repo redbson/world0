@@ -37,6 +37,7 @@ from world0.core.interfaces import (
     Projector,
     RelationStore,
     RelationStoreReader,
+    SimilarityLinkerP,
     StorageBackend,
     WorldView,
 )
@@ -56,6 +57,7 @@ __all__ = [
     "Projector",
     "RelationStore",
     "RelationStoreReader",
+    "SimilarityLinkerP",
     "StorageBackend",
     "WorldView",
     # events

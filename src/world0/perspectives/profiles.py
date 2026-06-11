@@ -43,6 +43,12 @@ def builtin_profiles() -> dict[str, Perspective]:
                 "overlap": 0.5,
             },
             relation_type_weights={"parallel": 0.6},
+            # Debugging needs conflicts and instability *visible*, not
+            # just inhibited — opt the conditional relations in.
+            negative_visibility={
+                "conflict": "expose",
+                "instability": "expose",
+            },
             render_style="compact",
         ),
         "design": Perspective(

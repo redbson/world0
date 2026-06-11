@@ -70,6 +70,21 @@ PROPAGATION_FLOOR: float = 0.3
 # depth step, widening the cognitive horizon from ~1 hop to 3-4 hops.
 PROPAGATION_MIN_RATIO: float = 0.03
 
+# Seed specificity (IDF-like rarity weighting, HippoRAG node specificity).
+# A seed attested by few distinct sources is more discriminative for the
+# current task than one that appears everywhere, so rarer seeds keep
+# their full activation while ubiquitous ones are blended down.
+# 0 disables; 1 = full relative specificity across the seed set.
+SEED_SPECIFICITY_WEIGHT: float = 0.3
+
+# Fan dilution (ACT-R fan effect).  A hub concept connected to many
+# neighbors spreads less activation per edge — without this, fixed
+# declared edge strengths let high-fan hubs flood the network.  ACT-R's
+# S_ji = smax - ln(fan) flips inhibitory past fan ≈ 7; we keep the same
+# threshold but dilute smoothly (never below zero) instead of flipping.
+FAN_DILUTION_THRESHOLD: int = 7
+FAN_DILUTION_STRENGTH: float = 1.0
+
 
 # ── Projection engine coefficients ───────────────────────────────────
 
@@ -111,6 +126,9 @@ class ActivationConfig:
     propagation_min_ratio: float = PROPAGATION_MIN_RATIO
     concept_temporal_hl: float = CONCEPT_TEMPORAL_HL
     relation_temporal_hl: float = RELATION_TEMPORAL_HL
+    seed_specificity_weight: float = SEED_SPECIFICITY_WEIGHT
+    fan_dilution_threshold: int = FAN_DILUTION_THRESHOLD
+    fan_dilution_strength: float = FAN_DILUTION_STRENGTH
 
 
 @dataclass(frozen=True)

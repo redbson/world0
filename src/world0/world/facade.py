@@ -28,6 +28,8 @@ from world0.dynamics.community import CommunityDetector
 from world0.dynamics.decay import DecayEngine
 from world0.dynamics.hebbian import HebbianEngine
 from world0.dynamics.lifecycle import LifecycleEngine
+from world0.dynamics.refinement import RelationRefiner
+from world0.dynamics.similarity import SimilarityLinker
 from world0.extraction.extractor import ConceptExtractor
 from world0.perspectives import PerspectiveRegistry
 from world0.prompts import PromptRegistry
@@ -108,7 +110,18 @@ class World:
         self._color_diffusion = ColorDiffusionEngine(
             self.concepts, self.relations
         )
-        self._hebbian = HebbianEngine(self.relations)
+        self._hebbian = HebbianEngine(
+            self.relations,
+            self.concepts,
+            llm=llm,
+            prompt_registry=self._prompts,
+        )
+        self._similarity = SimilarityLinker(
+            self.concepts,
+            self.relations,
+            llm=llm,
+            prompt_registry=self._prompts,
+        )
         self._decay = DecayEngine(self.concepts, self.relations)
         self._lifecycle = LifecycleEngine(self.concepts, self.relations)
         self._projection = ProjectionEngine(
@@ -139,12 +152,23 @@ class World:
             relations=self.relations,
             hebbian=self._hebbian,
             color=self._color_diffusion,
+            similarity=self._similarity,
         )
         self._reflect_pipeline = ReflectPipeline(
             decay=self._decay,
             lifecycle=self._lifecycle,
             color=self._color_diffusion,
             communities=self._communities,
+            refiner=(
+                RelationRefiner(
+                    self.concepts,
+                    self.relations,
+                    llm,
+                    prompt_registry=self._prompts,
+                )
+                if llm
+                else None
+            ),
         )
         self._identity = IdentityOps(
             concepts=self.concepts, relations=self.relations

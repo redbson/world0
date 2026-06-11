@@ -27,8 +27,17 @@ from world0.dynamics.coefficients import (
     ProjectionConfig,
 )
 from world0.schemas.context import Perspective
-from world0.schemas.relation import RelationEdge
-from world0.schemas.types import ActivationTrace, Projection
+from world0.schemas.relation import RelationEdge, RelationType
+from world0.schemas.types import ActivationTrace, CounterSignal, Projection
+
+# Projection-salience multiplier for edges the typing judge repeatedly
+# could not refine ("co_attention_only") — co-occurrence keeps the edge
+# alive but must not masquerade as semantic structure in the output.
+CO_ATTENTION_SALIENCE: float = 0.5
+
+# Cap on exposed counter-signals per projection — warnings are
+# high-salience output; a wall of them is noise again.
+MAX_COUNTER_SIGNALS: int = 10
 
 if TYPE_CHECKING:
     from world0.core import ConceptStore, RelationStore
@@ -251,6 +260,8 @@ class ProjectionEngine:
                         )
                     else:
                         factor = default_factor
+                    if rel.refinement_state == "co_attention_only":
+                        factor *= CO_ATTENTION_SALIENCE
                     scored_relations.append((rel.weight * factor, rel))
 
         scored_relations.sort(key=lambda item: item[0], reverse=True)
@@ -270,6 +281,22 @@ class ProjectionEngine:
             if traces is not None and cid in traces
         }
 
+        counter_signals = self._collect_counter_signals(
+            selected_ids, perspective
+        )
+
+        # Governance: how much untyped structure reaches the output.
+        generic_pressure = (
+            sum(
+                1
+                for rel in relations
+                if rel.semantic_relation == "generic_relation"
+            )
+            / len(relations)
+            if relations
+            else 0.0
+        )
+
         return Projection(
             concepts=concepts,
             relations=relations,
@@ -277,4 +304,47 @@ class ProjectionEngine:
             task=task,
             perspective_name=perspective.name if perspective else "",
             traces=selected_traces,
+            counter_signals=counter_signals,
+            generic_pressure=generic_pressure,
         )
+
+    def _collect_counter_signals(
+        self,
+        selected_ids: set[str],
+        perspective: Perspective | None,
+    ) -> list[CounterSignal]:
+        """Negative edges incident to the selection whose visibility
+        policy is "expose".
+
+        Inhibition removes the repelled endpoint from the main view —
+        which is exactly why constraint-class negatives must surface
+        here: the agent should see *why a path is closed*, not merely
+        never see the path.
+        """
+        policy_view = perspective or Perspective()
+        signals: list[CounterSignal] = []
+        seen: set[str] = set()
+        for cid in selected_ids:
+            for rel in self._relations.for_concept(cid):
+                if rel.relation_type != RelationType.NEGATIVE:
+                    continue
+                if rel.id in seen:
+                    continue
+                seen.add(rel.id)
+                if policy_view.visibility_for(rel.semantic_relation) != "expose":
+                    continue
+                source = self._concepts.get(rel.source_id)
+                target = self._concepts.get(rel.target_id)
+                signals.append(
+                    CounterSignal(
+                        source_id=rel.source_id,
+                        source_name=source.name if source else rel.source_id,
+                        target_id=rel.target_id,
+                        target_name=target.name if target else rel.target_id,
+                        semantic_relation=rel.semantic_relation,
+                        structural_strength=rel.structural_strength,
+                        provenance=rel.provenance,
+                    )
+                )
+        signals.sort(key=lambda s: s.structural_strength, reverse=True)
+        return signals[:MAX_COUNTER_SIGNALS]

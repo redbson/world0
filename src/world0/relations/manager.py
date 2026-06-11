@@ -216,6 +216,47 @@ class RelationManager:
             edge.relation_type = new_type
             self._dirty.add(edge.id)
 
+    def retype_semantic(
+        self,
+        relation_id: str,
+        semantic_relation: str,
+        *,
+        flip_direction: bool = False,
+    ) -> RelationEdge | None:
+        """Re-type a relation to a canonical semantic relation.
+
+        Updates the semantic label, axis and the declared structural /
+        propagation strengths from the spec table; operational state
+        (weight, confidence, counts, history) is preserved — refinement
+        names what the edge *is*, it does not re-evaluate how strong the
+        evidence has been.  ``flip_direction`` swaps the endpoints (the
+        endpoint *set* is unchanged, so pair indexes stay valid).
+        """
+        edge = self._relations.get(relation_id)
+        if not edge:
+            return None
+        spec = semantic_relation_spec(semantic_relation)
+        edge.semantic_relation = spec.name
+        edge.relation_type = spec.axis
+        edge.structural_strength = spec.structural_strength
+        edge.propagation_strength = spec.propagation_strength
+        if flip_direction:
+            edge.source_id, edge.target_id = edge.target_id, edge.source_id
+        edge.refinement_state = ""
+        self._dirty.add(edge.id)
+        return edge
+
+    def set_refinement_state(
+        self, relation_id: str, state: str
+    ) -> RelationEdge | None:
+        """Set the refinement-governance state (e.g. "co_attention_only")."""
+        edge = self._relations.get(relation_id)
+        if not edge:
+            return None
+        edge.refinement_state = state
+        self._dirty.add(edge.id)
+        return edge
+
     def adjust_strength(
         self,
         relation_id: str,

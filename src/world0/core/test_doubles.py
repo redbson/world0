@@ -532,6 +532,39 @@ class FakeRelationStore:
             edge.relation_type = new_type
             self._dirty.add(relation_id)
 
+    def retype_semantic(
+        self,
+        relation_id: str,
+        semantic_relation: str,
+        *,
+        flip_direction: bool = False,
+    ) -> RelationEdge | None:
+        from world0.schemas.relation import semantic_relation_spec
+
+        edge = self._edges.get(relation_id)
+        if not edge:
+            return None
+        spec = semantic_relation_spec(semantic_relation)
+        edge.semantic_relation = spec.name
+        edge.relation_type = spec.axis
+        edge.structural_strength = spec.structural_strength
+        edge.propagation_strength = spec.propagation_strength
+        if flip_direction:
+            edge.source_id, edge.target_id = edge.target_id, edge.source_id
+        edge.refinement_state = ""
+        self._dirty.add(relation_id)
+        return edge
+
+    def set_refinement_state(
+        self, relation_id: str, state: str
+    ) -> RelationEdge | None:
+        edge = self._edges.get(relation_id)
+        if not edge:
+            return None
+        edge.refinement_state = state
+        self._dirty.add(relation_id)
+        return edge
+
     def adjust_strength(
         self,
         relation_id: str,

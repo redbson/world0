@@ -22,6 +22,7 @@ from world0.schemas.types import ReflectResult
 if TYPE_CHECKING:
     from world0.communities.manager import CommunityManager
     from world0.core import ColorField, DecayPolicy, LifecyclePolicy
+    from world0.dynamics.refinement import RelationRefiner
 
 
 class ReflectPipeline:
@@ -39,11 +40,13 @@ class ReflectPipeline:
         lifecycle: LifecyclePolicy,
         color: ColorField,
         communities: CommunityManager,
+        refiner: "RelationRefiner | None" = None,
     ) -> None:
         self._decay = decay
         self._lifecycle = lifecycle
         self._color = color
         self._communities = communities
+        self._refiner = refiner
 
     def run(self) -> ReflectResult:
         result = ReflectResult()
@@ -77,6 +80,14 @@ class ReflectPipeline:
         promoted, demoted = self._lifecycle.evaluate()
         result.promoted_concepts = promoted
         result.demoted_concepts = demoted
+
+        # 4b. Generic-relation refinement (budgeted, LLM-typed) — the
+        # stock of untyped edges is re-judged a few at a time; pairs
+        # with no nameable structure demote to co_attention_only.
+        if self._refiner is not None:
+            retyped, co_attention = self._refiner.refine()
+            result.retyped_relations = retyped
+            result.co_attention_relations = co_attention
 
         # 5. Prune
         result.pruned_relations = self._decay.prune_relations()

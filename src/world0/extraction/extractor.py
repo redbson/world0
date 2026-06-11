@@ -12,6 +12,7 @@ import re
 from typing import Any
 
 from world0.llm.base import LLMProvider
+from world0.llm.parsing import extract_json
 from world0.prompts import PromptRegistry
 from world0.schemas.relation import normalize_semantic_relation, semantic_relation_names
 from world0.schemas.types import ConceptCandidate, Observation, RelationPrior
@@ -439,12 +440,4 @@ class ConceptExtractor:
     @staticmethod
     def _extract_json(text: str) -> str:
         """Extract JSON from LLM response, handling markdown fences."""
-        # Try to find JSON in markdown code blocks
-        match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL)
-        if match:
-            return match.group(1)
-        # Try to find bare JSON object
-        match = re.search(r"\{.*\}", text, re.DOTALL)
-        if match:
-            return match.group(0)
-        return text
+        return extract_json(text)

@@ -172,6 +172,30 @@ SEMANTIC_RELATION_SPECS: dict[str, SemanticRelationSpec] = {
 }
 
 
+# ── Negative-axis projection visibility defaults ─────────────────────
+# Negative relations have two distinct cognitive uses: propagation-time
+# *inhibition* (always on — handled by the activation engine) and
+# projection-time *counter-signals* (per-relation policy below).
+#   suppress    — inhibit silently; the agent never needs the warning
+#                 (classification boundaries: keeping wrong concepts out
+#                 IS the job, surfacing them is noise)
+#   expose      — inhibit AND surface as an explicit counter-signal
+#                 (constraint violations: the agent must see the warning)
+#   conditional — suppress by default; a Perspective opts in via
+#                 ``negative_visibility`` when the role needs the signal
+#                 (conflicts matter in debug/design review, not in chat)
+NEGATIVE_VISIBILITY_DEFAULTS: dict[str, str] = {
+    "disjointness": "suppress",
+    "complement": "suppress",
+    "exclusion": "suppress",
+    "incompatible_ontology": "conditional",
+    "violates_constraint": "expose",
+    "conflict": "conditional",
+    "instability": "conditional",
+    "adversarial_prediction": "suppress",
+}
+
+
 _SEMANTIC_RELATION_ALIASES: dict[str, str] = {
     # Canonical names
     **{name: name for name in SEMANTIC_RELATION_SPECS},
@@ -305,6 +329,12 @@ class RelationEdge(BaseModel):
     confidence: float = Field(default=0.3, ge=0.0, le=1.0)
     reinforcement_count: int = 0
     disconfirmation_count: int = 0
+    # Refinement governance: "" (normal) or "co_attention_only" — a
+    # generic edge the typing judge repeatedly could not refine.  Such
+    # edges keep propagating (co-attention is real) but carry reduced
+    # projection salience: frequent co-occurrence must not masquerade
+    # as semantic structure.
+    refinement_state: str = ""
     last_reinforced: datetime = Field(
         default_factory=lambda: datetime.now(timezone.utc)
     )

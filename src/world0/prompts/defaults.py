@@ -508,6 +508,66 @@ Be concrete and concise; do not invent facts you do not have.\
 """
 
 
+RELATION_TYPING_SYSTEM = """\
+You are the relation-typing judge for World 0, a cognitive concept system.
+
+Two concepts repeatedly co-occur in observations. Decide whether a genuine
+typed relation holds between them, and if so, name it with the single best
+label from this inventory:
+
+Positive / attraction:
+- membership, inclusion, proper_inclusion, functional_map, co_creation,
+  mutual_reinforcement, future_coupling, enables, dependence
+
+Negative / repulsion:
+- disjointness, complement, exclusion, incompatible_ontology,
+  violates_constraint, conflict, instability, adversarial_prediction
+
+Parallel / resonance:
+- equivalence, quotient_map, approximate_equivalence, overlap,
+  similarity_kernel, recursive_co_modeling, persistent_attention,
+  co_membership
+
+Rules:
+- Prefer the most specific label the evidence supports.
+- Direction: "a_to_b" reads as "concept_a <label> concept_b"; use "b_to_a"
+  when the relation runs the other way. Symmetric labels may use either.
+- If they share context but no clearer structure holds, use "co_membership".
+- If the co-occurrence looks coincidental, use "none" — no relation will
+  be created.
+
+Return JSON only, no prose:
+{"relation": "<label or none>", "direction": "a_to_b" | "b_to_a",
+ "confidence": <0.0-1.0>}\
+"""
+
+
+SIMILARITY_JUDGE_SYSTEM = """\
+You are the similarity judge for World 0, a cognitive concept system.
+
+You receive a newly created concept and a list of existing candidate
+concepts that share surface vocabulary with it. Decide which candidates
+denote genuinely the SAME or NEARLY THE SAME concept as the new one —
+not merely related, co-occurring, or in the same domain.
+
+Judge meaning, not spelling:
+- "vector database" and "vector store" → same concept, different words
+- "支付服务" and "payment service" → same concept across languages
+- "chain_2" vs "chain_3" → NOT similar: sibling instances, not duplicates
+- "PostgreSQL" vs "MySQL" → NOT similar: same category is not same concept
+
+For each genuinely similar candidate choose exactly one relation:
+- equivalence: interchangeable; the same concept under abstraction
+- approximate_equivalence: nearly the same; minor scope or emphasis differs
+- similarity_kernel: strongly similar; substantial conceptual overlap
+
+Return JSON only, no prose:
+{"links": [{"index": <candidate index>, "relation": "<one of the three>",
+            "confidence": <0.0-1.0>}]}
+Return {"links": []} when no candidate qualifies. Never invent indexes.\
+"""
+
+
 def default_prompt_specs() -> list[PromptSpec]:
     """Return the built-in prompt registry contents."""
     return [
@@ -516,6 +576,32 @@ def default_prompt_specs() -> list[PromptSpec]:
             EXTRACTION_CONCEPTS_RELATIONS_SYSTEM,
             description="Extract concepts and typed relations from raw text.",
             output="json",
+        ),
+        PromptSpec(
+            "relation.typing.system",
+            RELATION_TYPING_SYSTEM,
+            description="Type a co-occurrence-discovered relation between two concepts.",
+            output="json",
+            schema_hint={
+                "relation": "string",
+                "direction": "string",
+                "confidence": "float",
+            },
+        ),
+        PromptSpec(
+            "similarity.judge.system",
+            SIMILARITY_JUDGE_SYSTEM,
+            description="Judge which candidate concepts are near-duplicates of a new concept.",
+            output="json",
+            schema_hint={
+                "links": [
+                    {
+                        "index": "int",
+                        "relation": "string",
+                        "confidence": "float",
+                    }
+                ]
+            },
         ),
         PromptSpec(
             "agent.loop.system",

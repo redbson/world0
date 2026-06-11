@@ -25,6 +25,7 @@ from datetime import datetime
 from pydantic import BaseModel, Field, field_validator
 
 from world0.schemas.relation import (
+    NEGATIVE_VISIBILITY_DEFAULTS,
     SEMANTIC_RELATION_SPECS,
     normalize_semantic_relation,
 )
@@ -70,6 +71,12 @@ class Perspective(BaseModel):
     # Render style hint consumed by Projection.render() ("default",
     # "compact", "detailed").  Unknown styles fall back to "default".
     render_style: str = "default"
+    # Per-semantic-relation projection visibility for negative edges
+    # ("suppress" | "expose").  Overrides NEGATIVE_VISIBILITY_DEFAULTS —
+    # this is how a role opts in to "conditional" relations (a debug
+    # perspective exposing ``conflict``, an ontology-repair perspective
+    # exposing ``incompatible_ontology``).
+    negative_visibility: dict[str, str] = Field(default_factory=dict)
 
     @field_validator("semantic_relation_weights", mode="before")
     @classmethod
@@ -121,6 +128,21 @@ class Perspective(BaseModel):
             if override is not None:
                 return float(override)
         return self.weight_for(axis, default)
+
+    def visibility_for(self, semantic_relation: str) -> str:
+        """Resolve projection visibility for one negative relation.
+
+        Resolution: perspective override > NEGATIVE_VISIBILITY_DEFAULTS
+        > "suppress".  "conditional" resolves to "suppress" — it means
+        "expose only when a perspective opts in", and an opting-in
+        perspective sets an explicit "expose" override.
+        """
+        policy = self.negative_visibility.get(semantic_relation)
+        if policy is None:
+            policy = NEGATIVE_VISIBILITY_DEFAULTS.get(
+                semantic_relation, "suppress"
+            )
+        return "expose" if policy == "expose" else "suppress"
 
     def domain_match(self, domain_label: str) -> bool:
         """True if the given domain label matches this perspective's focus."""
