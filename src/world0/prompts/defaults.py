@@ -85,6 +85,38 @@ Parallel / resonance labels:
 Use generic_relation only when the text supports connectedness but no more
 specific structural signature is justified.
 
+## Constraint and opposition capture (critical)
+Negative-axis relations are first-class output, not an afterthought. When
+the text states that something violates a budget, limit, or constraint;
+that two modes/options are mutually exclusive ("never both",
+"one or the other", "互斥", "只能启用其中一个"); that an assumption was
+wrong; or that one thing degrades/overwhelms another — you MUST emit the
+matching negative relation (violates_constraint, exclusion, disjointness,
+conflict, instability) between the specific concepts involved. A constraint
+stated in prose but not extracted is a lost cognitive boundary.
+Example: "Synchronous mode guarantees durability but violates the latency
+budget" → {"source": "synchronous mode", "target": "latency budget",
+"type": "violates_constraint"} (and the positive durability relation too).
+
+## Direction discipline
+Before emitting each relation, verify it reads correctly as
+"<source> <label> <target>":
+- dependence: source depends on target ("A depends on B" → source=A, target=B)
+- enables: source enables target ("caching enables low latency" → source=caching)
+- membership / inclusion: source belongs to / is contained in target
+- violates_constraint: source violates target
+- functional_map: source maps to target
+Mention order in the sentence is NOT direction. If your relation reads
+backwards under the label's definition, swap source and target before output.
+
+## Selectivity under density
+Dense text does not license more concepts. Hard limit: never output more
+than 15 concepts. When the text mentions more candidate units, keep only
+the most structurally important ones — relation hubs and task-critical
+units — and fold the rest into descriptions or aliases of kept concepts.
+Count your concepts before responding; if over 15, remove the least
+connected ones.
+
 ## Output format
 Respond with ONLY a JSON object:
 {

@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Extraction-prompt scenario eval + refined default prompt** — a new
+  headroom rubric (`scripts/eval_prompt_scenarios.py`: negative-axis
+  recall, multi-hop direction accuracy, gold relation recall,
+  forbidden-pair precision, narrative focus, density selectivity over 6
+  gold-annotated scenarios) replaces the saturated quality/9 matrix for
+  prompt iteration.  Three rounds (144 gpt-5.4-nano calls) showed the
+  production prompt + three new sections ("Constraint and opposition
+  capture", "Direction discipline", "Selectivity under density") lifts
+  relation recall +0.06 consistently across all measurements with
+  concept recall at ceiling and the concept-cap regression fixed; the
+  refined prompt is now the default
+  (`extraction.concepts_relations.system`).  Old-rubric same-day control
+  confirms equivalence (8.7 vs 8.7, shared flaky direction flag).
+  Full report: `docs/extraction-prompt-scenario-eval.md`.
 - **Design-review adoptions** (from the 2026-06 external design review;
   full assessment in `docs/world0-relation-optimization.md` §6):
   - *Negative visibility policy + counter-signals* — negative relations
