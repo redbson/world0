@@ -170,6 +170,35 @@ embryonic ──act≥3, conf≥0.3──▶ developing ──act≥10, conf≥0
 
 `generic_relation` 是显式的临时回退（CLAUDE.md Rule 3），评测中以 `typed_ratio` 跟踪其占比。
 
+### 4.2b 分数语义消费边界（不变量）
+
+关系上的五个分数各有**唯一的消费端**。混用它们会制造 score soup——既表示可信度、又表示传播量、又表示展示优先级的"万能权重"。下表是硬边界：
+
+| 字段 | 主要消费端 | **不应承担的职责** |
+|------|-----------|-------------------|
+| `structural_strength` | 渲染 / 解释 / 反信号显著度（counter-signal salience） | 不直接进入激活传播 |
+| `propagation_strength` | 激活基准（声明的可传导性） | 不用于语义真值排序 |
+| `weight` | 操作强化、衰减、激活实际乘子、投影关系排序 | 不等同于关系类型的语义概率 |
+| `confidence` | 关系可靠性、修剪阈值、反馈治理 | 不直接代表语义类型成立概率 |
+| `probability` | 关系类型信念 / 证据融合（Beta 后验） | 不用于原始激活强度 |
+
+一个典型佐证：反信号（`CounterSignal`）的显著度刻意取 `structural_strength` 而非 `weight`——"这条约束作为结构事实有多强"属于解释通道，与该边被强化了多少次无关。
+
+### 4.2c 负向关系可见性策略
+
+负向关系有两种不同的认知用途，由两套机制分别承担：
+
+- **传播层抑制**（恒开）：激活引擎的 inhibition 通道，见 §6；
+- **投影层反信号**（按语义关系配置）：`NEGATIVE_VISIBILITY_DEFAULTS`，被抑制出局的概念以 ⚠ 警告形式告知 Agent"为什么这条路被关了"。
+
+| 语义关系 | 默认策略 | 理由 |
+|---------|---------|------|
+| `disjointness` / `exclusion` / `complement` / `adversarial_prediction` | suppress | 分类边界：挡住错误概念本身就是任务，浮出反而是噪声 |
+| `violates_constraint` | **expose** | 约束告警：Agent 必须看见 |
+| `conflict` / `instability` / `incompatible_ontology` | conditional | 默认压制；debug / design review / ontology repair 等视角经 `Perspective.negative_visibility` 选择性暴露 |
+
+暴露的反信号进入 `Projection.counter_signals` 并渲染为 `### Constraint Warnings` 节（无反信号时默认渲染保持字节不变）。
+
 ### 4.3 数据模型（`RelationEdge`）
 
 | 分组 | 字段 | 默认值 | 语义 |

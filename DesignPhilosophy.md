@@ -72,12 +72,26 @@ In that sense:
 
 ---
 
-### 5. LLM-Native Structure
-World 0 should be readable, writable, and extendable by LLMs.
+### 5. LLM-Native Structure and Extraction
+World 0 should be readable, writable, and extendable by LLMs — and its **semantics should be produced by LLMs**.
 
 Its structures must not be optimized only for formal knowledge engineering or database design. They must also be semantically legible to language models. This means its core objects should remain expressive enough for LLM interpretation, while still being structured enough for computation.
 
 World 0 is therefore not just machine-readable. It should be **LLM-operable**.
+
+This principle extends to how the concept-world is *built*. Traditional ontology pipelines extract content with NLP tooling and statistical machinery — dependency parsing, NER/RE models, pattern rules, co-occurrence statistics, embedding clustering — scattering semantic judgment across a dozen brittle components. World 0 departs from this entirely: **every semantic judgment is made by the system-selected LLM**, through one configurable prompt registry:
+
+- what counts as a concept, and which sense it carries (text extraction)
+- whether two concepts are near-duplicates, and how close (similarity judging)
+- what typed relation holds between co-occurring concepts, in which direction (relation typing)
+
+The division of labor is strict and deliberate:
+
+- **LLM judges semantics** — anything that requires understanding meaning
+- **Deterministic dynamics execute cognition** — activation spread, decay, lifecycle, Hebbian counting, MMR projection stay inspectable, tunable, and reproducible
+- **Lexical/statistical rules survive only as degraded fallbacks** when no LLM is configured or a judgment fails — never as the primary semantic path
+
+Crucially, the LLM proposes but the structure disposes: every LLM judgment is normalized onto the explicit typed inventory (three axes, canonical semantic relations) before it enters the world. This is what separates World 0 both from traditional NLP-pipeline ontologies *and* from contemporary LLM-extracted memory graphs whose edges remain free-form or untyped — extraction flexibility without structural sprawl.
 
 ---
 
@@ -164,7 +178,7 @@ World 0 is built on the following principles:
 2. **Relation first, not taxonomy first**
 3. **Context sensitive, not globally static**
 4. **Built for cognition, not archival storage**
-5. **Readable and operable by LLMs**
+5. **Readable and operable by LLMs; semantics extracted by LLMs, not NLP/statistical pipelines**
 6. **Projection-oriented, not coverage-oriented**
 
 ---

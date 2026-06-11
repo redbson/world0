@@ -21,6 +21,12 @@ World 0 is not a knowledge graph, not a memory system, not an ontology. It is a 
 
 World 0 不是知识图谱，不是记忆系统，不是本体论。它是一个认知结构，将积累的观察转化为聚焦的、与任务相关的投影。
 
+## LLM-Native Semantics / LLM 原生语义
+
+World 0's sharpest departure from traditional ontology engineering is **how the concept-world is built**: where classic pipelines extract content through NLP tooling and statistical machinery (parsers, NER/RE models, co-occurrence statistics, embedding clustering), World 0 routes **every semantic judgment through the system-selected LLM** — text extraction (`extraction.concepts_relations.system`), near-duplicate judging (`similarity.judge.system`), and typing of co-occurrence-discovered relations (`relation.typing.system`), all via one configurable prompt registry. The LLM proposes; the typed structure disposes: every judgment is normalized onto the explicit three-axis relation inventory before entering the world. Deterministic dynamics (activation, decay, projection) stay non-LLM by design, and lexical rules survive only as no-LLM fallbacks.
+
+World 0 与传统本体工程最大的不同在于**概念世界的构建方式**：经典流水线依赖 NLP 工具与统计机制（句法解析、NER/RE 模型、共现统计、嵌入聚类）抽取内容，而 World 0 将**所有语义判断统一交给系统选定的 LLM**——文本抽取、近重复判定、共现关系判型，全部经由同一个可配置的 prompt 注册表。LLM 负责提议，类型结构负责约束：每个判断在进入世界前都归一化到显式的三轴关系清单。确定性动力学（激活、衰减、投影）刻意保持非 LLM，词法规则仅作为无 LLM 时的回退。
+
 ## Roadmap / 路线
 
 The current agent development priorities are tracked in [`TODO.md`](TODO.md).
