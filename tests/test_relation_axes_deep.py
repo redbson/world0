@@ -401,10 +401,16 @@ def test_weaken_respects_floor():
     assert edge.confidence == pytest.approx(0.01)
 
 
-def test_weaken_probability_tracks_confidence_and_updates_metadata():
+def test_weaken_lowers_probability_and_updates_metadata():
     edge = _edge(semantic_relation="enables")
+    probability_before = edge.probability
     edge.weaken("disc-1")
-    assert edge.probability == pytest.approx(edge.confidence)
+    # Disconfirmation lowers the semantic belief by the same penalty as
+    # the operational scores; it is *not* overwritten with ``confidence``
+    # (a structural-strength scale that could raise it).
+    penalty = 0.06 / (1.0 + 1 * 0.10)
+    assert edge.probability == pytest.approx(probability_before - penalty)
+    assert edge.probability < probability_before
     assert edge.disconfirmation_count == 1
     assert edge.last_weakened is not None
     assert edge.task_history == ["disc-1"]

@@ -32,6 +32,7 @@ The current agent development priorities are tracked in [`TODO.md`](TODO.md).
 - [`docs/world0-usage.md`](docs/world0-usage.md) — operational usage guide for World 0 / World 0 操作与使用文档
 - [`docs/world0-color-field-dynamics.md`](docs/world0-color-field-dynamics.md) — dynamics-first design for community-born color fields / 基于动力学的群落生色与褪色设计
 - [`docs/extraction-model-prompt-eval.md`](docs/extraction-model-prompt-eval.md) — model × prompt extraction-quality evaluation (why gpt-5.4-nano is the default) / 模型×prompt 提取质量评测（为何默认 gpt-5.4-nano）
+- [`docs/world0-cognitive-dynamics-analysis.md`](docs/world0-cognitive-dynamics-analysis.md) — mathematical review of the decay / activation / projection dynamics, probe evidence, calibration and roadmap / 认知动力学的数学分析、探针证据、参数标定与路线
 - [`DesignPhilosophy.md`](DesignPhilosophy.md) — design rationale and framing / 设计哲学与边界
 - [`TODO.md`](TODO.md) — current implementation priorities / 当前实现优先级
 
@@ -329,9 +330,9 @@ embryonic → developing → established → core
 | any → fading / 任意 → 衰退 | confidence decays below 0.05 / 置信度衰减至 0.05 以下 |
 | fading → developing / 衰退 → 发展中 | re-activated by an observation / 被观察重新激活 |
 
-Decay rates are maturity-dependent: embryonic concepts fade in ~1 day, core concepts persist for ~3 months.
+Decay rates are maturity-dependent: embryonic concepts fade in ~1 day, core concepts persist for ~3 months. Half-lives stretch with accumulated evidence and confidence relaxes toward an evidence floor rather than toward zero, so a concept used daily can mature while a one-off mention still fades. Decay is idempotent in wall-clock time — calling `reflect()` more often never accelerates forgetting. See [`docs/world0-cognitive-dynamics-analysis.md`](docs/world0-cognitive-dynamics-analysis.md).
 
-衰减速率取决于成熟度：萌芽概念约 1 天衰退，核心概念可持续约 3 个月。
+衰减速率取决于成熟度：萌芽概念约 1 天衰退，核心概念可持续约 3 个月。半衰期随累积证据拉长，置信度向"证据地板"而非 0 回归，因此每天使用的概念可以成熟，一次性提及仍会消失。衰减对物理时间幂等——更频繁地调用 `reflect()` 不会加速遗忘。详见 [`docs/world0-cognitive-dynamics-analysis.md`](docs/world0-cognitive-dynamics-analysis.md)。
 
 ## Relation Types / 关系类型
 

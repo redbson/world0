@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Cognitive-dynamics analysis** (`docs/world0-cognitive-dynamics-analysis.md`)
+  — mathematical review of decay, activation, projection, lifecycle and
+  Hebbian learning with before/after probe evidence, parameter calibration
+  and a roadmap toward a continuously updating cognitive layer; 28 new
+  behavioral tests in `tests/test_dynamics_analysis.py`.
+- **Task profile** — `ConceptNode.task_profile` aggregates activations per
+  normalized task label; `task_affinity()` / `task_match_score()` provide
+  graded, word-level task association (no more `"ml"` matching
+  `"html parsing"`).  `reinforcement_log` is now a bounded recent-activity
+  window (64 entries); legacy records back-fill the profile on load.
+- **Hebbian state persistence** — pending co-occurrence counters are stored
+  in `state.json` (`hebbian_pending`) and restored on start, so a pair seen
+  once per session still reaches the discovery threshold.
 - **External-agent consultations** — read-only consultations with the
   system-installed `claude` and `codex` CLIs, each run in an isolated
   per-problem workspace. Exposed as `PKMAgent.consult_external_agent`, the
@@ -31,6 +44,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`models/`, `prompts/`).
 
 ### Changed
+- **Decay is idempotent in wall-clock time.**  Concepts and relations carry
+  `last_decayed_at`; only the interval since the last decay application is
+  decayed, so `reflect()` frequency no longer changes the dynamics.
+- **Evidence-anchored concept decay.**  Effective half-life stretches with
+  activation count (`1 + 0.2·(n−1)`, capped at 8× and one year) and
+  confidence relaxes toward an evidence floor (OU-style mean reversion)
+  that itself forgets on a ~6-month era scale.  A concept used daily now
+  reaches `established` in ~8 weeks (previously stuck at confidence ≈ 0.06
+  forever); one used weekly settles as `developing` instead of fading; a
+  one-off mention still fades in ~2 days.
+- **Activation aggregation.**  Contributions converging on one concept
+  combine with a bounded noisy-OR scaled by the strongest seed (rewards
+  conceptual intersection, never outranks a seed); propagation is layered
+  with each concept expanded once at its first-reached depth (cycles cannot
+  inflate scores, `record=True` counts once); the propagation floor is a
+  rank-preserving band instead of a constant, so distance ordering is
+  strict.
+- **Deterministic projection.**  MMR visits candidates in `(score desc,
+  id)` order, keeps selection order, sorts internal relations, and all
+  freshness terms share one `now` per pass — identical output across
+  processes regardless of `PYTHONHASHSEED`.
+- **Hebbian pair cap** (`MAX_PAIRS`) now keeps pairs in observation
+  (salience) order rather than lexicographic id order.
+
+### Fixed
+- Relation `probability` (belief the typed relation is correct) is no
+  longer eroded by time decay, and `weaken()` lowers it by the
+  disconfirmation penalty instead of overwriting it with `confidence`
+  (which could *raise* it).
+
+### Changed (earlier)
 - **Relations** now use a three-axis model (positive / negative / parallel)
   with a deterministic semantic-relation → structural/propagation mapping.
 - **World** internals split into a modular `world/` package

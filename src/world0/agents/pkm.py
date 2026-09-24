@@ -1616,7 +1616,13 @@ class PKMAgent:
             for entry in node.reinforcement_log[-8:]
         ]
         sources = sorted({entry.source for entry in node.reinforcement_log if entry.source})
-        tasks = sorted({entry.task for entry in node.reinforcement_log if entry.task})
+        # The task profile is the complete task association; the log is
+        # only a bounded recent-activity window.
+        tasks = sorted(
+            node.task_profile
+            if node.task_profile
+            else {entry.task for entry in node.reinforcement_log if entry.task}
+        )
         source_refs = []
         for ref in sorted(
             node.source_refs,

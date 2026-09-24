@@ -11,6 +11,7 @@ recently active concepts are preferred over stale ones.
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
 from world0.schemas.types import Projection
@@ -88,24 +89,30 @@ class ProjectionEngine:
         task_lower = task.strip().lower()
         task_affinity: dict[str, float] = {}
         temporal_freshness: dict[str, float] = {}
+        now = datetime.now(timezone.utc)
         for cid in candidates:
             node = self._concepts.get(cid)
 
-            # Task affinity
+            # Task affinity — graded association from the concept's task
+            # profile (exact task → 1.0, partial word overlap → fraction,
+            # unrelated → 0), blended above the discount floor.
             if not task_lower:
                 task_affinity[cid] = 1.0
-            elif node and any(
-                task_lower in entry.task.lower()
-                for entry in node.reinforcement_log
-            ):
-                task_affinity[cid] = 1.0
+            elif node:
+                affinity = node.task_affinity(task_lower)
+                task_affinity[cid] = (
+                    TASK_AFFINITY_DISCOUNT
+                    + (1.0 - TASK_AFFINITY_DISCOUNT) * affinity
+                )
             else:
                 task_affinity[cid] = TASK_AFFINITY_DISCOUNT
 
             # Temporal freshness: blend 1.0 (ignore time) with the
             # actual temporal_relevance using TEMPORAL_WEIGHT.
             if node:
-                raw_freshness = node.temporal_relevance(PROJECTION_TEMPORAL_HL)
+                raw_freshness = node.temporal_relevance(
+                    PROJECTION_TEMPORAL_HL, now=now
+                )
                 temporal_freshness[cid] = (
                     (1.0 - TEMPORAL_WEIGHT) + TEMPORAL_WEIGHT * raw_freshness
                 )
@@ -117,9 +124,11 @@ class ProjectionEngine:
         for cid in candidates:
             neighbor_sets[cid] = set(self._relations.neighbors(cid))
 
-        # MMR greedy selection
+        # MMR greedy selection.  Candidates are visited in a stable order
+        # (score desc, then id) so exact ties resolve identically in every
+        # process — a projection must never depend on PYTHONHASHSEED.
         selected: list[str] = []
-        remaining = set(candidates.keys())
+        remaining = sorted(candidates, key=lambda cid: (-candidates[cid], cid))
 
         while remaining and len(selected) < max_concepts:
             best_id = None
@@ -163,14 +172,14 @@ class ProjectionEngine:
                 break
 
             selected.append(best_id)
-            remaining.discard(best_id)
+            remaining.remove(best_id)
 
         selected_ids = set(selected)
-        selected_scores = {cid: candidates[cid] for cid in selected_ids}
+        selected_scores = {cid: candidates[cid] for cid in selected}
 
-        # Resolve concepts
+        # Resolve concepts in selection order (deterministic)
         concepts = []
-        for cid in selected_ids:
+        for cid in selected:
             node = self._concepts.get(cid)
             if node:
                 concepts.append(node)
@@ -178,13 +187,16 @@ class ProjectionEngine:
         # Gather relations between selected concepts
         relations = []
         seen: set[str] = set()
-        for cid in selected_ids:
+        for cid in selected:
             for rel in self._relations.for_concept(cid):
                 if rel.id in seen:
                     continue
                 if rel.source_id in selected_ids and rel.target_id in selected_ids:
                     relations.append(rel)
                     seen.add(rel.id)
+        # Relation-index order depends on filesystem load order; sort so
+        # the rendered projection is identical across processes.
+        relations.sort(key=lambda r: (-r.weight, r.id))
 
         return Projection(
             concepts=concepts,

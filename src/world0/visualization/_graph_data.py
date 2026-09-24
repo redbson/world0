@@ -33,7 +33,11 @@ def build_graph_data(view: WorldView) -> dict:
 
 def _node_payload(c: ConceptNode, view: WorldView) -> dict:
     connections = len(view.relations.for_concept(c.id))
-    tasks = sorted({e.task for e in c.reinforcement_log if e.task})
+    tasks = sorted(
+        c.task_profile
+        if c.task_profile
+        else {e.task for e in c.reinforcement_log if e.task}
+    )
     sources = sorted({e.source for e in c.reinforcement_log if e.source})
     dominant_domain = c.domain
     dominant_domain_strength = round(c.dominant_domain_strength(), 4)

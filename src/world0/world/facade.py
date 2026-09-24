@@ -110,6 +110,10 @@ class World:
         self._communities = CommunityManager.from_snapshot(
             self._state.get("communities"), self._community_detector
         )
+        # Hebbian co-occurrence counters are learning state: restore them
+        # so a pair first seen last session and again now still crosses
+        # the discovery threshold.
+        self._hebbian.restore(self._state.get("hebbian_pending"))
 
         # ── Pipelines ────────────────────────────────────────────────
         self._ingest_pipeline = IngestPipeline(
@@ -136,7 +140,15 @@ class World:
         # Pipelines never persist — facade owns the flush boundary.
         self.concepts.flush()
         self.relations.flush()
+        self._persist_hebbian_state()
         return result
+
+    def _persist_hebbian_state(self) -> None:
+        """Save pending Hebbian counters when they changed."""
+        pending = self._hebbian.snapshot()
+        if pending != self._state.get("hebbian_pending"):
+            self._state["hebbian_pending"] = pending
+            self._store.save_state(self._state)
 
     def ingest_text(
         self,

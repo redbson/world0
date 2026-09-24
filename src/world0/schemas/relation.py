@@ -10,6 +10,8 @@ from enum import Enum
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from world0.schemas.concept import task_match_score
+
 
 class RelationType(str, Enum):
     """Axis-aligned relation categories.
@@ -309,6 +311,9 @@ class RelationEdge(BaseModel):
         default_factory=lambda: datetime.now(timezone.utc)
     )
     last_weakened: datetime | None = None
+    # Wall-clock instant at which time decay was last applied (see
+    # ``ConceptNode.last_decayed_at``).
+    last_decayed_at: datetime | None = None
     discovered_at: datetime = Field(
         default_factory=lambda: datetime.now(timezone.utc)
     )
@@ -363,6 +368,27 @@ class RelationEdge(BaseModel):
     def involves(self, concept_id: str) -> bool:
         return self.source_id == concept_id or self.target_id == concept_id
 
+    def decay_reference_time(self) -> datetime:
+        """Instant from which the next decay interval is measured."""
+        if self.last_decayed_at and self.last_decayed_at > self.last_reinforced:
+            return self.last_decayed_at
+        return self.last_reinforced
+
+    def task_affinity(self, task: str) -> float:
+        """Graded association between this relation and ``task`` in [0, 1].
+
+        Word-level match against the tasks under which the relation was
+        observed (``task_history``); see ``task_match_score``.
+        """
+        best = 0.0
+        for label in self.task_history:
+            score = task_match_score(task, label)
+            if score > best:
+                best = score
+                if best >= 1.0:
+                    break
+        return best
+
     def other_end(self, concept_id: str) -> str | None:
         if self.source_id == concept_id:
             return self.target_id
@@ -402,7 +428,11 @@ class RelationEdge(BaseModel):
         penalty = 0.06 * (1.0 / (1.0 + self.disconfirmation_count * 0.10))
         self.weight = max(0.01, self.weight - penalty)
         self.confidence = max(0.01, self.confidence - penalty)
-        self.probability = self.confidence
+        # Disconfirmation is semantic evidence, so the belief that the
+        # relation is correct drops by the same penalty.  It must not be
+        # overwritten with ``confidence`` — that is a structural-strength
+        # scale and copying it could *raise* the probability.
+        self.probability = max(0.01, self.probability - penalty)
         if provenance and provenance not in self.task_history:
             self.task_history.append(provenance)
 
@@ -475,11 +505,14 @@ class RelationEdge(BaseModel):
             return 0.5
         return alpha / total
 
-    def hours_since_reinforced(self) -> float:
-        delta = datetime.now(timezone.utc) - self.last_reinforced
+    def hours_since_reinforced(self, now: datetime | None = None) -> float:
+        reference = now or datetime.now(timezone.utc)
+        delta = reference - self.last_reinforced
         return delta.total_seconds() / 3600.0
 
-    def temporal_relevance(self, half_life_hours: float = 72.0) -> float:
+    def temporal_relevance(
+        self, half_life_hours: float = 72.0, *, now: datetime | None = None
+    ) -> float:
         """Time-based relevance score in [0, 1].
 
         Returns 1.0 for a just-reinforced relation and decays
@@ -492,7 +525,7 @@ class RelationEdge(BaseModel):
             half_life_hours: Base half-life in hours.
                 Default 72 h (3 days).
         """
-        hours = self.hours_since_reinforced()
+        hours = self.hours_since_reinforced(now)
         if hours <= 0 or half_life_hours <= 0:
             return 1.0
         effective_hl = half_life_hours * (1.0 + self.reinforcement_count * 0.5)
