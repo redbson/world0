@@ -395,7 +395,7 @@ class TestReflectConsolidation:
         jwt = world.concepts.resolve("JWT")
         jwt.confidence = 0.05
         jwt.maturity = Maturity.FADING
-        jwt.last_activated = datetime.now(timezone.utc) - timedelta(hours=500)
+        jwt.last_activated_tick = world.clock.tick - 500
 
         before_count = world.status().total_concepts
         result = world.reflect()

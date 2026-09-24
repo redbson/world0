@@ -5,9 +5,12 @@ Every test here corresponds to a finding in
 that *failed* on the previous implementation.  They pin down the
 mathematical properties a continuously updating cognitive layer needs:
 
-- decay is a function of elapsed time, not of how often ``reflect()`` runs
-- evidence buys persistence: a concept used daily can mature, a one-off
-  mention still fades, and nothing is immortal
+- time is cognitive time: one tick per observation, persisted with the
+  world, with the calendar as a slow secondary drift only
+- decay is a function of elapsed cognitive time, not of how often
+  ``reflect()`` runs
+- evidence buys persistence: a concept re-observed regularly can mature,
+  a one-off mention still fades, and nothing is immortal
 - semantic relation probability is evidence-driven, never time-driven
 - task association is bounded in size and matched at word level
 - activation rewards convergence, preserves distance ordering, cannot be
@@ -48,22 +51,13 @@ def world(tmp_path):
     return World(store_path=tmp_path / ".world0")
 
 
-def _advance(world: World, hours: float) -> None:
-    """Simulate ``hours`` of wall-clock time passing for every record.
+def _advance(world: World, ticks: int) -> None:
+    """Let ``ticks`` observations pass without touching any concept.
 
-    Every timestamp the dynamics read is shifted into the past, including
-    ``last_decayed_at`` — otherwise the decay reference would stay "now"
-    and no interval would elapse.
+    Time in World 0 is cognitive time (one tick per ingest), so simulating
+    the passage of time is simply advancing the world clock.
     """
-    delta = timedelta(hours=hours)
-    for node in world.concepts.all():
-        node.last_activated -= delta
-        if node.last_decayed_at:
-            node.last_decayed_at -= delta
-    for edge in world.relations.all():
-        edge.last_reinforced -= delta
-        if edge.last_decayed_at:
-            edge.last_decayed_at -= delta
+    world.clock.advance(int(ticks))
 
 
 def _tick(world: World) -> None:
@@ -73,12 +67,13 @@ def _tick(world: World) -> None:
 
 
 def _simulate_cadence(
-    world: World, name: str, *, gap_hours: float, days: int
+    world: World, name: str, *, gap_ticks: int, total_ticks: int
 ) -> ConceptNode:
-    """Activate ``name`` every ``gap_hours`` for ``days`` days, decaying
-    and evaluating lifecycle between activations."""
+    """Re-observe ``name`` every ``gap_ticks`` observations for
+    ``total_ticks`` observations, decaying and evaluating lifecycle between
+    activations."""
     anchor = f"{name}_anchor"
-    steps = int(days * 24 / gap_hours)
+    steps = int(total_ticks / gap_ticks)
     for _ in range(steps):
         world.ingest(
             Observation(
@@ -88,7 +83,8 @@ def _simulate_cadence(
                 source="sim",
             )
         )
-        _advance(world, gap_hours)
+        # The ingest itself is one observation; gap_ticks - 1 more pass.
+        _advance(world, gap_ticks - 1)
         _tick(world)
     return world.concepts.resolve(name)
 
@@ -152,13 +148,13 @@ class TestDecayIdempotency:
         self._seed(world)
         node = world.concepts.resolve("alpha")
         before = node.confidence
-        _advance(world, 0.5)
-        world._decay.decay_concepts()  # inside grace → skipped
+        world._decay.decay_concepts()  # same observation → skipped
         assert node.confidence == before
-        assert node.last_decayed_at is None
-        _advance(world, 0.6)
-        world._decay.decay_concepts()  # 1.1 h total now applied
+        assert node.last_decayed_tick is None
+        _advance(world, 1)
+        world._decay.decay_concepts()  # one observation later → applied
         assert node.confidence < before
+        assert node.last_decayed_tick == world.clock.tick
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -167,20 +163,20 @@ class TestDecayIdempotency:
 
 
 class TestEvidenceAnchoredDecay:
-    def test_daily_used_concept_matures(self, world):
-        # Before the fix a daily concept sat at confidence ≈ 0.06 forever.
-        node = _simulate_cadence(world, "habit", gap_hours=24, days=90)
+    def test_concept_reobserved_every_24_observations_matures(self, world):
+        # Before the fix such a concept sat at confidence ≈ 0.06 forever.
+        node = _simulate_cadence(world, "habit", gap_ticks=24, total_ticks=2160)
         assert node.maturity in (Maturity.ESTABLISHED, Maturity.CORE)
         assert node.confidence >= 0.6
 
-    def test_weekly_used_concept_settles_as_developing(self, world):
-        # Before the fix a weekly concept was FADING with confidence 0.03.
-        node = _simulate_cadence(world, "weekly", gap_hours=168, days=182)
+    def test_concept_reobserved_every_168_observations_settles_as_developing(self, world):
+        # Before the fix such a concept was FADING with confidence 0.03.
+        node = _simulate_cadence(world, "weekly", gap_ticks=168, total_ticks=4368)
         assert node.maturity == Maturity.DEVELOPING
         assert node.confidence > 0.25
 
-    def test_monthly_used_concept_survives_on_its_evidence_floor(self, world):
-        node = _simulate_cadence(world, "monthly", gap_hours=720, days=365)
+    def test_concept_reobserved_every_720_observations_survives_on_floor(self, world):
+        node = _simulate_cadence(world, "monthly", gap_ticks=720, total_ticks=8760)
         assert node.maturity != Maturity.EMBRYONIC
         assert node.confidence > FADING_THRESHOLD
 
@@ -192,6 +188,25 @@ class TestEvidenceAnchoredDecay:
         assert node.maturity == Maturity.FADING
         assert node.confidence < FADING_THRESHOLD
 
+    def test_reflect_frequency_between_observations_is_irrelevant(self, world):
+        """Ten reflects between two observations == one reflect."""
+        self_seed = lambda w: [  # noqa: E731
+            w.ingest(Observation(concepts=["alpha"], task="t", source="s"))
+            for _ in range(5)
+        ]
+        self_seed(world)
+        _advance(world, 40)
+        for _ in range(10):
+            world.reflect()
+        many = world.concepts.resolve("alpha").confidence
+
+        other = World(store_path=world._store._root.parent / "other")
+        self_seed(other)
+        _advance(other, 40)
+        other.reflect()
+        once = other.concepts.resolve("alpha").confidence
+        assert many == pytest.approx(once, abs=1e-6)
+
     def test_burst_then_abandon_declines_slowly_but_surely(self, world):
         for _ in range(30):
             world.ingest(Observation(concepts=["burst"], task="t", source="s"))
@@ -199,18 +214,18 @@ class TestEvidenceAnchoredDecay:
         node.maturity = Maturity.ESTABLISHED
         peak = node.confidence
 
-        _advance(world, 24 * 30)  # one silent month
+        _advance(world, 720)  # 720 unrelated observations
         world._decay.decay_concepts()
         after_month = node.confidence
         assert after_month < peak
-        assert after_month > 0.3, "30 confirmations must survive a month"
+        assert after_month > 0.3, "30 confirmations must survive 720 observations"
 
-        _advance(world, 24 * 365)  # a silent year
+        _advance(world, 8760)  # 8760 more
         world._decay.decay_concepts()
         after_year = node.confidence
         assert FADING_THRESHOLD < after_year < after_month
 
-        _advance(world, 24 * 365 * 2)  # two more silent years
+        _advance(world, 8760 * 2)  # and 17 520 more
         world._decay.decay_concepts()
         assert node.confidence < FADING_THRESHOLD, "nothing is immortal"
         assert node.maturity == Maturity.FADING
@@ -250,7 +265,7 @@ class TestRelationProbability:
         edge = world.relations.all()[0]
         probability = edge.probability
         weight = edge.weight
-        _advance(world, 24 * 30)
+        _advance(world, 720)
         world._decay.decay_relations()
         assert edge.weight < weight * 0.1
         assert edge.probability == pytest.approx(probability)
@@ -504,7 +519,80 @@ class TestProjectionDeterminism:
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# 7. Hebbian learning survives a restart
+# 7. Cognitive clock: time is counted in observations
+# ═══════════════════════════════════════════════════════════════════════
+
+
+class TestCognitiveClock:
+    def test_ingest_advances_clock_and_reflect_does_not(self, world):
+        assert world.clock.tick == 0
+        world.ingest(Observation(concepts=["a"], source="s"))
+        world.ingest(Observation(concepts=["b"], source="s"))
+        assert world.clock.tick == 2
+        world.reflect()
+        assert world.clock.tick == 2
+        assert world.status().cognitive_tick == 2
+
+    def test_clock_persists_across_restart(self, tmp_path):
+        root = tmp_path / "clock"
+        first = World(store_path=root)
+        for _ in range(7):
+            first.ingest(Observation(concepts=["a"], source="s"))
+        second = World(store_path=root)
+        assert second.clock.tick == 7
+        node = second.concepts.resolve("a")
+        assert node.last_activated_tick == 7
+        assert node.created_tick == 1
+
+    def test_records_are_stamped_with_ticks(self, world):
+        world.ingest(Observation(concepts=["x"], source="s"))
+        world.ingest(Observation(concepts=["y"], source="s"))
+        world.ingest(
+            Observation(concepts=["x", "y"], relations=[("x", "y", "depends_on")], source="s")
+        )
+        x = world.concepts.resolve("x")
+        assert x.created_tick == 1
+        assert x.last_activated_tick == 3
+        edge = world.relations.all()[0]
+        assert edge.discovered_tick == 3
+        assert edge.last_reinforced_tick == 3
+
+    def test_decay_is_driven_by_observations_not_calendar(self, world):
+        world.ingest(Observation(concepts=["a"], source="s"))
+        node = world.concepts.resolve("a")
+        before = node.confidence
+        # A week of wall-clock time with no observations: only drift.
+        node.last_activated = datetime.now(timezone.utc) - timedelta(days=7)
+        world._decay.decay_concepts()
+        after_idle_week = node.confidence
+        assert before * 0.5 < after_idle_week < before
+
+        other = World(store_path=world._store._root.parent / "busy")
+        other.ingest(Observation(concepts=["a"], source="s"))
+        busy = other.concepts.resolve("a")
+        _advance(other, 168)  # a week's worth of observations
+        other._decay.decay_concepts()
+        assert busy.confidence < after_idle_week
+
+    def test_cognitive_elapsed_clamps_negative_components(self):
+        from world0.schemas.clock import cognitive_elapsed
+
+        now = datetime.now(timezone.utc)
+        assert cognitive_elapsed(5, 9, now, now + timedelta(hours=3)) == 0.0
+        assert cognitive_elapsed(9, 5, now, now) == 4.0
+        assert cognitive_elapsed(9, 5, now, now - timedelta(hours=10)) == pytest.approx(5.0)
+
+    def test_clock_cannot_move_backwards(self):
+        from world0.schemas.clock import CognitiveClock
+
+        clock = CognitiveClock(3)
+        assert clock.advance(2) == 5
+        with pytest.raises(ValueError):
+            clock.advance(-1)
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# 8. Hebbian learning survives a restart
 # ═══════════════════════════════════════════════════════════════════════
 
 

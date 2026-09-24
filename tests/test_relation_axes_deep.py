@@ -619,43 +619,43 @@ def test_evidence_balance_moves_toward_one_with_reinforcement():
 
 def test_temporal_relevance_is_one_when_fresh():
     edge = _edge(semantic_relation="enables")
-    # Just reinforced (hours_since ~ 0): essentially full relevance.
+    # Just reinforced (no observations since): essentially full relevance.
     assert edge.temporal_relevance() == pytest.approx(1.0, abs=1e-3)
 
 
 def test_temporal_relevance_half_at_one_half_life():
     edge = _edge(semantic_relation="enables")
     edge.reinforcement_count = 0  # effective half-life == base
-    edge.last_reinforced = datetime.now(timezone.utc) - timedelta(hours=72)
-    assert edge.temporal_relevance(72.0) == pytest.approx(0.5, abs=1e-3)
+    edge.last_reinforced_tick = 0
+    assert edge.temporal_relevance(72.0, now_tick=72) == pytest.approx(0.5, abs=1e-3)
 
 
 def test_temporal_relevance_decays_monotonically():
-    def rel(hours: float) -> float:
+    def rel(ticks: int) -> float:
         edge = _edge(semantic_relation="enables")
         edge.reinforcement_count = 0
-        edge.last_reinforced = datetime.now(timezone.utc) - timedelta(hours=hours)
-        return edge.temporal_relevance(72.0)
+        edge.last_reinforced_tick = 0
+        return edge.temporal_relevance(72.0, now_tick=ticks)
 
-    values = [rel(h) for h in (1, 24, 72, 144, 240)]
+    values = [rel(t) for t in (1, 24, 72, 144, 240)]
     assert all(earlier >= later for earlier, later in zip(values, values[1:]))
 
 
 def test_temporal_relevance_floor():
     edge = _edge(semantic_relation="enables")
     edge.reinforcement_count = 0
-    edge.last_reinforced = datetime.now(timezone.utc) - timedelta(hours=100_000)
-    assert edge.temporal_relevance(72.0) == pytest.approx(0.15)
+    edge.last_reinforced_tick = 0
+    assert edge.temporal_relevance(72.0, now_tick=100_000) == pytest.approx(0.15)
 
 
 def test_temporal_relevance_longer_half_life_with_more_reinforcement():
-    age = 72.0
+    age = 72
 
     def rel(reinforcements: int) -> float:
         edge = _edge(semantic_relation="enables")
         edge.reinforcement_count = reinforcements
-        edge.last_reinforced = datetime.now(timezone.utc) - timedelta(hours=age)
-        return edge.temporal_relevance(72.0)
+        edge.last_reinforced_tick = 0
+        return edge.temporal_relevance(72.0, now_tick=age)
 
     weak = rel(0)
     strong = rel(4)

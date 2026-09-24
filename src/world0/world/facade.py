@@ -27,6 +27,7 @@ from world0.extraction.extractor import ConceptExtractor
 from world0.prompts import PromptRegistry
 from world0.projection.engine import ProjectionEngine
 from world0.relations.manager import RelationManager
+from world0.schemas.clock import CognitiveClock
 from world0.schemas.context import Perspective
 from world0.schemas.types import (
     IngestResult,
@@ -80,32 +81,41 @@ class World:
         self._store = JsonStore(store_path)
         self._prompts = prompt_registry or PromptRegistry()
 
+        # ── Cross-cycle state + cognitive clock ───────────────────────
+        # Time in World 0 is counted in observations: the clock advances
+        # once per ``ingest()`` and is persisted with the world state.
+        self._state = self._store.load_state()
+        self._clock = CognitiveClock(int(self._state.get("tick") or 0))
+
         # ── Stores ────────────────────────────────────────────────────
-        self.concepts = Concepts(self._store)
-        self.relations = RelationManager(self._store)
+        self.concepts = Concepts(self._store, clock=self._clock)
+        self.relations = RelationManager(self._store, clock=self._clock)
         self.sources = SourceLibrary(self._store)
         self.concepts.load()
         self.relations.load()
 
         # ── Dynamics engines (each implements a core Protocol) ────────
-        self._activation = ActivationEngine(self.concepts, self.relations)
+        self._activation = ActivationEngine(
+            self.concepts, self.relations, clock=self._clock
+        )
         self._color_diffusion = ColorDiffusionEngine(
             self.concepts, self.relations
         )
         self._hebbian = HebbianEngine(self.relations)
-        self._decay = DecayEngine(self.concepts, self.relations)
+        self._decay = DecayEngine(self.concepts, self.relations, clock=self._clock)
         self._lifecycle = LifecycleEngine(self.concepts, self.relations)
-        self._projection = ProjectionEngine(self.concepts, self.relations)
+        self._projection = ProjectionEngine(
+            self.concepts, self.relations, clock=self._clock
+        )
 
         # Optional LLM-powered extraction
         self._extractor = (
             ConceptExtractor(llm, prompt_registry=self._prompts) if llm else None
         )
 
-        # ── Cross-cycle state ────────────────────────────────────────
-        self._state = self._store.load_state()
+        # ── Communities ──────────────────────────────────────────────
         self._community_detector = CommunityDetector(
-            self.concepts, self.relations
+            self.concepts, self.relations, clock=self._clock
         )
         self._communities = CommunityManager.from_snapshot(
             self._state.get("communities"), self._community_detector
@@ -134,20 +144,33 @@ class World:
 
     # ── Agent interface ───────────────────────────────────────────────
 
+    @property
+    def clock(self) -> CognitiveClock:
+        """The world's cognitive clock (one tick per observation)."""
+        return self._clock
+
     def ingest(self, observation: Observation) -> IngestResult:
         """Agent submits observations. World 0 updates itself."""
+        # Every observation is one unit of cognitive time.
+        self._clock.advance()
         result = self._ingest_pipeline.run(observation)
         # Pipelines never persist — facade owns the flush boundary.
         self.concepts.flush()
         self.relations.flush()
-        self._persist_hebbian_state()
+        self._persist_learning_state()
         return result
 
-    def _persist_hebbian_state(self) -> None:
-        """Save pending Hebbian counters when they changed."""
+    def _persist_learning_state(self) -> None:
+        """Save the clock and pending Hebbian counters when they changed."""
+        changed = False
+        if self._state.get("tick") != self._clock.tick:
+            self._state["tick"] = self._clock.tick
+            changed = True
         pending = self._hebbian.snapshot()
         if pending != self._state.get("hebbian_pending"):
             self._state["hebbian_pending"] = pending
+            changed = True
+        if changed:
             self._store.save_state(self._state)
 
     def ingest_text(
@@ -232,6 +255,8 @@ class World:
         self.concepts.flush()
         self.relations.flush()
         self._state["last_reflect"] = datetime.now(timezone.utc).isoformat()
+        self._state["last_reflect_tick"] = self._clock.tick
+        self._state["tick"] = self._clock.tick
         self._state["communities"] = self._communities.snapshot()
         self._store.save_state(self._state)
         return result
@@ -294,6 +319,7 @@ class World:
             relations=self.relations,
             communities=self._communities,
             last_reflect_iso=self._state.get("last_reflect"),
+            cognitive_tick=self._clock.tick,
         )
 
     def visualize(

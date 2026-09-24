@@ -166,6 +166,15 @@ def _merge_evidence(keeper: ConceptNode, absorbed: ConceptNode) -> None:
         keeper.record_task(label, count)
     if absorbed.last_activated > keeper.last_activated:
         keeper.last_activated = absorbed.last_activated
+    keeper.last_activated_tick = max(
+        keeper.last_activated_tick, absorbed.last_activated_tick
+    )
+    keeper.created_tick = min(keeper.created_tick, absorbed.created_tick)
+    if absorbed.last_decayed_tick is not None and (
+        keeper.last_decayed_tick is None
+        or absorbed.last_decayed_tick > keeper.last_decayed_tick
+    ):
+        keeper.last_decayed_tick = absorbed.last_decayed_tick
     if absorbed.last_decayed_at and (
         keeper.last_decayed_at is None
         or absorbed.last_decayed_at > keeper.last_decayed_at

@@ -7,10 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Cognitive clock** (`schemas/clock.py`) — time in World 0 is counted in
+  observations: `World.clock` advances once per `ingest()` and is persisted
+  in `state.json` (`tick`); every concept/relation carries `*_tick`
+  coordinates next to its timestamps, and decay, freshness, evidence
+  floors and community coupling are functions of ticks elapsed.  The wall
+  clock survives only as a slow drift term (`WALL_TICKS_PER_HOUR = 0.1`)
+  so a dormant world still ages a little.  `WorldStatus.cognitive_tick`
+  exposes the current tick; `world.clock.advance(n)` is the time
+  simulator for tests and calibration.
 - **Cognitive-dynamics analysis** (`docs/world0-cognitive-dynamics-analysis.md`)
   — mathematical review of decay, activation, projection, lifecycle and
   Hebbian learning with before/after probe evidence, parameter calibration
-  and a roadmap toward a continuously updating cognitive layer; 28 new
+  and a roadmap toward a continuously updating cognitive layer; 36 new
   behavioral tests in `tests/test_dynamics_analysis.py`.
 - **Task profile** — `ConceptNode.task_profile` aggregates activations per
   normalized task label; `task_affinity()` / `task_match_score()` provide
@@ -44,16 +53,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`models/`, `prompts/`).
 
 ### Changed
-- **Decay is idempotent in wall-clock time.**  Concepts and relations carry
-  `last_decayed_at`; only the interval since the last decay application is
-  decayed, so `reflect()` frequency no longer changes the dynamics.
+- **Temporal dynamics run on cognitive time, not the calendar.**  All
+  half-lives (`CONCEPT_HALF_LIFE`, `RELATION_BASE_HALF_LIFE`,
+  `CONCEPT_TEMPORAL_HL`, `RELATION_TEMPORAL_HL`, `PROJECTION_TEMPORAL_HL`)
+  keep their numeric values but are now measured in observations;
+  `temporal_relevance(half_life, *, now_tick=, now=)` replaces the
+  hours-based signature.  Tests simulate time with
+  `world.clock.advance(n)` instead of rewinding `datetime` fields.
+- **Decay is idempotent.**  Concepts and relations carry
+  `last_decayed_tick` / `last_decayed_at`; only the interval since the last
+  decay application is decayed, so `reflect()` frequency no longer changes
+  the dynamics.
 - **Evidence-anchored concept decay.**  Effective half-life stretches with
-  activation count (`1 + 0.2·(n−1)`, capped at 8× and one year) and
-  confidence relaxes toward an evidence floor (OU-style mean reversion)
-  that itself forgets on a ~6-month era scale.  A concept used daily now
-  reaches `established` in ~8 weeks (previously stuck at confidence ≈ 0.06
-  forever); one used weekly settles as `developing` instead of fading; a
-  one-off mention still fades in ~2 days.
+  activation count (`1 + 0.2·(n−1)`, capped at 8× and 8760 observations)
+  and confidence relaxes toward an evidence floor (OU-style mean
+  reversion) that itself forgets on a 4380-observation era scale.  A
+  concept re-observed every 24 observations now reaches `established`
+  after ~1400 observations (previously stuck at confidence ≈ 0.06
+  forever); one re-observed every 168 settles as `developing` instead of
+  fading; a one-off mention still fades after ~54 observations.
 - **Activation aggregation.**  Contributions converging on one concept
   combine with a bounded noisy-OR scaled by the strongest seed (rewards
   conceptual intersection, never outranks a seed); propagation is layered

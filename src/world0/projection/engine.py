@@ -14,6 +14,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
+from world0.schemas.clock import CognitiveClock
 from world0.schemas.types import Projection
 
 if TYPE_CHECKING:
@@ -34,8 +35,9 @@ TASK_AFFINITY_DISCOUNT: float = 0.6
 # 0.0 = no time influence, 1.0 = freshness equally weighted as score.
 TEMPORAL_WEIGHT: float = 0.3
 
-# Half-life used for temporal relevance in projection (hours).
-PROJECTION_TEMPORAL_HL: float = 168.0  # 1 week
+# Half-life used for temporal relevance in projection, in ticks
+# (observations) of cognitive time.
+PROJECTION_TEMPORAL_HL: float = 168.0
 
 
 class ProjectionEngine:
@@ -49,9 +51,11 @@ class ProjectionEngine:
         self,
         concepts: "ConceptStore",
         relations: "RelationStore",
+        clock: CognitiveClock | None = None,
     ) -> None:
         self._concepts = concepts
         self._relations = relations
+        self._clock = clock or CognitiveClock()
 
     def project(
         self,
@@ -89,6 +93,7 @@ class ProjectionEngine:
         task_lower = task.strip().lower()
         task_affinity: dict[str, float] = {}
         temporal_freshness: dict[str, float] = {}
+        now_tick = self._clock.tick
         now = datetime.now(timezone.utc)
         for cid in candidates:
             node = self._concepts.get(cid)
@@ -111,7 +116,7 @@ class ProjectionEngine:
             # actual temporal_relevance using TEMPORAL_WEIGHT.
             if node:
                 raw_freshness = node.temporal_relevance(
-                    PROJECTION_TEMPORAL_HL, now=now
+                    PROJECTION_TEMPORAL_HL, now_tick=now_tick, now=now
                 )
                 temporal_freshness[cid] = (
                     (1.0 - TEMPORAL_WEIGHT) + TEMPORAL_WEIGHT * raw_freshness

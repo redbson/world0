@@ -13,6 +13,8 @@ from typing import Any
 
 from pydantic import BaseModel, Field, model_validator
 
+from world0.schemas.clock import cognitive_elapsed, wall_now
+
 # Signature tokenization: lowercase word tokens ≥2 chars, common English
 # stopwords removed.  Keeps the set small while preserving domain terms.
 _TOKEN_RE = re.compile(r"[a-z0-9]+", re.IGNORECASE)
@@ -209,11 +211,19 @@ class ConceptNode(BaseModel):
     last_activated: datetime = Field(
         default_factory=lambda: datetime.now(timezone.utc)
     )
+    # Cognitive-time coordinates (see ``schemas/clock.py``): the world tick
+    # (observation count) at creation and at the last activation.  Decay
+    # and freshness are functions of ticks elapsed, with the wall clock as
+    # a slow secondary drift.
+    created_tick: int = 0
+    last_activated_tick: int = 0
     last_weakened: datetime | None = None
-    # Wall-clock instant at which time decay was last applied.  Lets the
-    # decay engine decay only the *elapsed interval* instead of the whole
-    # span since ``last_activated`` on every call (idempotent decay).
+    # Instant (both coordinates) at which time decay was last applied.
+    # Lets the decay engine decay only the *elapsed interval* instead of
+    # the whole span since the last activation on every call (idempotent
+    # decay).
     last_decayed_at: datetime | None = None
+    last_decayed_tick: int | None = None
     origin: str = ""
     # Bounded recent-activity window (see MAX_REINFORCEMENT_LOG).
     reinforcement_log: list[ReinforcementEntry] = Field(default_factory=list)
@@ -282,11 +292,20 @@ class ConceptNode(BaseModel):
     def all_names(self) -> list[str]:
         return [self.normalized_name()] + [a.strip().lower() for a in self.aliases]
 
-    def activate(self, source: str = "", task: str = "") -> None:
-        """Record an activation event (confirmation evidence)."""
+    def activate(
+        self, source: str = "", task: str = "", *, tick: int | None = None
+    ) -> None:
+        """Record an activation event (confirmation evidence).
+
+        ``tick`` is the world's cognitive time (observation count) at which
+        the activation happened; engines always pass it.  Without it only
+        the wall-clock coordinate moves.
+        """
         now = datetime.now(timezone.utc)
         self.activation_count += 1
         self.last_activated = now
+        if tick is not None:
+            self.last_activated_tick = int(tick)
         self.reinforcement_log.append(
             ReinforcementEntry(timestamp=now, source=source, task=task)
         )
@@ -341,10 +360,42 @@ class ConceptNode(BaseModel):
         return best
 
     def decay_reference_time(self) -> datetime:
-        """Instant from which the next decay interval is measured."""
+        """Wall-clock instant from which the next decay interval is measured."""
         if self.last_decayed_at and self.last_decayed_at > self.last_activated:
             return self.last_decayed_at
         return self.last_activated
+
+    def decay_reference_tick(self) -> int:
+        """Tick from which the next decay interval is measured."""
+        if (
+            self.last_decayed_tick is not None
+            and self.last_decayed_tick > self.last_activated_tick
+        ):
+            return self.last_decayed_tick
+        return self.last_activated_tick
+
+    def elapsed_since_activation(
+        self, now_tick: int | None = None, now: datetime | None = None
+    ) -> float:
+        """Cognitive time since the last activation, in ticks.
+
+        Without ``now_tick`` only the wall-clock drift term contributes.
+        """
+        return cognitive_elapsed(
+            self.last_activated_tick if now_tick is None else now_tick,
+            self.last_activated_tick,
+            now or wall_now(),
+            self.last_activated,
+        )
+
+    def decay_elapsed(self, now_tick: int, now: datetime | None = None) -> float:
+        """Cognitive time since decay was last applied (or since activation)."""
+        return cognitive_elapsed(
+            now_tick,
+            self.decay_reference_tick(),
+            now or wall_now(),
+            self.decay_reference_time(),
+        )
 
     def record_source_ref(
         self,
@@ -480,25 +531,32 @@ class ConceptNode(BaseModel):
         return delta.total_seconds() / 3600.0
 
     def temporal_relevance(
-        self, half_life_hours: float = 168.0, *, now: datetime | None = None
+        self,
+        half_life: float = 168.0,
+        *,
+        now_tick: int | None = None,
+        now: datetime | None = None,
     ) -> float:
-        """Time-based relevance score in [0, 1].
+        """Freshness score in [0, 1] as a function of cognitive time.
 
         Returns 1.0 for a just-activated concept and decays exponentially
-        with a configurable half-life.  A floor of 0.1 prevents ancient
-        but structurally important concepts from being completely invisible.
+        with a configurable half-life measured in ticks (observations).
+        A floor of 0.1 prevents ancient but structurally important
+        concepts from being completely invisible.
 
         Args:
-            half_life_hours: Hours after which relevance halves.
-                Default 168 h (1 week).
-            now: Reference instant.  Engines evaluating many concepts in
-                one pass share a single ``now`` so the advancing wall
-                clock cannot introduce order-dependent noise.
+            half_life: Ticks after which relevance halves (default 168).
+            now_tick: The world's current tick.  Engines evaluating many
+                concepts in one pass share one ``now_tick``/``now`` so the
+                result cannot depend on iteration order.
+            now: Wall-clock reference for the drift term.
         """
-        hours = self.hours_since_activation(now)
-        if hours <= 0 or half_life_hours <= 0:
+        if half_life <= 0:
             return 1.0
-        raw = math.pow(0.5, hours / half_life_hours)
+        elapsed = self.elapsed_since_activation(now_tick, now)
+        if elapsed <= 0:
+            return 1.0
+        raw = math.pow(0.5, elapsed / half_life)
         return max(0.1, raw)
 
     def signature_tokens(self) -> set[str]:

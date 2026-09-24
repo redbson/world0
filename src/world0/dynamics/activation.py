@@ -54,6 +54,7 @@ from world0.dynamics.coefficients import (
     RELATION_TEMPORAL_HL,
     RELATION_TYPE_FACTOR,
 )
+from world0.schemas.clock import CognitiveClock
 from world0.schemas.context import Perspective
 from world0.schemas.relation import RelationType
 
@@ -133,9 +134,11 @@ class ActivationEngine:
         self,
         concepts: "ConceptStore",
         relations: "RelationStore",
+        clock: CognitiveClock | None = None,
     ) -> None:
         self._concepts = concepts
         self._relations = relations
+        self._clock = clock or CognitiveClock()
 
     def activate(
         self,
@@ -183,8 +186,9 @@ class ActivationEngine:
         if perspective is None:
             perspective = Perspective(task=task)
         task_lower = (perspective.task or task).strip().lower()
-        # One reference instant for the whole pass: freshness must not
-        # depend on how far the wall clock advanced while iterating.
+        # One reference instant (both cognitive-time coordinates) for the
+        # whole pass: freshness must not depend on iteration order.
+        now_tick = self._clock.tick
         now = datetime.now(timezone.utc)
 
         activations: dict[str, float] = {}
@@ -216,7 +220,7 @@ class ActivationEngine:
             if score > seed_score_max:
                 seed_score_max = score
             if record:
-                node.activate(source=source, task=task)
+                node.activate(source=source, task=task, tick=now_tick)
 
         # Propagation floor: minimum signal that can still pass through
         prop_floor = seed_score_max * PROPAGATION_MIN_RATIO
@@ -279,10 +283,10 @@ class ActivationEngine:
                         domain_boost = perspective.domain_affinity_boost
 
                     rel_freshness = rel.temporal_relevance(
-                        RELATION_TEMPORAL_HL, now=now
+                        RELATION_TEMPORAL_HL, now_tick=now_tick, now=now
                     )
                     neighbor_freshness = neighbor.temporal_relevance(
-                        CONCEPT_TEMPORAL_HL, now=now
+                        CONCEPT_TEMPORAL_HL, now_tick=now_tick, now=now
                     )
 
                     raw = (
@@ -330,7 +334,9 @@ class ActivationEngine:
                 if record:
                     neighbor = self._concepts.get(neighbor_id)
                     if neighbor is not None:
-                        neighbor.activate(source=source, task=task)
+                        neighbor.activate(
+                            source=source, task=task, tick=now_tick
+                        )
 
             frontier = list(layer.keys())
 

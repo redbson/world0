@@ -209,6 +209,9 @@ class ReflectResult(BaseModel):
 class WorldStatus(BaseModel):
     """Overview of the cognitive world's current state."""
 
+    # Cognitive time: number of observations ingested so far (see
+    # ``schemas/clock.py``).  Decay and freshness are measured in ticks.
+    cognitive_tick: int = 0
     total_concepts: int = 0
     total_relations: int = 0
     by_maturity: dict[str, int] = Field(default_factory=dict)

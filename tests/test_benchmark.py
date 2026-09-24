@@ -284,7 +284,7 @@ class TestDecayCurve:
         (Maturity.CORE, CONCEPT_HALF_LIFE[Maturity.CORE]),
     ])
     def test_concept_decay_matches_half_life(self, world, maturity, half_life):
-        """After exactly one half-life, confidence should halve (±5%)."""
+        """After exactly one half-life (in observations), confidence should halve (±5%)."""
         world.ingest(Observation(concepts=["decay_test"], source="bench"))
         node = world.concepts.resolve("decay_test")
 
@@ -292,7 +292,7 @@ class TestDecayCurve:
         initial_confidence = 0.8
         node.confidence = initial_confidence
         node.maturity = maturity
-        node.last_activated = datetime.now(timezone.utc) - timedelta(hours=half_life)
+        node.last_activated_tick = world.clock.tick - int(half_life)
 
         # Run decay
         world._decay.decay_concepts()
@@ -323,7 +323,7 @@ class TestDecayCurve:
         edge.confidence = initial_weight
         edge.reinforcement_count = 0
         half_life = RELATION_BASE_HALF_LIFE * (1.0 + 0 * 0.5)  # = base
-        edge.last_reinforced = datetime.now(timezone.utc) - timedelta(hours=half_life)
+        edge.last_reinforced_tick = world.clock.tick - int(half_life)
 
         world._decay.decay_relations()
 
@@ -348,7 +348,7 @@ class TestDecayCurve:
         edge.confidence = 0.8
         edge.reinforcement_count = 10
         elapsed = RELATION_BASE_HALF_LIFE  # one base half-life
-        edge.last_reinforced = datetime.now(timezone.utc) - timedelta(hours=elapsed)
+        edge.last_reinforced_tick = world.clock.tick - int(elapsed)
 
         world._decay.decay_relations()
 
@@ -581,7 +581,7 @@ class TestScaleBehavior:
             if node:
                 node.confidence = 0.01
                 node.maturity = Maturity.FADING
-                node.last_activated = datetime.now(timezone.utc) - timedelta(hours=200)
+                node.last_activated_tick = world.clock.tick - 200
 
         result = world.reflect()
         after = world.status().total_concepts

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from world0.schemas.clock import CognitiveClock
 from world0.schemas.relation import (
     RelationEdge,
     RelationType,
@@ -17,8 +18,11 @@ class RelationManager:
     and strengthen through repeated observation.
     """
 
-    def __init__(self, store: Store) -> None:
+    def __init__(self, store: Store, clock: CognitiveClock | None = None) -> None:
         self._store = store
+        # Cognitive clock shared with the owning World; stamps discovery
+        # and reinforcement with the current observation tick.
+        self._clock = clock or CognitiveClock()
         self._relations: dict[str, RelationEdge] = {}
         self._by_concept: dict[str, list[str]] = {}  # concept_id → [relation_ids]
         self._dirty: set[str] = set()  # relation ids with unsaved changes
@@ -95,6 +99,7 @@ class RelationManager:
                     prior_strength=prior_strength,
                     evidence_strength=evidence_strength,
                     provenance=provenance,
+                    tick=self._clock.tick,
                 )
                 self._dirty.add(existing.id)
             return existing, False
@@ -127,6 +132,8 @@ class RelationManager:
             is_explicit=is_explicit,
             reinforcement_count=1 if probability is not None and probability >= 0.5 else 0,
             disconfirmation_count=1 if probability is not None and probability < 0.5 else 0,
+            discovered_tick=self._clock.tick,
+            last_reinforced_tick=self._clock.tick,
         )
         self._relations[edge.id] = edge
         self._index(edge)
@@ -197,7 +204,7 @@ class RelationManager:
         edge = self._relations.get(relation_id)
         if not edge:
             return None
-        edge.reinforce(provenance=provenance)
+        edge.reinforce(provenance=provenance, tick=self._clock.tick)
         self._dirty.add(edge.id)
         return edge
 
@@ -299,6 +306,12 @@ class RelationManager:
                 duplicate.disconfirmation_count += rel.disconfirmation_count
                 if rel.last_reinforced > duplicate.last_reinforced:
                     duplicate.last_reinforced = rel.last_reinforced
+                duplicate.last_reinforced_tick = max(
+                    duplicate.last_reinforced_tick, rel.last_reinforced_tick
+                )
+                duplicate.discovered_tick = min(
+                    duplicate.discovered_tick, rel.discovered_tick
+                )
                 for t in rel.task_history:
                     if t not in duplicate.task_history:
                         duplicate.task_history.append(t)

@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING
 from world0.concepts._consolidation import SignatureMatcher
 from world0.concepts._identity_ops import merge_concepts, split_concept
 from world0.concepts._indexes import NameIndex, TokenIndex
+from world0.schemas.clock import CognitiveClock
 from world0.schemas.concept import (
     ConceptNode,
     Maturity,
@@ -46,8 +47,13 @@ class ConceptManager:
     Implements the ``ConceptStore`` Protocol from ``world0.core``.
     """
 
-    def __init__(self, store: StorageBackend) -> None:
+    def __init__(
+        self, store: StorageBackend, clock: CognitiveClock | None = None
+    ) -> None:
         self._store = store
+        # Cognitive clock shared with the owning World; stamps every
+        # creation / activation with the current observation tick.
+        self._clock = clock or CognitiveClock()
         self._concepts: dict[str, ConceptNode] = {}
         self._identity_index: dict[str, str] = {}
         self._name_index = NameIndex()
@@ -186,6 +192,8 @@ class ConceptManager:
             sense=sense,
             domain=domain,
             identity_key=effective_identity_key,
+            created_tick=self._clock.tick,
+            last_activated_tick=self._clock.tick,
         )
         node.ensure_identity_key()
         self._concepts[node.id] = node
@@ -382,7 +390,7 @@ class ConceptManager:
         node = self._concepts.get(concept_id)
         if not node:
             return None
-        node.activate(source=source, task=task)
+        node.activate(source=source, task=task, tick=self._clock.tick)
         self._dirty.add(node.id)
         return node
 

@@ -26,11 +26,11 @@ class TestConceptDecay:
         """An embryonic concept untouched for 48h should decay heavily."""
         world.ingest(Observation(concepts=["Old"], source="test"))
         node = world.concepts.resolve("Old")
-        # Simulate 48h without activation
-        node.last_activated = datetime.now(timezone.utc) - timedelta(hours=48)
+        # Simulate 48 observations without activation
+        node.last_activated_tick = world.clock.tick - 48
 
         world._decay.decay_concepts()
-        # 48h with 24h half-life → ~25% remaining of initial ~0.21
+        # 48 ticks with 24-tick half-life → ~25% remaining of initial ~0.21
         assert node.confidence < 0.06
 
     def test_core_concept_decays_slowly(self, world):
@@ -39,11 +39,11 @@ class TestConceptDecay:
         node = world.concepts.resolve("Core")
         node.maturity = Maturity.CORE
         node.confidence = 0.9
-        # Simulate 1 week
-        node.last_activated = datetime.now(timezone.utc) - timedelta(hours=168)
+        # Simulate 168 observations
+        node.last_activated_tick = world.clock.tick - 168
 
         world._decay.decay_concepts()
-        # 168h with 2160h half-life → ~95% remaining
+        # 168 ticks with 2160-tick half-life → ~95% remaining
         assert node.confidence > 0.8
 
 
@@ -59,8 +59,8 @@ class TestRelationDecay:
         b = world.concepts.resolve("B")
         rel = world.relations.find_any_between(a.id, b.id)[0]
 
-        # Simulate 2 weeks (relation gets 1 reinforcement from hebbian)
-        rel.last_reinforced = datetime.now(timezone.utc) - timedelta(hours=336)
+        # Simulate 336 observations (relation gets 1 reinforcement from hebbian)
+        rel.last_reinforced_tick = world.clock.tick - 336
         world._decay.decay_relations()
         assert rel.weight < 0.10
 
@@ -77,10 +77,10 @@ class TestRelationDecay:
         rel.reinforcement_count = 20
         rel.weight = 0.8
 
-        # Simulate 1 week
-        rel.last_reinforced = datetime.now(timezone.utc) - timedelta(hours=168)
+        # Simulate 168 observations
+        rel.last_reinforced_tick = world.clock.tick - 168
         world._decay.decay_relations()
-        # 168h with half_life = 72*(1+20*0.5) = 792h → still most weight
+        # 168 ticks with half_life = 72*(1+20*0.5) = 792 → still most weight
         assert rel.weight > 0.5
 
 

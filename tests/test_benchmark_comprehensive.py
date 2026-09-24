@@ -483,10 +483,10 @@ class TestMultiCycleDecay:
         node = world.concepts.resolve("decaying")
         initial = node.confidence
 
-        # Age concept between each reflect
+        # 30 observations pass between each reflect
         confidences = [initial]
         for cycle in range(5):
-            node.last_activated = datetime.now(timezone.utc) - timedelta(hours=30)
+            world.clock.advance(30)
             world.reflect()
             node = world.concepts.resolve("decaying")
             if node is None:
@@ -509,9 +509,8 @@ class TestMultiCycleDecay:
             # Reinforce
             for _ in range(3):
                 world.ingest(Observation(concepts=["resilient"], source="bench"))
-            # Moderate aging
-            node = world.concepts.resolve("resilient")
-            node.last_activated = datetime.now(timezone.utc) - timedelta(hours=10)
+            # Moderate aging: 10 observations pass
+            world.clock.advance(10)
             world.reflect()
 
         node = world.concepts.resolve("resilient")
@@ -550,7 +549,7 @@ class TestMultiCycleDecay:
             if node is None:
                 pruned = True
                 break
-            node.last_activated = datetime.now(timezone.utc) - timedelta(hours=50)
+            world.clock.advance(50)
             node.confidence = max(node.confidence * 0.3, 0.001)
             if node.confidence < 0.1:
                 node.maturity = Maturity.FADING
@@ -829,7 +828,7 @@ class TestRelationGraphIntegrity:
             if node:
                 node.confidence = 0.001
                 node.maturity = Maturity.FADING
-                node.last_activated = datetime.now(timezone.utc) - timedelta(hours=500)
+                node.last_activated_tick = world.clock.tick - 500
 
         world.reflect()
 

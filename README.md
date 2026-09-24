@@ -330,9 +330,9 @@ embryonic → developing → established → core
 | any → fading / 任意 → 衰退 | confidence decays below 0.05 / 置信度衰减至 0.05 以下 |
 | fading → developing / 衰退 → 发展中 | re-activated by an observation / 被观察重新激活 |
 
-Decay rates are maturity-dependent: embryonic concepts fade in ~1 day, core concepts persist for ~3 months. Half-lives stretch with accumulated evidence and confidence relaxes toward an evidence floor rather than toward zero, so a concept used daily can mature while a one-off mention still fades. Decay is idempotent in wall-clock time — calling `reflect()` more often never accelerates forgetting. See [`docs/world0-cognitive-dynamics-analysis.md`](docs/world0-cognitive-dynamics-analysis.md).
+Time in World 0 is **cognitive time**: the world clock advances once per ingested observation (`world.clock.tick`, exposed as `status().cognitive_tick`), and the calendar only adds a slow drift while the world is idle. Decay rates are maturity-dependent and measured in observations: an embryonic concept halves after 24 observations that do not mention it, a core concept after 2160. Half-lives stretch with accumulated evidence and confidence relaxes toward an evidence floor rather than toward zero, so a concept re-observed regularly can mature while a one-off mention still fades. Decay is idempotent in cognitive time — calling `reflect()` more often never accelerates forgetting. See [`docs/world0-cognitive-dynamics-analysis.md`](docs/world0-cognitive-dynamics-analysis.md).
 
-衰减速率取决于成熟度：萌芽概念约 1 天衰退，核心概念可持续约 3 个月。半衰期随累积证据拉长，置信度向"证据地板"而非 0 回归，因此每天使用的概念可以成熟，一次性提及仍会消失。衰减对物理时间幂等——更频繁地调用 `reflect()` 不会加速遗忘。详见 [`docs/world0-cognitive-dynamics-analysis.md`](docs/world0-cognitive-dynamics-analysis.md)。
+World 0 的时间是**认知时间**：每摄入一条观察，世界时钟前进一格（`world.clock.tick`，`status().cognitive_tick` 可见），日历只在世界闲置时贡献缓慢的漂移。衰减速率取决于成熟度，以观察次数计：萌芽概念在 24 次未提及它的观察后减半，核心概念为 2160 次。半衰期随累积证据拉长，置信度向"证据地板"而非 0 回归，因此定期复现的概念可以成熟，一次性提及仍会消失。衰减对认知时间幂等——更频繁地调用 `reflect()` 不会加速遗忘。详见 [`docs/world0-cognitive-dynamics-analysis.md`](docs/world0-cognitive-dynamics-analysis.md)。
 
 ## Relation Types / 关系类型
 
@@ -467,7 +467,7 @@ Writes use a dirty-flag mechanism: in-memory mutations are batched and flushed a
 
 **Hebbian learning with threshold. / 带阈值的 Hebbian 学习。** Co-occurring concepts don't immediately form relations — they need to co-occur at least twice before a connection is created. This prevents noise from single observations. / 共现概念不会立即形成关系——需要至少共现两次才会创建连接。这防止了单次观察产生的噪声。
 
-**Graceful decay. / 优雅衰减。** Unused concepts decay exponentially with maturity-dependent half-lives. Core concepts resist decay (3-month half-life); embryonic concepts fade in a day. This keeps the world clean without manual pruning. / 未使用的概念按指数衰减，半衰期取决于成熟度。核心概念抵抗衰减（3 个月半衰期）；萌芽概念在一天内衰退。这让概念世界保持整洁，无需手动修剪。
+**Graceful decay. / 优雅衰减。** Unused concepts decay exponentially in cognitive time (observations), with maturity- and evidence-dependent half-lives. Core concepts resist decay (2160-observation base half-life); embryonic concepts fade within a few dozen observations. This keeps the world clean without manual pruning. / 未使用的概念在认知时间（观察次数）上按指数衰减，半衰期取决于成熟度与证据量。核心概念抵抗衰减（基础半衰期 2160 次观察）；萌芽概念在几十次观察内衰退。这让概念世界保持整洁，无需手动修剪。
 
 ## Development / 开发
 
