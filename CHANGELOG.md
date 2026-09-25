@@ -154,6 +154,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reaches parity near 1 000 and yields to fresh context after that.  The
   cognitive benchmark is unchanged; one-off concepts (evidence ≈ 0.06)
   still collapse to the freshness floor.  Sweep: `scripts/sweep_salience.py`.
+- **Learning-state persistence is amortised.**  Hebbian co-occurrence
+  counters and mention statistics now live in a separate store record
+  (`learning.json` / the `learning` row) written on every observation
+  while small and at most every 20 observations once large, plus at
+  `reflect()` and the new `World.close()` (`with World(...) as w`).
+  Serialising them into `state.json` on every observation was 76 % of
+  ingest cost in a 2 000-concept world.  Older stores with inline
+  counters are migrated on first open; concepts and relations are still
+  flushed on every observation.
 - **Explicit relations relax toward a probability-anchored floor.**
   Relation `weight` / `confidence` decay toward `0.1 × probability`
   (forgotten on the 4380-observation era scale) instead of toward 0, so

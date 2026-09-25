@@ -432,6 +432,11 @@ $\gamma_{task} = 1 + 0.5\cdot\text{affinity}$，affinity 来自词级匹配（§
 | **第十一轮** | |
 | `dynamics/decay.py` | `relation_floor()`、`RELATION_FLOOR_SHARE = 0.1`；显式关系向概率地板回归 |
 | `tests/test_roadmap_dynamics.py` | +4 个测试 |
+| **第十二轮** | |
+| `dynamics/hebbian.py` | 规范字符串键；`tracked_concepts` |
+| `store/base.py`、`core/interfaces.py`、`store/json_store.py`、`store/sqlite_store.py`、`core/test_doubles.py` | `save_learning_state()/load_learning_state()` |
+| `world/facade.py` | 摊销持久化、旧格式迁移、`close()`/上下文管理器 |
+| `tests/test_learning_state.py`（新） | 8 个测试 |
 
 所有字段均有默认值，旧的 JSON 存储可直接加载（`task_profile` 自动回填，tick 与
 recurrence 默认 0）。
@@ -777,6 +782,32 @@ $\text{floor} = 0.1\cdot p\cdot 2^{-\Delta/4380}$ 回归而不是向 0（`RELATI
 以下；`confirm()` 抬高 p 即抬高地板。基准里的半衰期测试（0.8 → 0.4 ± 0.05）仍然
 成立（0.8 → 0.435）。`TestRelationEvidenceFloor`：3 000 次闲置后显式关系仍在、Hebbian
 边仍消失、12 000 次后显式关系按纪元遗忘、复述过的关系地板更高。
+
+### 7.15 学习状态的持久化成本 ✅
+
+**探针**（100 个主题 × 20 个概念，3 000 次观察，SQLite）：轻量 reflect 0.31 s、完整
+reflect 0.28 s、投影 0.3 ms、重启加载 0.28 s——都没问题；但**单次 ingest 从 22 ms
+涨到 44 ms**。cProfile（第 1 500–1 700 次观察，9 212 个待定对）：`_persist_learning_state`
+占 ingest 的 **76%**——`snapshot()` 为每个待定对 `sorted()` 一次（190 万次调用），
+整个 state（待定对 + 每个概念的提及数）每次观察都 `json.dumps` 一遍并写库。
+
+**修复：**
+
+1. `HebbianEngine` 内部键改为规范字符串 `"a|b"`（排序拼接）——`snapshot()` 是一次
+   `dict` 拷贝；`restore()` 格式不变，旧快照可直接加载。
+2. `Store` 增加 `save_learning_state()/load_learning_state()`：JSON 后端写
+   `learning.json`，SQLite 后端写 `state` 表的 `learning` 行。`state.json` 只剩时钟、
+   reflect 元数据与群落快照，每次观察写它很便宜。旧存储里内联的
+   `hebbian_pending/hebbian_stats` 在首次打开时迁移。
+3. 摊销策略（`World._persist_learning_state`）：学习记录在条目数
+   ≤ `LEARNING_EAGER_LIMIT`（2 000）时每次观察都写（小世界重启逐字一致，既有测试
+   不变）；超过后最多每 `LEARNING_PERSIST_EVERY`（20）次观察写一次，并在 `reflect()`
+   与新增的 `World.close()`（也支持 `with World(...) as w`）时强制写。概念与关系仍然
+   每次观察 flush；崩溃最多丢失 20 次观察的**共现计数**。
+
+`tests/test_learning_state.py`：小世界不 close 也重启一致、记录与 state 分离、旧
+格式迁移、大世界 60 次观察只写 2–4 次学习记录、reflect/close 强制写、close 后重启
+逐字一致、SQLite 记录往返。
 
 ---
 

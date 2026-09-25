@@ -135,6 +135,13 @@ class FakeStorageBackend:
     def load_state(self) -> dict:
         return dict(self._state)
 
+    def save_learning_state(self, state: dict) -> None:
+        self._learning_state = dict(state)
+        self._record("save_learning_state", tuple(sorted(state.keys())))
+
+    def load_learning_state(self) -> dict:
+        return dict(getattr(self, "_learning_state", {}))
+
 
 # ── ConceptStore ─────────────────────────────────────────────────────
 

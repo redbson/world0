@@ -72,6 +72,11 @@ MAX_PENDING_PAIRS: int = 50_000
 _SNAPSHOT_SEPARATOR = "|"
 
 
+def _pair_key(id_a: str, id_b: str) -> str:
+    """Canonical, order-independent key for a concept pair."""
+    return _SNAPSHOT_SEPARATOR.join(sorted((id_a, id_b)))
+
+
 class HebbianEngine:
     """Implements Hebbian co-activation learning for relation discovery.
 
@@ -81,9 +86,11 @@ class HebbianEngine:
     def __init__(self, relations: "RelationStore") -> None:
         self._relations = relations
         # Tracks co-occurrence counts for pairs that don't yet have a relation.
-        # Key: frozenset({id_a, id_b}), Value: count.  Insertion-ordered so
-        # eviction under MAX_PENDING_PAIRS drops the oldest pairs first.
-        self._cooccurrence: dict[frozenset[str], int] = {}
+        # Key: the canonical pair key ``"<id_a>|<id_b>"`` (ids sorted), so
+        # the snapshot is a plain copy instead of an O(pairs) rebuild.
+        # Insertion-ordered so eviction under MAX_PENDING_PAIRS drops the
+        # oldest pairs first.
+        self._cooccurrence: dict[str, int] = {}
         # Association statistics: observations seen and mentions per
         # concept (unique per observation).  Persisted with the pending
         # counters so the association gate survives restarts.
@@ -124,7 +131,7 @@ class HebbianEngine:
                 for rel in existing:
                     self._relations.reinforce(rel.id, provenance=provenance)
             else:
-                key = frozenset((id_a, id_b))
+                key = _pair_key(id_a, id_b)
                 count = self._cooccurrence.get(key, 0) + 1
                 if (
                     count >= COOCCURRENCE_THRESHOLD
@@ -157,7 +164,7 @@ class HebbianEngine:
 
     def association(self, id_a: str, id_b: str) -> float:
         """Current association of a still-pending pair (0.0 if none)."""
-        count = self._cooccurrence.get(frozenset((id_a, id_b)), 0)
+        count = self._cooccurrence.get(_pair_key(id_a, id_b), 0)
         return self._association(id_a, id_b, count) if count else 0.0
 
     @property
@@ -170,6 +177,11 @@ class HebbianEngine:
         return self._mentions.get(concept_id, 0)
 
     @property
+    def tracked_concepts(self) -> int:
+        """Concepts with a mention count (size of the statistics)."""
+        return len(self._mentions)
+
+    @property
     def pending_pairs(self) -> int:
         """Number of concept pairs awaiting threshold before relation creation."""
         return len(self._cooccurrence)
@@ -178,10 +190,7 @@ class HebbianEngine:
 
     def snapshot(self) -> dict[str, int]:
         """JSON-serialisable view of the pending co-occurrence counters."""
-        return {
-            _SNAPSHOT_SEPARATOR.join(sorted(key)): count
-            for key, count in self._cooccurrence.items()
-        }
+        return dict(self._cooccurrence)
 
     def restore(self, snapshot: dict[str, int] | None) -> None:
         """Replace the pending counters with a previously saved snapshot."""
@@ -197,12 +206,16 @@ class HebbianEngine:
             except (TypeError, ValueError):
                 continue
             if value > 0:
-                self._cooccurrence[frozenset(parts)] = value
+                self._cooccurrence[_pair_key(*parts)] = value
         self._evict_overflow()
 
     def forget_concept(self, concept_id: str) -> int:
         """Drop pending pairs (and mention stats) of a removed concept."""
-        stale = [key for key in self._cooccurrence if concept_id in key]
+        stale = [
+            key
+            for key in self._cooccurrence
+            if concept_id in key.split(_SNAPSHOT_SEPARATOR)
+        ]
         for key in stale:
             del self._cooccurrence[key]
         self._mentions.pop(concept_id, None)

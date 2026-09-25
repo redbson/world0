@@ -51,6 +51,11 @@ if TYPE_CHECKING:
     from world0.core import LLMProvider
 
 
+# Learning-record persistence policy (see ``World._persist_learning_state``).
+LEARNING_EAGER_LIMIT: int = 2_000
+LEARNING_PERSIST_EVERY: int = 20
+
+
 class World:
     """World 0 — a persistent cognitive layer for LLM Agents.
 
@@ -138,8 +143,30 @@ class World:
         # Hebbian co-occurrence counters are learning state: restore them
         # so a pair first seen last session and again now still crosses
         # the discovery threshold.
-        self._hebbian.restore(self._state.get("hebbian_pending"))
-        self._hebbian.restore_stats(self._state.get("hebbian_stats"))
+        learning = self._store.load_learning_state()
+        migrated = False
+        if not learning and (
+            "hebbian_pending" in self._state or "hebbian_stats" in self._state
+        ):
+            # Stores written before the learning record existed kept the
+            # counters inside state.json; migrate them once.
+            learning = {
+                "hebbian_pending": self._state.pop("hebbian_pending", None),
+                "hebbian_stats": self._state.pop("hebbian_stats", None),
+            }
+            migrated = True
+        self._hebbian.restore(learning.get("hebbian_pending"))
+        self._hebbian.restore_stats(learning.get("hebbian_stats"))
+        self._learning_saved: dict = {
+            "hebbian_pending": self._hebbian.snapshot(),
+            "hebbian_stats": self._hebbian.stats_snapshot(),
+        }
+        self._learning_saved_tick = self._clock.tick
+        if migrated:
+            # Write the migrated counters to their new home at once so a
+            # crash before the next change cannot lose them.
+            self._store.save_learning_state(self._learning_saved)
+            self._store.save_state(self._state)
 
         # ── Pipelines ────────────────────────────────────────────────
         self._ingest_pipeline = IngestPipeline(
@@ -194,22 +221,58 @@ class World:
             self.reflect(light=True)
         return result
 
-    def _persist_learning_state(self) -> None:
-        """Save the clock and Hebbian learning state when they changed."""
-        changed = False
+    def _persist_learning_state(self, *, force: bool = False) -> None:
+        """Save the clock (every observation) and the Hebbian counters.
+
+        The counters are bulky at scale (up to ``MAX_PENDING_PAIRS`` pairs
+        plus one mention count per concept) and serialising them was 76 %
+        of ingest cost in a 2 000-concept world.  They are therefore
+        written to the store's separate learning record: on every
+        observation while small (``LEARNING_EAGER_LIMIT`` entries, so a
+        small world stays restart-exact), otherwise at most every
+        ``LEARNING_PERSIST_EVERY`` observations, and always at ``reflect()``
+        and ``close()``.  Concepts and relations are flushed on every
+        observation regardless; a crash can only lose a few observations'
+        worth of co-occurrence *counters*.
+        """
         if self._state.get("tick") != self._clock.tick:
             self._state["tick"] = self._clock.tick
-            changed = True
-        pending = self._hebbian.snapshot()
-        if pending != self._state.get("hebbian_pending"):
-            self._state["hebbian_pending"] = pending
-            changed = True
-        stats = self._hebbian.stats_snapshot()
-        if stats != self._state.get("hebbian_stats"):
-            self._state["hebbian_stats"] = stats
-            changed = True
-        if changed:
             self._store.save_state(self._state)
+        size = self._hebbian.pending_pairs + self._hebbian.tracked_concepts
+        due = (
+            force
+            or size <= LEARNING_EAGER_LIMIT
+            or self._clock.tick - self._learning_saved_tick >= LEARNING_PERSIST_EVERY
+        )
+        if not due:
+            return
+        learning = {
+            "hebbian_pending": self._hebbian.snapshot(),
+            "hebbian_stats": self._hebbian.stats_snapshot(),
+        }
+        if learning != self._learning_saved:
+            self._store.save_learning_state(learning)
+            self._learning_saved = learning
+        self._learning_saved_tick = self._clock.tick
+
+    def close(self) -> None:
+        """Persist everything and release the store.
+
+        Call this (or use the ``with`` form) before discarding a world so
+        the amortised learning record is exact on disk.
+        """
+        self.concepts.flush()
+        self.relations.flush()
+        self._persist_learning_state(force=True)
+        close = getattr(self._store, "close", None)
+        if callable(close):
+            close()
+
+    def __enter__(self) -> "World":
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self.close()
 
     def ingest_text(
         self,
@@ -313,6 +376,7 @@ class World:
             self._state["last_reflect_tick"] = self._clock.tick
             self._state["communities"] = self._communities.snapshot()
         self._store.save_state(self._state)
+        self._persist_learning_state(force=True)
         return result
 
     # ── Identity operations (delegate to IdentityOps) ───────────────

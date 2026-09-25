@@ -14,7 +14,7 @@ Schema::
     concepts (id TEXT PRIMARY KEY, payload TEXT NOT NULL)
     relations(id TEXT PRIMARY KEY, payload TEXT NOT NULL)
     sources  (id TEXT PRIMARY KEY, payload TEXT NOT NULL)
-    state    (id TEXT PRIMARY KEY, payload TEXT NOT NULL)    -- id = 'world'
+    state    (id TEXT PRIMARY KEY, payload TEXT NOT NULL)    -- id = 'world' | 'learning'
 
 Payloads are the same pydantic JSON the file backend writes, so a world
 can be moved between backends by re-saving every record.
@@ -40,6 +40,7 @@ CREATE TABLE IF NOT EXISTS state     (id TEXT PRIMARY KEY, payload TEXT NOT NULL
 """
 
 _STATE_KEY = "world"
+_LEARNING_KEY = "learning"
 
 
 class SqliteStore(Store):
@@ -154,4 +155,13 @@ class SqliteStore(Store):
 
     def load_state(self) -> dict:
         payload = self._load_one("state", _STATE_KEY)
+        return json.loads(payload) if payload else {}
+
+    def save_learning_state(self, state: dict) -> None:
+        self._upsert(
+            "state", [(_LEARNING_KEY, json.dumps(state, separators=(",", ":"), default=str))]
+        )
+
+    def load_learning_state(self) -> dict:
+        payload = self._load_one("state", _LEARNING_KEY)
         return json.loads(payload) if payload else {}

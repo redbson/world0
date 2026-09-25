@@ -483,9 +483,9 @@ World 0 以独立 JSON 文件的形式持久化到磁盘：
 └── state.json
 ```
 
-Writes use a dirty-flag mechanism: in-memory mutations are batched and flushed at `ingest()` and `reflect()` boundaries, not on every operation. The `Store` interface is abstract — swap `JsonStore` for a different backend without changing cognitive logic.
+Writes use a dirty-flag mechanism: in-memory mutations are batched and flushed at `ingest()` and `reflect()` boundaries, not on every operation. Hebbian learning counters are kept in a separate `learning.json` record that is written on every observation while small and every 20 observations once large; call `world.close()` (or use `with World(...) as w:`) before discarding a large world so it is exact on disk. The `Store` interface is abstract — swap `JsonStore` for a different backend without changing cognitive logic.
 
-写入使用脏标记机制：内存中的变更被批量收集，在 `ingest()` 和 `reflect()` 边界处统一刷盘，而非每次操作都写入。`Store` 接口是抽象的——可以替换 `JsonStore` 为其他后端而不影响认知逻辑。
+写入使用脏标记机制：内存中的变更被批量收集，在 `ingest()` 和 `reflect()` 边界处统一刷盘，而非每次操作都写入。 Hebbian 学习计数单独存放在 `learning.json`：世界较小时每次观察都写，变大后每 20 次观察写一次；丢弃大世界前调用 `world.close()`（或使用 `with World(...) as w:`）以保证落盘完整。`Store` 接口是抽象的——可以替换 `JsonStore` 为其他后端而不影响认知逻辑。
 
 ## Key Design Decisions / 关键设计决策
 
