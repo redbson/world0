@@ -16,7 +16,11 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from world0.schemas.concept import ConceptNode, Maturity
+from world0.schemas.concept import (
+    MAX_REINFORCEMENT_LOG,
+    ConceptNode,
+    Maturity,
+)
 
 if TYPE_CHECKING:
     from world0.concepts._manager import ConceptManager
@@ -153,8 +157,37 @@ def _merge_evidence(keeper: ConceptNode, absorbed: ConceptNode) -> None:
     keeper.activation_count += absorbed.activation_count
     keeper.disconfirmation_count += absorbed.disconfirmation_count
     keeper.reinforcement_log.extend(absorbed.reinforcement_log)
+    if len(keeper.reinforcement_log) > MAX_REINFORCEMENT_LOG:
+        keeper.reinforcement_log.sort(key=lambda entry: entry.timestamp)
+        del keeper.reinforcement_log[
+            : len(keeper.reinforcement_log) - MAX_REINFORCEMENT_LOG
+        ]
+    for label, count in absorbed.task_profile.items():
+        keeper.record_task(label, count)
     if absorbed.last_activated > keeper.last_activated:
         keeper.last_activated = absorbed.last_activated
+    keeper.last_activated_tick = max(
+        keeper.last_activated_tick, absorbed.last_activated_tick
+    )
+    keeper.created_tick = min(keeper.created_tick, absorbed.created_tick)
+    # Distinct windows cannot be recovered after the fact; the larger
+    # count is the conservative merged estimate.
+    keeper.recurrence_count = max(
+        keeper.recurrence_count, absorbed.recurrence_count
+    )
+    keeper.last_recurrence_window = max(
+        keeper.last_recurrence_window, absorbed.last_recurrence_window
+    )
+    if absorbed.last_decayed_tick is not None and (
+        keeper.last_decayed_tick is None
+        or absorbed.last_decayed_tick > keeper.last_decayed_tick
+    ):
+        keeper.last_decayed_tick = absorbed.last_decayed_tick
+    if absorbed.last_decayed_at and (
+        keeper.last_decayed_at is None
+        or absorbed.last_decayed_at > keeper.last_decayed_at
+    ):
+        keeper.last_decayed_at = absorbed.last_decayed_at
     if absorbed.last_weakened and (
         keeper.last_weakened is None
         or absorbed.last_weakened > keeper.last_weakened

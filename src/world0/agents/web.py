@@ -192,7 +192,12 @@ def create_app(
     except Exception:
         pass  # Agentic mode unavailable (no API key, etc.)
 
-    app = FastAPI(title="World 0 Concept World", version="0.2.0")
+    app = FastAPI(
+        title="World 0 Concept World",
+        version="0.2.0",
+        # Persist the amortised learning record when the server stops.
+        on_shutdown=[_agent.close],
+    )
 
     def _space_payload() -> dict[str, Any]:
         registry = _agent.space_registry

@@ -135,6 +135,13 @@ class FakeStorageBackend:
     def load_state(self) -> dict:
         return dict(self._state)
 
+    def save_learning_state(self, state: dict) -> None:
+        self._learning_state = dict(state)
+        self._record("save_learning_state", tuple(sorted(state.keys())))
+
+    def load_learning_state(self) -> dict:
+        return dict(getattr(self, "_learning_state", {}))
+
 
 # ── ConceptStore ─────────────────────────────────────────────────────
 
@@ -601,6 +608,9 @@ class FakeHebbianLearner:
     def __init__(self) -> None:
         self.calls: list[tuple[list[str], str]] = []
         self.next_new_relation_ids: list[str] = []
+
+    def revalidate(self) -> list[str]:
+        return []
 
     def learn(
         self, concept_ids: list[str], *, provenance: str = ""

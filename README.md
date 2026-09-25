@@ -32,6 +32,7 @@ The current agent development priorities are tracked in [`TODO.md`](TODO.md).
 - [`docs/world0-usage.md`](docs/world0-usage.md) — operational usage guide for World 0 / World 0 操作与使用文档
 - [`docs/world0-color-field-dynamics.md`](docs/world0-color-field-dynamics.md) — dynamics-first design for community-born color fields / 基于动力学的群落生色与褪色设计
 - [`docs/extraction-model-prompt-eval.md`](docs/extraction-model-prompt-eval.md) — model × prompt extraction-quality evaluation (why gpt-5.4-nano is the default) / 模型×prompt 提取质量评测（为何默认 gpt-5.4-nano）
+- [`docs/world0-cognitive-dynamics-analysis.md`](docs/world0-cognitive-dynamics-analysis.md) — mathematical review of the decay / activation / projection dynamics, probe evidence, calibration and roadmap / 认知动力学的数学分析、探针证据、参数标定与路线
 - [`DesignPhilosophy.md`](DesignPhilosophy.md) — design rationale and framing / 设计哲学与边界
 - [`TODO.md`](TODO.md) — current implementation priorities / 当前实现优先级
 
@@ -144,6 +145,9 @@ It is not just “store some notes and query later”.
 from world0 import World, Observation
 
 w = World(store_path=".world0")
+# or a single-file SQLite store (chosen automatically by the suffix):
+# 或使用单文件 SQLite 存储（按后缀自动选择）：
+# w = World(store_path="world0.sqlite")
 
 # Agent submits observations from its work
 # Agent 提交工作中的观察
@@ -295,6 +299,35 @@ Projection uses spreading activation with task-affinity boosting and MMR (Maxima
 
 投影使用扩散激活与任务亲和度加权，并通过 MMR（最大边际相关性）选择策略保证多样性。
 
+### `project(seeds, perspective=)` — Perspectives / 视角
+
+The same concept-world read under different roles. A `Perspective` weights
+relations by **semantic name** (`dependence`, `inclusion`, `enables`, … or
+aliases like `depends_on`) or by axis (`positive` / `negative` / `parallel`),
+and can follow or oppose the direction of directed relations. Named profiles
+live in `world0.perspectives`.
+同一个概念世界在不同角色下的读法。`Perspective` 按**语义关系名**（或轴）给关系加权，
+并可顺着或逆着有向关系传播；内置画像在 `world0.perspectives`。
+
+```python
+from world0 import Perspective
+
+w.project(["latency"], perspective="dependency_map")   # what latency relies on / 依赖什么
+w.project(["latency"], perspective="impact_map")       # what relies on latency / 谁依赖它
+w.project(["latency"], perspective="taxonomy")         # where it sits / 归属结构
+w.project(["latency"], perspective="analogy")          # what it resembles / 类比
+w.project(["latency"], perspective="contrast")         # what it conflicts with / 冲突
+
+# or assemble one — unknown relation labels are rejected at construction
+# 或自行组合——未知的关系标签在构造时即被拒绝
+p = Perspective(
+    task="incident triage",
+    relation_type_weights={"dependence": 1.4, "parallel": 0.4},
+    direction_weights={"forward": 1.0, "backward": 0.4},
+)
+w.project(["latency"], perspective=p)
+```
+
 ### `reflect()` — Consolidate / 巩固
 
 ```python
@@ -303,9 +336,9 @@ print(f"Promoted: {len(result.promoted_concepts)}")
 print(f"Pruned:   {len(result.pruned_concepts)}")
 ```
 
-Call after a task is complete. Decays unused concepts, promotes frequently activated ones through maturity stages, and prunes noise.
+Call after a task is complete. Decays unused concepts, promotes frequently activated ones through maturity stages, and prunes noise (a faded concept is deleted only after 720 further idle observations, so a slow re-mention revives the same node). `reflect(light=True)` skips the community / colour-field passes; `World(store_path, auto_reflect_every=50)` runs that light consolidation automatically every 50 observations so the world keeps evolving without explicit calls.
 
-在任务完成后调用。衰减未使用的概念，将频繁激活的概念通过成熟度阶段晋升，修剪噪声。
+在任务完成后调用。衰减未使用的概念，将频繁激活的概念通过成熟度阶段晋升，修剪噪声。`reflect(light=True)` 跳过群落/色场步骤；`World(store_path, auto_reflect_every=50)` 每 50 次观察自动执行一次轻量巩固，世界无需显式调用也会持续演化。
 
 ## Concept Lifecycle / 概念生命周期
 
@@ -323,15 +356,15 @@ embryonic → developing → established → core
 
 | Transition / 转换 | Requirements / 条件 |
 |------------|-------------|
-| embryonic → developing / 萌芽 → 发展中 | activation_count >= 3, confidence >= 0.3 |
-| developing → established / 发展中 → 已建立 | activation_count >= 10, confidence >= 0.6 |
+| embryonic → developing / 萌芽 → 发展中 | activation_count >= 3, confidence >= 0.3 — or recurrence >= 3 distinct windows, confidence >= 0.15 / 或在 3 个不同窗口复现 |
+| developing → established / 发展中 → 已建立 | activation_count >= 10, confidence >= 0.6 — or recurrence >= 10 distinct windows, confidence >= 0.3 / 或在 10 个不同窗口复现 |
 | established → core / 已建立 → 核心 | activation_count >= 30, connections >= 5 |
 | any → fading / 任意 → 衰退 | confidence decays below 0.05 / 置信度衰减至 0.05 以下 |
-| fading → developing / 衰退 → 发展中 | re-activated by an observation / 被观察重新激活 |
+| fading → developing / 衰退 → 发展中 | re-activated by an observation after recurring in >= 3 distinct windows; otherwise it re-enters as embryonic / 复现过 3 个以上窗口的概念被重新激活时复苏，否则回到萌芽 |
 
-Decay rates are maturity-dependent: embryonic concepts fade in ~1 day, core concepts persist for ~3 months.
+Time in World 0 is **cognitive time**: the world clock advances once per ingested observation (`world.clock.tick`, exposed as `status().cognitive_tick`), and the calendar only adds a slow drift while the world is idle. Decay rates are maturity-dependent and measured in observations: an embryonic concept halves after 24 observations that do not mention it, a core concept after 2160. Half-lives stretch with accumulated evidence and confidence relaxes toward an evidence floor rather than toward zero, so a concept re-observed regularly can mature while a one-off mention still fades. Decay is idempotent in cognitive time — calling `reflect()` more often never accelerates forgetting. See [`docs/world0-cognitive-dynamics-analysis.md`](docs/world0-cognitive-dynamics-analysis.md).
 
-衰减速率取决于成熟度：萌芽概念约 1 天衰退，核心概念可持续约 3 个月。
+World 0 的时间是**认知时间**：每摄入一条观察，世界时钟前进一格（`world.clock.tick`，`status().cognitive_tick` 可见），日历只在世界闲置时贡献缓慢的漂移。衰减速率取决于成熟度，以观察次数计：萌芽概念在 24 次未提及它的观察后减半，核心概念为 2160 次。半衰期随累积证据拉长，置信度向"证据地板"而非 0 回归，因此定期复现的概念可以成熟，一次性提及仍会消失。衰减对认知时间幂等——更频繁地调用 `reflect()` 不会加速遗忘。详见 [`docs/world0-cognitive-dynamics-analysis.md`](docs/world0-cognitive-dynamics-analysis.md)。
 
 ## Relation Types / 关系类型
 
@@ -450,9 +483,9 @@ World 0 以独立 JSON 文件的形式持久化到磁盘：
 └── state.json
 ```
 
-Writes use a dirty-flag mechanism: in-memory mutations are batched and flushed at `ingest()` and `reflect()` boundaries, not on every operation. The `Store` interface is abstract — swap `JsonStore` for a different backend without changing cognitive logic.
+Writes use a dirty-flag mechanism: in-memory mutations are batched and flushed at `ingest()` and `reflect()` boundaries, not on every operation. Hebbian learning counters are kept in a separate `learning.json` record that is written on every observation while small and every 20 observations once large; call `world.close()` (or use `with World(...) as w:`) before discarding a large world so it is exact on disk. The `Store` interface is abstract — swap `JsonStore` for a different backend without changing cognitive logic.
 
-写入使用脏标记机制：内存中的变更被批量收集，在 `ingest()` 和 `reflect()` 边界处统一刷盘，而非每次操作都写入。`Store` 接口是抽象的——可以替换 `JsonStore` 为其他后端而不影响认知逻辑。
+写入使用脏标记机制：内存中的变更被批量收集，在 `ingest()` 和 `reflect()` 边界处统一刷盘，而非每次操作都写入。 Hebbian 学习计数单独存放在 `learning.json`：世界较小时每次观察都写，变大后每 20 次观察写一次；丢弃大世界前调用 `world.close()`（或使用 `with World(...) as w:`）以保证落盘完整。`Store` 接口是抽象的——可以替换 `JsonStore` 为其他后端而不影响认知逻辑。
 
 ## Key Design Decisions / 关键设计决策
 
@@ -464,9 +497,9 @@ Writes use a dirty-flag mechanism: in-memory mutations are batched and flushed a
 
 **Projection is the output. / 投影是输出。** The system is only useful if it can turn a larger concept-world into a smaller, task-relevant view. Projection uses MMR selection to balance relevance against diversity. / 系统只有在能将更大的概念世界转化为更小的、与任务相关的视图时才有用。投影使用 MMR 选择来平衡相关性和多样性。
 
-**Hebbian learning with threshold. / 带阈值的 Hebbian 学习。** Co-occurring concepts don't immediately form relations — they need to co-occur at least twice before a connection is created. This prevents noise from single observations. / 共现概念不会立即形成关系——需要至少共现两次才会创建连接。这防止了单次观察产生的噪声。
+**Hebbian learning with two gates. / 双门 Hebbian 学习。** Co-occurring concepts don't immediately form relations — they need to co-occur at least twice *and* co-occur more than chance would predict (Jaccard association over observations ≥ 0.2) before a connection is created. This prevents noise from single observations and stops frequently mentioned concepts from linking to everything they happen to share an observation with. / 共现概念不会立即形成关系——需要至少共现两次，**且**共现程度超过偶然水平（观察层面的 Jaccard 关联度 ≥ 0.2）才会创建连接。这既防止单次观察产生噪声，也防止高频概念与所有偶然同框的概念连成一团。 `reflect()` re-judges auto-discovered edges against the accumulated statistics and drops the ones that no longer pass. / `reflect()` 会用累积统计重判自动发现的边，删除不再达标的。
 
-**Graceful decay. / 优雅衰减。** Unused concepts decay exponentially with maturity-dependent half-lives. Core concepts resist decay (3-month half-life); embryonic concepts fade in a day. This keeps the world clean without manual pruning. / 未使用的概念按指数衰减，半衰期取决于成熟度。核心概念抵抗衰减（3 个月半衰期）；萌芽概念在一天内衰退。这让概念世界保持整洁，无需手动修剪。
+**Graceful decay. / 优雅衰减。** Unused concepts decay exponentially in cognitive time (observations), with maturity- and evidence-dependent half-lives. Core concepts resist decay (2160-observation base half-life); embryonic concepts fade within a few dozen observations. This keeps the world clean without manual pruning. / 未使用的概念在认知时间（观察次数）上按指数衰减，半衰期取决于成熟度与证据量。核心概念抵抗衰减（基础半衰期 2160 次观察）；萌芽概念在几十次观察内衰退。这让概念世界保持整洁，无需手动修剪。
 
 ## Development / 开发
 

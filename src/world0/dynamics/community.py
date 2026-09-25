@@ -27,6 +27,7 @@ stability accumulation across reflect cycles.
 from __future__ import annotations
 
 from collections import defaultdict
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
 from world0.dynamics.coefficients import (
@@ -34,6 +35,7 @@ from world0.dynamics.coefficients import (
     RELATION_TEMPORAL_HL,
     RELATION_TYPE_FACTOR,
 )
+from world0.schemas.clock import CognitiveClock
 from world0.schemas.community import Community, signature_id, community_color_for
 
 if TYPE_CHECKING:
@@ -61,9 +63,11 @@ class CommunityDetector:
         self,
         concepts: "ConceptStore",
         relations: "RelationStore",
+        clock: CognitiveClock | None = None,
     ) -> None:
         self._concepts = concepts
         self._relations = relations
+        self._clock = clock or CognitiveClock()
 
     def detect(
         self,
@@ -116,6 +120,10 @@ class CommunityDetector:
         coupling: dict[str, dict[str, float]] = defaultdict(
             lambda: defaultdict(float)
         )
+        # Single reference instant so coupling weights (and therefore
+        # label-propagation tie-breaks) do not depend on iteration order.
+        now_tick = self._clock.tick
+        now = datetime.now(timezone.utc)
         for edge in self._relations.all():
             type_factor = RELATION_TYPE_FACTOR.get(edge.relation_type, 0.5)
             if type_factor <= 0 or edge.weight <= 0:
@@ -124,10 +132,16 @@ class CommunityDetector:
             tgt_node = self._concepts.get(edge.target_id)
             if src_node is None or tgt_node is None:
                 continue
-            rel_fresh = edge.temporal_relevance(RELATION_TEMPORAL_HL)
+            rel_fresh = edge.temporal_relevance(
+                RELATION_TEMPORAL_HL, now_tick=now_tick, now=now
+            )
             endpoint_fresh = 0.5 * (
-                src_node.temporal_relevance(CONCEPT_TEMPORAL_HL)
-                + tgt_node.temporal_relevance(CONCEPT_TEMPORAL_HL)
+                src_node.temporal_relevance(
+                    CONCEPT_TEMPORAL_HL, now_tick=now_tick, now=now
+                )
+                + tgt_node.temporal_relevance(
+                    CONCEPT_TEMPORAL_HL, now_tick=now_tick, now=now
+                )
             )
             k = edge.weight * type_factor * rel_fresh * endpoint_fresh
             if k <= 0:

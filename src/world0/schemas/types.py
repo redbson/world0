@@ -136,7 +136,8 @@ class Projection(BaseModel):
                 linked = f" Linked to: {', '.join(neighbors)}." if neighbors else ""
                 lines.append(
                     f"- **{c.representation()}** ({c.name}, {c.maturity.value}, "
-                    f"confidence: {c.confidence:.2f}){desc}{linked}"
+                    f"confidence: {c.confidence:.2f}, evidence: {c.evidence():.2f})"
+                    f"{desc}{linked}"
                 )
             lines.append("")
 
@@ -146,7 +147,8 @@ class Projection(BaseModel):
                 desc = f": {c.description}" if c.description else ""
                 lines.append(
                     f"- **{c.representation()}** ({c.name}, {c.maturity.value}, "
-                    f"confidence: {c.confidence:.2f}){desc}"
+                    f"confidence: {c.confidence:.2f}, evidence: {c.evidence():.2f})"
+                    f"{desc}"
                 )
             lines.append("")
 
@@ -155,7 +157,7 @@ class Projection(BaseModel):
             for c, s in emerging:
                 lines.append(
                     f"- **{c.representation()}** ({c.name}, {c.maturity.value}, "
-                    f"confidence: {c.confidence:.2f})"
+                    f"confidence: {c.confidence:.2f}, evidence: {c.evidence():.2f})"
                 )
             lines.append("")
 
@@ -199,6 +201,9 @@ class ReflectResult(BaseModel):
     pruned_concepts: list[str] = Field(default_factory=list)
     decayed_relations: list[str] = Field(default_factory=list)
     pruned_relations: list[str] = Field(default_factory=list)
+    # Auto-discovered generic edges removed because their association no
+    # longer passes the Hebbian gate (dynamics/hebbian.py ``revalidate``).
+    stale_relations: list[str] = Field(default_factory=list)
     # Color-field dynamics (doc §29 Stage A observation layer).
     new_communities: list[str] = Field(default_factory=list)
     stable_communities: list[str] = Field(default_factory=list)
@@ -209,6 +214,9 @@ class ReflectResult(BaseModel):
 class WorldStatus(BaseModel):
     """Overview of the cognitive world's current state."""
 
+    # Cognitive time: number of observations ingested so far (see
+    # ``schemas/clock.py``).  Decay and freshness are measured in ticks.
+    cognitive_tick: int = 0
     total_concepts: int = 0
     total_relations: int = 0
     by_maturity: dict[str, int] = Field(default_factory=dict)

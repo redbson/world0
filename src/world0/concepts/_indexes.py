@@ -14,6 +14,8 @@ no awareness of dirty tracking.  ConceptManager owns the orchestration.
 
 from __future__ import annotations
 
+from world0.schemas.concept import tokenize_signature
+
 
 class NameIndex:
     """Normalized name/alias → concept ids.
@@ -35,6 +37,10 @@ class NameIndex:
         if not ids or len(ids) != 1:
             return None
         return next(iter(ids))
+
+    def ids_for(self, name: str) -> set[str]:
+        """Every concept id carrying this label (ambiguous labels included)."""
+        return set(self._map.get(name.strip().lower(), ()))
 
     def add(self, name: str, concept_id: str) -> None:
         """Add ``concept_id`` to the label's candidate set."""
@@ -92,10 +98,39 @@ class TokenIndex:
                 result.update(ids)
         return result
 
+    def candidates_by_rarity(
+        self,
+        tokens: set[str],
+        *,
+        fraction: float = 0.4,
+        min_tokens: int = 3,
+    ) -> set[str]:
+        """Concept ids sharing one of the *rarest* probe tokens.
+
+        Common tokens ("system", "data") post to most of the world and
+        would turn a shortlist back into a full scan.  A genuine synonym
+        shares the large majority of the probe's tokens, so it necessarily
+        shares one of the rarest ``max(min_tokens, fraction × n)`` of them.
+        """
+        if not tokens:
+            return set()
+        ranked = sorted(tokens, key=lambda tok: (len(self._map.get(tok, ())), tok))
+        keep = max(min_tokens, int(-(-len(ranked) * fraction // 1)))
+        return self.candidates(set(ranked[:keep]))
+
     def index_node(self, node) -> None:
-        """Refresh entries for ``node`` from its current signature tokens."""
+        """Refresh entries for ``node`` from its current signature tokens.
+
+        Sense tokens are indexed too (they are not part of the signature
+        used for similarity scoring) so synonym shortlists can find a
+        concept whose only overlap with a probe is its ``sense``.
+        """
         self.unindex(node.id)
-        for tok in node.signature_tokens():
+        tokens = set(node.signature_tokens())
+        sense = getattr(node, "sense", "")
+        if sense:
+            tokens |= tokenize_signature(sense)
+        for tok in tokens:
             self._map.setdefault(tok, set()).add(node.id)
 
     def unindex(self, concept_id: str) -> None:

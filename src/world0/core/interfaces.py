@@ -62,6 +62,10 @@ class StorageBackend(Protocol):
     def save_state(self, state: dict) -> None: ...
     def load_state(self) -> dict: ...
 
+    # learning state (bulky counters, persisted less often)
+    def save_learning_state(self, state: dict) -> None: ...
+    def load_learning_state(self) -> dict: ...
+
 
 # ── Concept storage ───────────────────────────────────────────────────
 
@@ -257,6 +261,11 @@ class HebbianLearner(Protocol):
         self, concept_ids: list[str], *, provenance: str = ...
     ) -> list[str]: ...
 
+    def revalidate(self) -> list[str]:
+        """Remove auto-discovered edges that no longer pass the
+        association gate; returns their ids."""
+        ...
+
 
 @runtime_checkable
 class DecayPolicy(Protocol):
@@ -323,6 +332,7 @@ class Projector(Protocol):
         max_concepts: int = ...,
         min_activation: float = ...,
         task: str = ...,
+        seed_ids: list[str] | None = ...,
     ) -> Projection: ...
 
 

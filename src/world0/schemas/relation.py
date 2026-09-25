@@ -10,6 +10,9 @@ from enum import Enum
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from world0.schemas.clock import cognitive_elapsed, wall_now
+from world0.schemas.concept import task_match_score
+
 
 class RelationType(str, Enum):
     """Axis-aligned relation categories.
@@ -74,6 +77,11 @@ _LEGACY_RELATION_TYPE_MAP: dict[str, RelationType] = {
     "similar_to": RelationType.PARALLEL,
     "related_to": RelationType.PARALLEL,
 }
+
+
+# Share of the remaining doubt removed by one explicit re-statement of a
+# relation without an attached probability (see ``RelationEdge.confirm``).
+EXPLICIT_CONFIRMATION_GAIN: float = 0.05
 
 
 @dataclass(frozen=True)
@@ -234,6 +242,34 @@ def is_known_relation_type(value: str | RelationType | None) -> bool:
     )
 
 
+def is_known_relation_label(value: str | RelationType | None) -> bool:
+    """True for any label a ``Perspective`` may weight: an axis
+    (``positive`` / ``negative`` / ``parallel``), a canonical semantic
+    relation (``dependence``, ``inclusion`` …) or one of its aliases
+    (``depends_on``, ``contains`` …)."""
+    return is_known_relation_type(value)
+
+
+def canonical_relation_label(value: str | RelationType | None) -> str:
+    """Canonical form of a label a ``Perspective`` may weight.
+
+    An axis stays an axis value (``"positive"``); a semantic relation or
+    one of its aliases becomes its canonical semantic name
+    (``"depends_on"`` → ``"dependence"``).  Raises ``KeyError`` for an
+    unknown label.
+    """
+    if isinstance(value, RelationType):
+        return value.value
+    raw = str(value or "").strip().lower().replace(" ", "_")
+    if raw in {axis.value for axis in RelationType}:
+        return raw
+    if raw in _SEMANTIC_RELATION_ALIASES:
+        return _SEMANTIC_RELATION_ALIASES[raw]
+    if raw in _LEGACY_RELATION_TYPE_MAP:
+        return _LEGACY_RELATION_TYPE_MAP[raw].value
+    raise KeyError(raw)
+
+
 def normalize_semantic_relation(value: str | None) -> str:
     """Normalize a language relation label to a canonical semantic relation."""
     raw = str(value or "").strip().lower()
@@ -309,6 +345,13 @@ class RelationEdge(BaseModel):
         default_factory=lambda: datetime.now(timezone.utc)
     )
     last_weakened: datetime | None = None
+    # Cognitive-time coordinates (see ``schemas/clock.py``).
+    discovered_tick: int = 0
+    last_reinforced_tick: int = 0
+    # Instant (both coordinates) at which time decay was last applied (see
+    # ``ConceptNode.last_decayed_at``).
+    last_decayed_at: datetime | None = None
+    last_decayed_tick: int | None = None
     discovered_at: datetime = Field(
         default_factory=lambda: datetime.now(timezone.utc)
     )
@@ -363,6 +406,56 @@ class RelationEdge(BaseModel):
     def involves(self, concept_id: str) -> bool:
         return self.source_id == concept_id or self.target_id == concept_id
 
+    def decay_reference_time(self) -> datetime:
+        """Wall-clock instant from which the next decay interval is measured."""
+        if self.last_decayed_at and self.last_decayed_at > self.last_reinforced:
+            return self.last_decayed_at
+        return self.last_reinforced
+
+    def decay_reference_tick(self) -> int:
+        """Tick from which the next decay interval is measured."""
+        if (
+            self.last_decayed_tick is not None
+            and self.last_decayed_tick > self.last_reinforced_tick
+        ):
+            return self.last_decayed_tick
+        return self.last_reinforced_tick
+
+    def elapsed_since_reinforced(
+        self, now_tick: int | None = None, now: datetime | None = None
+    ) -> float:
+        """Cognitive time since the last reinforcement, in ticks."""
+        return cognitive_elapsed(
+            self.last_reinforced_tick if now_tick is None else now_tick,
+            self.last_reinforced_tick,
+            now or wall_now(),
+            self.last_reinforced,
+        )
+
+    def decay_elapsed(self, now_tick: int, now: datetime | None = None) -> float:
+        """Cognitive time since decay was last applied (or since reinforcement)."""
+        return cognitive_elapsed(
+            now_tick,
+            self.decay_reference_tick(),
+            now or wall_now(),
+            self.decay_reference_time(),
+        )
+
+    def task_affinity(self, task: str) -> float:
+        """Graded association between this relation and ``task`` in [0, 1].
+
+        Word-level match against the tasks under which the relation was
+        observed (``task_history``); see ``task_match_score``.
+        """
+        best = 0.0
+        for label in self.task_history:
+            score = task_match_score(task, label)
+            if score > best:
+                best = score
+                if best >= 1.0:
+                    break
+        return best
+
     def other_end(self, concept_id: str) -> str | None:
         if self.source_id == concept_id:
             return self.target_id
@@ -370,10 +463,27 @@ class RelationEdge(BaseModel):
             return self.source_id
         return None
 
-    def reinforce(self, provenance: str = "") -> None:
-        """Strengthen this relation through repeated observation."""
+    @property
+    def is_directed(self) -> bool:
+        """Whether source→target orientation carries meaning.
+
+        Positive and negative relations are directed (``A depends_on B``,
+        ``A excludes B``); parallel relations (equivalence, overlap,
+        Hebbian co-occurrence) are symmetric and their stored orientation
+        is arbitrary, so direction-conditioned propagation ignores them.
+        """
+        return self.relation_type != RelationType.PARALLEL
+
+    def reinforce(self, provenance: str = "", *, tick: int | None = None) -> None:
+        """Strengthen this relation through repeated observation.
+
+        ``tick`` is the world's cognitive time at which the observation
+        happened; engines always pass it.
+        """
         self.reinforcement_count += 1
         self.last_reinforced = datetime.now(timezone.utc)
+        if tick is not None:
+            self.last_reinforced_tick = int(tick)
         if provenance:
             self.provenance = provenance
             if provenance not in self.task_history:
@@ -390,6 +500,19 @@ class RelationEdge(BaseModel):
         self.weight = min(cap, self.weight + boost)
         self.confidence = min(cap, self.confidence + boost)
 
+    def confirm(self, *, gain: float = EXPLICIT_CONFIRMATION_GAIN) -> None:
+        """An explicit re-statement of this relation is semantic evidence.
+
+        ``reinforce()`` strengthens the operational weight (Hebbian
+        co-occurrence does that too); ``confirm()`` is reserved for an
+        Agent or extractor asserting the typed relation again, and moves
+        the belief that it is *correct* toward 1 with diminishing returns.
+        Twenty bare confirmations take a 0.70 relation to ≈0.89.
+        """
+        step = max(0.0, min(1.0, gain))
+        self.probability = min(1.0, self.probability + (1.0 - self.probability) * step)
+        self.probability_observation_count += 1
+
     def weaken(self, provenance: str = "") -> None:
         """Disconfirmation evidence against this relation.
 
@@ -402,7 +525,11 @@ class RelationEdge(BaseModel):
         penalty = 0.06 * (1.0 / (1.0 + self.disconfirmation_count * 0.10))
         self.weight = max(0.01, self.weight - penalty)
         self.confidence = max(0.01, self.confidence - penalty)
-        self.probability = self.confidence
+        # Disconfirmation is semantic evidence, so the belief that the
+        # relation is correct drops by the same penalty.  It must not be
+        # overwritten with ``confidence`` — that is a structural-strength
+        # scale and copying it could *raise* the probability.
+        self.probability = max(0.01, self.probability - penalty)
         if provenance and provenance not in self.task_history:
             self.task_history.append(provenance)
 
@@ -414,6 +541,7 @@ class RelationEdge(BaseModel):
         prior_strength: float = 1.0,
         evidence_strength: float = 2.0,
         provenance: str = "",
+        tick: int | None = None,
     ) -> None:
         """Recalculate relation probability from prior + evidence.
 
@@ -445,6 +573,8 @@ class RelationEdge(BaseModel):
             if evidence >= 0.5:
                 self.reinforcement_count += 1
                 self.last_reinforced = datetime.now(timezone.utc)
+                if tick is not None:
+                    self.last_reinforced_tick = int(tick)
             else:
                 self.disconfirmation_count += 1
                 self.last_weakened = datetime.now(timezone.utc)
@@ -475,26 +605,37 @@ class RelationEdge(BaseModel):
             return 0.5
         return alpha / total
 
-    def hours_since_reinforced(self) -> float:
-        delta = datetime.now(timezone.utc) - self.last_reinforced
+    def hours_since_reinforced(self, now: datetime | None = None) -> float:
+        reference = now or datetime.now(timezone.utc)
+        delta = reference - self.last_reinforced
         return delta.total_seconds() / 3600.0
 
-    def temporal_relevance(self, half_life_hours: float = 72.0) -> float:
-        """Time-based relevance score in [0, 1].
+    def temporal_relevance(
+        self,
+        half_life: float = 72.0,
+        *,
+        now_tick: int | None = None,
+        now: datetime | None = None,
+    ) -> float:
+        """Freshness score in [0, 1] as a function of cognitive time.
 
         Returns 1.0 for a just-reinforced relation and decays
-        exponentially.  More reinforced relations use a longer
-        effective half-life (the same scaling used by DecayEngine).
-        A floor of 0.15 keeps structurally significant but old
-        relations from disappearing completely during activation.
+        exponentially in ticks (observations).  More reinforced relations
+        use a longer effective half-life (the same scaling used by
+        DecayEngine).  A floor of 0.15 keeps structurally significant but
+        old relations from disappearing completely during activation.
 
         Args:
-            half_life_hours: Base half-life in hours.
-                Default 72 h (3 days).
+            half_life: Base half-life in ticks (default 72).
+            now_tick: The world's current tick; engines pass one value
+                for a whole pass.
+            now: Wall-clock reference for the drift term.
         """
-        hours = self.hours_since_reinforced()
-        if hours <= 0 or half_life_hours <= 0:
+        if half_life <= 0:
             return 1.0
-        effective_hl = half_life_hours * (1.0 + self.reinforcement_count * 0.5)
-        raw = math.pow(0.5, hours / effective_hl)
+        elapsed = self.elapsed_since_reinforced(now_tick, now)
+        if elapsed <= 0:
+            return 1.0
+        effective_hl = half_life * (1.0 + self.reinforcement_count * 0.5)
+        raw = math.pow(0.5, elapsed / effective_hl)
         return max(0.15, raw)

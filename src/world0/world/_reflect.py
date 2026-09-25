@@ -6,7 +6,8 @@ Five-stage process per ``docs/world0-color-field-dynamics.md``:
 2. community detection / reconciliation, color-source identification
 3. color-field dynamics: per-component fade → community injection → settle
 4. lifecycle promotions/demotions
-5. prune deeply decayed items
+5. prune deeply decayed items, then re-judge auto-discovered generic
+   edges against the accumulated co-occurrence statistics
 
 Step 3a (per-component fade) intentionally runs *before* fresh
 injection so old support-less components drain and do not fight new
@@ -21,7 +22,12 @@ from world0.schemas.types import ReflectResult
 
 if TYPE_CHECKING:
     from world0.communities.manager import CommunityManager
-    from world0.core import ColorField, DecayPolicy, LifecyclePolicy
+    from world0.core import (
+        ColorField,
+        DecayPolicy,
+        HebbianLearner,
+        LifecyclePolicy,
+    )
 
 
 class ReflectPipeline:
@@ -39,39 +45,51 @@ class ReflectPipeline:
         lifecycle: LifecyclePolicy,
         color: ColorField,
         communities: CommunityManager,
+        hebbian: HebbianLearner | None = None,
     ) -> None:
         self._decay = decay
         self._lifecycle = lifecycle
         self._color = color
         self._communities = communities
+        self._hebbian = hebbian
 
-    def run(self) -> ReflectResult:
+    def run(self, *, light: bool = False) -> ReflectResult:
+        """Run one reflect cycle.
+
+        ``light=True`` runs only the per-record consolidation (decay,
+        lifecycle, prune) and skips community detection and colour-field
+        dynamics.  Decay is idempotent in cognitive time, so a light cycle
+        can be scheduled after every few observations (``World``'s
+        ``auto_reflect_every``) while the heavier structural passes stay
+        on the explicit, less frequent ``reflect()``.
+        """
         result = ReflectResult()
 
         # 1. Decay
         result.decayed_concepts = self._decay.decay_concepts()
         result.decayed_relations = self._decay.decay_relations()
 
-        # 2. Community detection + stability reconciliation
-        community_update = self._communities.detect_and_update()
-        result.new_communities = community_update.new
-        result.pruned_communities = community_update.pruned
-        result.color_sources = community_update.color_sources
-        result.stable_communities = [
-            c.id for c in self._communities.all() if c.is_color_source()
-        ]
+        if not light:
+            # 2. Community detection + stability reconciliation
+            community_update = self._communities.detect_and_update()
+            result.new_communities = community_update.new
+            result.pruned_communities = community_update.pruned
+            result.color_sources = community_update.color_sources
+            result.stable_communities = [
+                c.id for c in self._communities.all() if c.is_color_source()
+            ]
 
-        # 3. Color-field dynamics (doc §4 five-stage process)
-        # 3a. Per-component fade (reaction term) runs *before* fresh
-        #     injection so old support-less components drain and do
-        #     not fight new color sources.
-        self._color.fade_step()
-        # 3b. Inject color from communities that have earned the right
-        #     to be color sources.
-        self._color.seed_from_communities(self._communities.color_sources())
-        # 3c. Slow diffusion pass — legacy task/domain settling, kept
-        #     as a coarse source (doc §14 transition).
-        self._color.settle()
+            # 3. Color-field dynamics (doc §4 five-stage process)
+            # 3a. Per-component fade (reaction term) runs *before* fresh
+            #     injection so old support-less components drain and do
+            #     not fight new color sources.
+            self._color.fade_step()
+            # 3b. Inject color from communities that have earned the right
+            #     to be color sources.
+            self._color.seed_from_communities(self._communities.color_sources())
+            # 3c. Slow diffusion pass — legacy task/domain settling, kept
+            #     as a coarse source (doc §14 transition).
+            self._color.settle()
 
         # 4. Lifecycle
         promoted, demoted = self._lifecycle.evaluate()
@@ -81,5 +99,10 @@ class ReflectPipeline:
         # 5. Prune
         result.pruned_relations = self._decay.prune_relations()
         result.pruned_concepts = self._decay.prune_concepts()
+
+        # 5b. Generic edges linked on thin early statistics are re-judged
+        #     now that mention counts are meaningful (dynamics/hebbian.py).
+        if self._hebbian is not None:
+            result.stale_relations = self._hebbian.revalidate()
 
         return result
