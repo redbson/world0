@@ -154,6 +154,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reaches parity near 1 000 and yields to fresh context after that.  The
   cognitive benchmark is unchanged; one-off concepts (evidence ≈ 0.06)
   still collapse to the freshness floor.  Sweep: `scripts/sweep_salience.py`.
+- **Seeds are always part of their projection.**  `World.project()`
+  passes the seed ids to the projection engine, which selects them
+  first (by score, capped by `max_concepts`) and exempts them from the
+  activation cut before MMR fills the remaining slots.  Previously a
+  cross-domain second seed under a task, or several seeds from one
+  cluster, could be displaced by a "more diverse" neighbour.
 - **Task-aware projection redundancy.**  In MMR an off-task candidate
   is now as redundant as a duplicate (`redundancy = max(sim, 1 −
   affinity)`) while better-matching candidates remain, so a dense

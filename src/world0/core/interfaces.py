@@ -328,6 +328,7 @@ class Projector(Protocol):
         max_concepts: int = ...,
         min_activation: float = ...,
         task: str = ...,
+        seed_ids: list[str] | None = ...,
     ) -> Projection: ...
 
 

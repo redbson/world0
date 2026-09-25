@@ -426,6 +426,9 @@ $\gamma_{task} = 1 + 0.5\cdot\text{affinity}$，affinity 来自词级匹配（§
 | **第九轮** | |
 | `projection/engine.py` | 任务感知冗余：`redundancy = max(sim, 1 − affinity)`（仅当仍有更贴合任务的候选） |
 | `tests/test_context_drift.py`（新） | 概念漂移下的上下文（4 个测试）；基准 ML/Ops 精度 0.67/0.83 → 1.00/1.00 |
+| **第十轮** | |
+| `projection/engine.py`、`core/interfaces.py`、`world/facade.py` | `project(..., seed_ids=)`：种子先选、不受阈值过滤 |
+| `tests/test_projection_seeds.py`（新） | 4 个测试 |
 
 所有字段均有默认值，旧的 JSON 存储可直接加载（`task_profile` 自动回填，tick 与
 recurrence 默认 0）。
@@ -727,6 +730,27 @@ affinity ≡ 1，行为不变。含义：在还有任务内候选可选时，一
 `tests/test_context_drift.py` 固化漂移场景（任务选中对应邻域、无任务随近因、域视角
 一致、漂移概念保留两个域）；`test_same_world_produces_different_rank_order_under_task_context`
 改为更强的契约（任务外依赖可以不出现）。
+
+### 7.13 种子永远在投影里 ✅
+
+**探针**（认知基准世界，`max_depth=2`）：
+
+| 种子 | max_concepts | 修复前投影 | 缺失的种子 |
+|---|---|---|---|
+| PyTorch, deployment（task="ml training"） | 3 / 4 / 6 | PyTorch + ML 邻居 | **deployment（三种规模都缺）** |
+| PyTorch, neural network, optimizer | 3 | optimizer, model serving, neural network | PyTorch |
+| 6 个 ML 种子 | 3 | model serving, optimizer, gradient descent | 3 个 |
+
+种子是 Agent 明确询问的对象，却被 MMR 当作普通候选：与已选种子同团的第二个
+种子 Jaccard 冗余 = 1，或者在任务视角下属于"任务外"（§7.12 的冗余下限），于是被
+一个"更多样"的邻居顶掉。`Projection` 的语义是"围绕这些种子的局部视图"，缺了种子
+的视图对下游 Agent 是误导。
+
+**修复：** 门面把 `seed_ids` 传给 `ProjectionEngine.project()`；种子不受激活阈值
+过滤，并在 MMR 之前按分数**先选**（超过 `max_concepts` 时按分数截断），剩余名额
+才由 MMR 填充。`tests/test_projection_seeds.py`：跨域双种子在任务下都在、6 个种子
+3 个名额时恰好是分数最高的 3 个种子、团种子 + 弱种子都在、种子排在 `concepts`
+前面。认知基准与漂移、稳定性测试全部不变。
 
 ---
 

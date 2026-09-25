@@ -73,14 +73,18 @@ class ProjectionEngine:
         max_concepts: int = 15,
         min_activation: float = 0.01,
         task: str = "",
+        seed_ids: list[str] | None = None,
     ) -> Projection:
         """Build a cognitive projection from activation scores.
 
-        1. Filter by minimum activation
+        1. Filter by minimum activation (seeds are never filtered out)
         2. Compute per-candidate task affinity
-        3. MMR greedy selection: balance score × task_affinity vs diversity
-        4. Include relations between selected concepts
-        5. Return LLM-prompt-ready Projection
+        3. Seeds first: what the Agent asked about is always in its
+           projection, ordered by score and capped by ``max_concepts``
+        4. MMR greedy selection for the remaining slots: balance
+           score × task_affinity vs diversity
+        5. Include relations between selected concepts
+        6. Return LLM-prompt-ready Projection
         """
         # Filter candidates.  The cut is the *lower* of the absolute floor
         # and a fraction of the strongest activation, so a projection from
@@ -88,10 +92,11 @@ class ProjectionEngine:
         # by a threshold calibrated for confident seeds.
         peak = max(activations.values(), default=0.0)
         cut = min(min_activation, RELATIVE_MIN_ACTIVATION * peak)
+        seed_set = set(seed_ids or ())
         candidates = {
             cid: score
             for cid, score in activations.items()
-            if score >= cut
+            if score >= cut or cid in seed_set
         }
 
         if not candidates:
@@ -157,8 +162,14 @@ class ProjectionEngine:
         # MMR greedy selection.  Candidates are visited in a stable order
         # (score desc, then id) so exact ties resolve identically in every
         # process — a projection must never depend on PYTHONHASHSEED.
-        selected: list[str] = []
         remaining = sorted(candidates, key=lambda cid: (-candidates[cid], cid))
+        # Seeds first.  The seeds are the Agent's explicit focus; MMR must
+        # never trade one away for a "more diverse" or better-matching
+        # neighbour (it did: a cross-domain second seed under a task, or
+        # several seeds from one cluster, were displaced — docs §7.13).
+        selected: list[str] = [cid for cid in remaining if cid in seed_set][:max_concepts]
+        for cid in selected:
+            remaining.remove(cid)
 
         while remaining and len(selected) < max_concepts:
             best_id = None

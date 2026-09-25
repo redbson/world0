@@ -291,7 +291,10 @@ class World:
         )
 
         return self._projection.project(
-            activations, max_concepts=max_concepts, task=effective_task
+            activations,
+            max_concepts=max_concepts,
+            task=effective_task,
+            seed_ids=seed_ids,
         )
 
     def reflect(self, *, light: bool = False) -> ReflectResult:
