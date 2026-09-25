@@ -157,6 +157,7 @@ class ActivationEngine:
         Propagation strength (excitatory edges) =
             source_score
             * relation.weight * perspective.weight_for(relation.type)
+            * perspective.weight_for_direction(forward | backward)
             * max(neighbor.confidence, PROPAGATION_FLOOR)
             * depth_decay
             * task_affinity
@@ -261,7 +262,12 @@ class ActivationEngine:
                     type_factor = perspective.weight_for(
                         rel.relation_type.value, default_type_factor
                     )
-                    edge_strength = rel.weight * type_factor
+                    direction = "forward" if rel.source_id == cid else "backward"
+                    edge_strength = (
+                        rel.weight
+                        * type_factor
+                        * perspective.weight_for_direction(direction)
+                    )
 
                     neighbor_readiness = max(
                         neighbor.confidence, PROPAGATION_FLOOR

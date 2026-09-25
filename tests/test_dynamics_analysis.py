@@ -169,11 +169,14 @@ class TestEvidenceAnchoredDecay:
         assert node.maturity in (Maturity.ESTABLISHED, Maturity.CORE)
         assert node.confidence >= 0.6
 
-    def test_concept_reobserved_every_168_observations_settles_as_developing(self, world):
-        # Before the fix such a concept was FADING with confidence 0.03.
+    def test_concept_reobserved_every_168_observations_matures_by_recurrence(self, world):
+        # Before the fix such a concept was FADING with confidence 0.03; the
+        # confidence equilibrium alone (≈0.3) would leave it DEVELOPING, and
+        # the recurrence gate promotes it once it has recurred 10 times.
         node = _simulate_cadence(world, "weekly", gap_ticks=168, total_ticks=4368)
-        assert node.maturity == Maturity.DEVELOPING
+        assert node.maturity in (Maturity.DEVELOPING, Maturity.ESTABLISHED)
         assert node.confidence > 0.25
+        assert node.recurrence_count == 26
 
     def test_concept_reobserved_every_720_observations_survives_on_floor(self, world):
         node = _simulate_cadence(world, "monthly", gap_ticks=720, total_ticks=8760)

@@ -79,6 +79,11 @@ _LEGACY_RELATION_TYPE_MAP: dict[str, RelationType] = {
 }
 
 
+# Share of the remaining doubt removed by one explicit re-statement of a
+# relation without an attached probability (see ``RelationEdge.confirm``).
+EXPLICIT_CONFIRMATION_GAIN: float = 0.05
+
+
 @dataclass(frozen=True)
 class SemanticRelationSpec:
     """Deterministic mapping from language relation to axis + scores."""
@@ -455,6 +460,19 @@ class RelationEdge(BaseModel):
             cap = 0.7
         self.weight = min(cap, self.weight + boost)
         self.confidence = min(cap, self.confidence + boost)
+
+    def confirm(self, *, gain: float = EXPLICIT_CONFIRMATION_GAIN) -> None:
+        """An explicit re-statement of this relation is semantic evidence.
+
+        ``reinforce()`` strengthens the operational weight (Hebbian
+        co-occurrence does that too); ``confirm()`` is reserved for an
+        Agent or extractor asserting the typed relation again, and moves
+        the belief that it is *correct* toward 1 with diminishing returns.
+        Twenty bare confirmations take a 0.70 relation to ≈0.89.
+        """
+        step = max(0.0, min(1.0, gain))
+        self.probability = min(1.0, self.probability + (1.0 - self.probability) * step)
+        self.probability_observation_count += 1
 
     def weaken(self, provenance: str = "") -> None:
         """Disconfirmation evidence against this relation.

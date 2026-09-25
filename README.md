@@ -304,9 +304,9 @@ print(f"Promoted: {len(result.promoted_concepts)}")
 print(f"Pruned:   {len(result.pruned_concepts)}")
 ```
 
-Call after a task is complete. Decays unused concepts, promotes frequently activated ones through maturity stages, and prunes noise.
+Call after a task is complete. Decays unused concepts, promotes frequently activated ones through maturity stages, and prunes noise. `reflect(light=True)` skips the community / colour-field passes; `World(store_path, auto_reflect_every=50)` runs that light consolidation automatically every 50 observations so the world keeps evolving without explicit calls.
 
-在任务完成后调用。衰减未使用的概念，将频繁激活的概念通过成熟度阶段晋升，修剪噪声。
+在任务完成后调用。衰减未使用的概念，将频繁激活的概念通过成熟度阶段晋升，修剪噪声。`reflect(light=True)` 跳过群落/色场步骤；`World(store_path, auto_reflect_every=50)` 每 50 次观察自动执行一次轻量巩固，世界无需显式调用也会持续演化。
 
 ## Concept Lifecycle / 概念生命周期
 
@@ -324,11 +324,11 @@ embryonic → developing → established → core
 
 | Transition / 转换 | Requirements / 条件 |
 |------------|-------------|
-| embryonic → developing / 萌芽 → 发展中 | activation_count >= 3, confidence >= 0.3 |
-| developing → established / 发展中 → 已建立 | activation_count >= 10, confidence >= 0.6 |
+| embryonic → developing / 萌芽 → 发展中 | activation_count >= 3, confidence >= 0.3 — or recurrence >= 3 distinct windows, confidence >= 0.15 / 或在 3 个不同窗口复现 |
+| developing → established / 发展中 → 已建立 | activation_count >= 10, confidence >= 0.6 — or recurrence >= 10 distinct windows, confidence >= 0.3 / 或在 10 个不同窗口复现 |
 | established → core / 已建立 → 核心 | activation_count >= 30, connections >= 5 |
 | any → fading / 任意 → 衰退 | confidence decays below 0.05 / 置信度衰减至 0.05 以下 |
-| fading → developing / 衰退 → 发展中 | re-activated by an observation / 被观察重新激活 |
+| fading → developing / 衰退 → 发展中 | re-activated by an observation after recurring in >= 3 distinct windows; otherwise it re-enters as embryonic / 复现过 3 个以上窗口的概念被重新激活时复苏，否则回到萌芽 |
 
 Time in World 0 is **cognitive time**: the world clock advances once per ingested observation (`world.clock.tick`, exposed as `status().cognitive_tick`), and the calendar only adds a slow drift while the world is idle. Decay rates are maturity-dependent and measured in observations: an embryonic concept halves after 24 observations that do not mention it, a core concept after 2160. Half-lives stretch with accumulated evidence and confidence relaxes toward an evidence floor rather than toward zero, so a concept re-observed regularly can mature while a one-off mention still fades. Decay is idempotent in cognitive time — calling `reflect()` more often never accelerates forgetting. See [`docs/world0-cognitive-dynamics-analysis.md`](docs/world0-cognitive-dynamics-analysis.md).
 

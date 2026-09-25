@@ -1,8 +1,10 @@
 """Lifecycle management — maturity promotion and demotion rules.
 
-Promotion rules:
+Promotion rules (either gate suffices):
   embryonic → developing:   activation_count >= 3 and confidence >= 0.3
+                            or recurrence_count >= 3 and confidence >= 0.15
   developing → established: activation_count >= 10 and confidence >= 0.6
+                            or recurrence_count >= 10 and confidence >= 0.3
   established → core:       activation_count >= 30 and connections >= dynamic_threshold
 
 The ESTABLISHED → CORE connection threshold is dynamic:
@@ -33,6 +35,19 @@ BASE_CORE_CONNECTIONS: int = 5       # default connection requirement
 MIN_CORE_CONNECTIONS: int = 2        # absolute minimum connections
 ACTIVATION_REDUCTION_STEP: int = 20  # every N extra activations reduces
                                       # connection requirement by 1
+
+# ── Recurrence-based promotion ──────────────────────────────────────
+# A concept re-observed in this many distinct RECURRENCE_WINDOW-sized
+# windows is promoted even if its confidence equilibrium is low — the
+# additive-boost / multiplicative-decay model caps the confidence of a
+# concept re-observed every ~168 observations near 0.36, below the 0.6
+# established gate, although a year of weekly use is exactly what
+# "established" should mean.  Recurrence measures spaced repetition and is
+# immune to bursts (thirty mentions in one window count once).
+RECURRENCE_FOR_DEVELOPING: int = 3
+RECURRENCE_CONFIDENCE_DEVELOPING: float = 0.15
+RECURRENCE_FOR_ESTABLISHED: int = 10
+RECURRENCE_CONFIDENCE_ESTABLISHED: float = 0.3
 
 
 class LifecycleEngine:
@@ -76,10 +91,22 @@ class LifecycleEngine:
         if node.maturity == Maturity.EMBRYONIC:
             if node.activation_count >= 3 and node.confidence >= 0.3:
                 return Maturity.DEVELOPING
+            # Spaced recurrence is evidence of durability even when the
+            # confidence equilibrium of a sparse cadence stays low.
+            if (
+                node.recurrence_count >= RECURRENCE_FOR_DEVELOPING
+                and node.confidence >= RECURRENCE_CONFIDENCE_DEVELOPING
+            ):
+                return Maturity.DEVELOPING
             return None
 
         if node.maturity == Maturity.DEVELOPING:
             if node.activation_count >= 10 and node.confidence >= 0.6:
+                return Maturity.ESTABLISHED
+            if (
+                node.recurrence_count >= RECURRENCE_FOR_ESTABLISHED
+                and node.confidence >= RECURRENCE_CONFIDENCE_ESTABLISHED
+            ):
                 return Maturity.ESTABLISHED
             return None
 

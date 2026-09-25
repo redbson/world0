@@ -14,6 +14,8 @@ no awareness of dirty tracking.  ConceptManager owns the orchestration.
 
 from __future__ import annotations
 
+from world0.schemas.concept import tokenize_signature
+
 
 class NameIndex:
     """Normalized name/alias → concept ids.
@@ -93,9 +95,18 @@ class TokenIndex:
         return result
 
     def index_node(self, node) -> None:
-        """Refresh entries for ``node`` from its current signature tokens."""
+        """Refresh entries for ``node`` from its current signature tokens.
+
+        Sense tokens are indexed too (they are not part of the signature
+        used for similarity scoring) so synonym shortlists can find a
+        concept whose only overlap with a probe is its ``sense``.
+        """
         self.unindex(node.id)
-        for tok in node.signature_tokens():
+        tokens = set(node.signature_tokens())
+        sense = getattr(node, "sense", "")
+        if sense:
+            tokens |= tokenize_signature(sense)
+        for tok in tokens:
             self._map.setdefault(tok, set()).add(node.id)
 
     def unindex(self, concept_id: str) -> None:

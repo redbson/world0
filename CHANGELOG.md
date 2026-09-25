@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Recurrence-based promotion** — `ConceptNode.recurrence_count` counts the
+  distinct 24-tick windows in which a concept was activated (a burst counts
+  once).  Lifecycle promotion accepts either the confidence gate or a
+  recurrence gate (`≥3` windows for developing, `≥10` for established), so
+  a concept re-observed every ~168 observations now reaches `established`;
+  a faded concept revives to DEVELOPING only with `≥3` recurrences,
+  otherwise it re-enters as EMBRYONIC.
+- **`RelationEdge.confirm()`** — an explicit re-statement of a typed
+  relation moves its semantic `probability` toward 1 with diminishing
+  returns; the ingest pipeline calls it alongside `reinforce()` for
+  explicit re-observations (Hebbian co-occurrence still only reinforces).
+  `RelationManager.adjust_strength()` now moves `probability` by the
+  confidence delta instead of overwriting it.
+- **Directional propagation** — `Perspective.direction_weights`
+  (`forward` / `backward`) scale activation along or against a relation's
+  direction; defaults are neutral.
+- **Light / automatic reflect** — `World.reflect(light=True)` runs decay,
+  lifecycle and pruning only; `World(..., auto_reflect_every=N)` schedules
+  it every N observations.
 - **Cognitive clock** (`schemas/clock.py`) — time in World 0 is counted in
   observations: `World.clock` advances once per `ingest()` and is persisted
   in `state.json` (`tick`); every concept/relation carries `*_tick`
@@ -85,6 +104,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   processes regardless of `PYTHONHASHSEED`.
 - **Hebbian pair cap** (`MAX_PAIRS`) now keeps pairs in observation
   (salience) order rather than lexicographic id order.
+- **Synonym resolution is indexed** — `ConceptManager._find_synonym_match`
+  scores only the token-index shortlist (labels, description and sense
+  tokens) instead of scanning every concept; decisions are unchanged.
 
 ### Fixed
 - Relation `probability` (belief the typed relation is correct) is no

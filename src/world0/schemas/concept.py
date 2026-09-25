@@ -92,6 +92,18 @@ def tokenize_signature(text: str) -> set[str]:
 MAX_REINFORCEMENT_LOG: int = 64
 MAX_TASK_PROFILE_ENTRIES: int = 64
 
+# ── Recurrence ───────────────────────────────────────────────────────
+# Activations are grouped into windows of RECURRENCE_WINDOW ticks (a
+# "cognitive day").  ``recurrence_count`` counts the *distinct* windows in
+# which a concept was activated, so thirty mentions in one burst count
+# once while one mention a window for thirty windows counts thirty times.
+# Spaced recurrence is the evidence that a concept is durable rather than
+# incidental; the lifecycle uses it as an alternative promotion path and
+# a revived FADING concept only returns to DEVELOPING when it has recurred
+# at least REVIVAL_RECURRENCE times.
+RECURRENCE_WINDOW: int = 24
+REVIVAL_RECURRENCE: int = 3
+
 
 def normalize_task_label(task: str) -> str:
     """Canonical form of a task label used as a ``task_profile`` key."""
@@ -217,6 +229,10 @@ class ConceptNode(BaseModel):
     # a slow secondary drift.
     created_tick: int = 0
     last_activated_tick: int = 0
+    # Distinct RECURRENCE_WINDOW-sized tick windows with an activation, and
+    # the last window counted.
+    recurrence_count: int = 0
+    last_recurrence_window: int = -1
     last_weakened: datetime | None = None
     # Instant (both coordinates) at which time decay was last applied.
     # Lets the decay engine decay only the *elapsed interval* instead of
@@ -306,6 +322,10 @@ class ConceptNode(BaseModel):
         self.last_activated = now
         if tick is not None:
             self.last_activated_tick = int(tick)
+            window = int(tick) // RECURRENCE_WINDOW
+            if window != self.last_recurrence_window:
+                self.recurrence_count += 1
+                self.last_recurrence_window = window
         self.reinforcement_log.append(
             ReinforcementEntry(timestamp=now, source=source, task=task)
         )
@@ -319,9 +339,15 @@ class ConceptNode(BaseModel):
         boost = 0.06 * (1.0 / (1.0 + self.activation_count * 0.08))
         self.confidence = min(1.0, self.confidence + boost)
 
-        # If fading, revive to developing
+        # A fading concept revives — to DEVELOPING when it has a history of
+        # spaced recurrence, otherwise back to EMBRYONIC so a one-off that
+        # faded does not skip the maturity ladder on re-mention.
         if self.maturity == Maturity.FADING:
-            self.maturity = Maturity.DEVELOPING
+            self.maturity = (
+                Maturity.DEVELOPING
+                if self.recurrence_count >= REVIVAL_RECURRENCE
+                else Maturity.EMBRYONIC
+            )
 
     def record_task(self, task: str, count: int = 1) -> None:
         """Count one (or ``count``) activation(s) under ``task``."""

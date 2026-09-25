@@ -170,6 +170,14 @@ def _merge_evidence(keeper: ConceptNode, absorbed: ConceptNode) -> None:
         keeper.last_activated_tick, absorbed.last_activated_tick
     )
     keeper.created_tick = min(keeper.created_tick, absorbed.created_tick)
+    # Distinct windows cannot be recovered after the fact; the larger
+    # count is the conservative merged estimate.
+    keeper.recurrence_count = max(
+        keeper.recurrence_count, absorbed.recurrence_count
+    )
+    keeper.last_recurrence_window = max(
+        keeper.last_recurrence_window, absorbed.last_recurrence_window
+    )
     if absorbed.last_decayed_tick is not None and (
         keeper.last_decayed_tick is None
         or absorbed.last_decayed_tick > keeper.last_decayed_tick

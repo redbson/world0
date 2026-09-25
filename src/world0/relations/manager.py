@@ -236,7 +236,10 @@ class RelationManager:
             return None
         edge.weight = min(1.0, max(0.01, edge.weight + weight_delta))
         edge.confidence = min(1.0, max(0.01, edge.confidence + confidence_delta))
-        edge.probability = edge.confidence
+        # Feedback about the relation's usefulness moves the semantic belief
+        # by the same delta; it is never overwritten with the (differently
+        # scaled) confidence value.
+        edge.probability = min(1.0, max(0.01, edge.probability + confidence_delta))
         self._dirty.add(edge.id)
         return edge
 

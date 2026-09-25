@@ -77,9 +77,18 @@ class World:
         store_path: str | Path = ".world0",
         llm: LLMProvider | None = None,
         prompt_registry: PromptRegistry | None = None,
+        auto_reflect_every: int | None = None,
     ) -> None:
         self._store = JsonStore(store_path)
         self._prompts = prompt_registry or PromptRegistry()
+        # Continuous mode: run a light reflect (decay + lifecycle + prune,
+        # no community / colour passes) every N observations so the world
+        # keeps consolidating without anyone remembering to call
+        # ``reflect()``.  Decay is idempotent in cognitive time, so the
+        # cadence only changes *when* forgetting is applied, never how much.
+        self._auto_reflect_every = (
+            int(auto_reflect_every) if auto_reflect_every and auto_reflect_every > 0 else None
+        )
 
         # ── Cross-cycle state + cognitive clock ───────────────────────
         # Time in World 0 is counted in observations: the clock advances
@@ -158,6 +167,11 @@ class World:
         self.concepts.flush()
         self.relations.flush()
         self._persist_learning_state()
+        if (
+            self._auto_reflect_every
+            and self._clock.tick % self._auto_reflect_every == 0
+        ):
+            self.reflect(light=True)
         return result
 
     def _persist_learning_state(self) -> None:
@@ -249,15 +263,21 @@ class World:
             activations, max_concepts=max_concepts, task=effective_task
         )
 
-    def reflect(self) -> ReflectResult:
-        """Cognitive consolidation — run after a task is complete."""
-        result = self._reflect_pipeline.run()
+    def reflect(self, *, light: bool = False) -> ReflectResult:
+        """Cognitive consolidation — run after a task is complete.
+
+        ``light=True`` applies decay, lifecycle and pruning only, skipping
+        community detection and colour-field dynamics; it is what
+        ``auto_reflect_every`` schedules between explicit reflects.
+        """
+        result = self._reflect_pipeline.run(light=light)
         self.concepts.flush()
         self.relations.flush()
-        self._state["last_reflect"] = datetime.now(timezone.utc).isoformat()
-        self._state["last_reflect_tick"] = self._clock.tick
         self._state["tick"] = self._clock.tick
-        self._state["communities"] = self._communities.snapshot()
+        if not light:
+            self._state["last_reflect"] = datetime.now(timezone.utc).isoformat()
+            self._state["last_reflect_tick"] = self._clock.tick
+            self._state["communities"] = self._communities.snapshot()
         self._store.save_state(self._state)
         return result
 

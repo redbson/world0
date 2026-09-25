@@ -53,12 +53,24 @@ class Perspective(BaseModel):
     # Multiplier applied to concepts whose dominant domain appears in
     # ``active_domains``.  Stacks on top of the task-affinity boost.
     domain_affinity_boost: float = 1.3
+    # Traversal-direction multipliers for propagation.  ``"forward"``
+    # follows a relation from its source to its target (``A depends_on B``
+    # traversed from A to B: "what do I depend on?"), ``"backward"`` the
+    # reverse ("who depends on me?").  Missing keys are neutral (1.0), so
+    # the default perspective keeps activation undirected.
+    direction_weights: dict[str, float] = Field(default_factory=dict)
 
     def weight_for(self, relation_type: str, default: float) -> float:
         """Resolve the propagation weight for a relation type under this view."""
         if not self.relation_type_weights:
             return default
         return float(self.relation_type_weights.get(relation_type, default))
+
+    def weight_for_direction(self, direction: str) -> float:
+        """Resolve the traversal-direction multiplier (``forward``/``backward``)."""
+        if not self.direction_weights:
+            return 1.0
+        return float(self.direction_weights.get(direction, 1.0))
 
     def domain_match(self, domain_label: str) -> bool:
         """True if the given domain label matches this perspective's focus."""

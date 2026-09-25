@@ -281,11 +281,10 @@ $\gamma_{task} = 1 + 0.5\cdot\text{affinity}$，affinity 来自词级匹配（§
 ### 3.7 生命周期（`dynamics/lifecycle.py`）
 
 规则本身合理（动态 core 连接阈值是好设计）。问题全部来自 §3.1 的置信度动力学。
-未修改的两点：
 
-- 只有 `→ fading` 一种降级，core/established 不会因长期低置信度而软降级。
-- FADING → DEVELOPING 的复苏绕过置信度门；在新地板机制下这条路径触发得少了，
-  但它仍然是"晋升靠复苏而不是靠证据"的漏洞。建议在 §7.2 的复现分数就绪后收紧。
+- 只有 `→ fading` 一种降级，core/established 不会因长期低置信度而软降级（未改）。
+- FADING → DEVELOPING 的复苏原本绕过置信度门；第二轮起复苏只在
+  `recurrence_count ≥ 3` 时回到 DEVELOPING，否则回到 EMBRYONIC（§7.2）。
 
 ### 3.8 概念身份与整合（`concepts/_manager.py`）
 
@@ -384,15 +383,24 @@ $\gamma_{task} = 1 + 0.5\cdot\text{affinity}$，affinity 来自词级匹配（§
 | `tests/test_dynamics_analysis.py` | 36 个行为测试（时钟、幂等、阶梯可达、地板、概率、画像、聚合、保序、环路、记录一次、跨进程确定性、Hebbian 持久化） |
 | `tests/test_temporal.py` 等 | 时间模拟改为 `world.clock.advance(n)` / `*_tick` 坐标 |
 | `scripts/calibrate_decay.py` | §5 的标定扫描 |
+| **第二轮（§7 落地）** | |
+| `schemas/concept.py`、`dynamics/lifecycle.py` | `recurrence_count` / `last_recurrence_window`、复现晋升门、复苏收紧 |
+| `schemas/relation.py`、`world/_ingest.py`、`relations/manager.py` | `RelationEdge.confirm()`、显式复观测调用、`adjust_strength` 概率增量 |
+| `schemas/context.py`、`dynamics/activation.py` | `Perspective.direction_weights` 与有向传播 |
+| `concepts/_manager.py`、`concepts/_indexes.py` | 同义匹配短名单；索引 sense 词 |
+| `world/_reflect.py`、`world/facade.py` | `reflect(light=)`、`auto_reflect_every` |
+| `tests/test_roadmap_dynamics.py` | 22 个行为测试 |
 
-所有字段均有默认值，旧的 JSON 存储可直接加载（`task_profile` 自动回填，tick 默认 0）。
+所有字段均有默认值，旧的 JSON 存储可直接加载（`task_profile` 自动回填，tick 与
+recurrence 默认 0）。
 
 ---
 
 ## 7. 结构性问题与建议路线
 
-以下问题本轮**未改**，因为它们需要接口层面的设计决策；按对"持续动态更新的认知
-系统"的重要性排序。
+按对"持续动态更新的认知系统"的重要性排序。第二轮已实现 §7.2、§7.3、§7.4、
+§7.6、§7.8（标注 ✅，行为测试在 `tests/test_roadmap_dynamics.py`）；§7.1、
+§7.5、§7.7、§7.9 仍是建议。
 
 ### 7.1 把 `confidence` 拆成"证据"与"显著性"
 
@@ -410,35 +418,42 @@ confidence   = evidence × g(salience)            ——派生量，供旧接口
 这会消除 §3.1 的"双时钟"问题，也让 `render()` 里的 "confidence: 0.06" 不再误导
 下游 Agent。
 
-### 7.2 基于复现（recurrence）的晋升
+### 7.2 基于复现（recurrence）的晋升 ✅
 
-`DCTMTemporalDynamics.md` §9.1 已经提出 recurrence score。在 `task_profile`
-与认知时钟的基础上加一个按 episode（或每 N tick 一个窗口）去重的复现计数几乎
-是零成本的：
+`DCTMTemporalDynamics.md` §9.1 提出的 recurrence score 已实现：激活按
+`RECURRENCE_WINDOW = 24` tick 的窗口（"认知日"）去重，
+`ConceptNode.recurrence_count` 记录**不同窗口**的激活次数——一个窗口内刷 30 次
+只算 1 次，每窗口 1 次持续 30 个窗口算 30 次。生命周期的两级晋升都增加了复现
+门（任一门满足即可）：
 
 ```text
-recurrence(v) = |{ distinct episodes with an activation }|
-embryonic → developing:  recurrence ≥ 3
-developing → established: recurrence ≥ 10 ∧ evidence ≥ 0.6
+embryonic → developing:   n ≥ 3 ∧ c ≥ 0.3      或  recurrence ≥ 3  ∧ c ≥ 0.15
+developing → established: n ≥ 10 ∧ c ≥ 0.6     或  recurrence ≥ 10 ∧ c ≥ 0.3
 ```
 
-这能让"每 168 次观察复现一次、持续一年"的概念正当地成为 established，同时天然
-免疫"一个 episode 内刷 30 次"的突发噪声——正是 §5 里加性增益模型无法表达的区分。
+每 168 次观察复现一次的概念现在在第 10 次复现后成为 established
+（`test_sparse_but_regular_concept_reaches_established`），而突发式的 30 次
+刷屏不会触发复现门。同时收紧了 §3.7 指出的复苏漏洞：FADING 概念被重新激活时，
+只有 `recurrence_count ≥ 3` 才回到 DEVELOPING，否则回到 EMBRYONIC 从头爬梯子。
+合并时取两者复现数的最大值（不同窗口无法事后恢复）。
 
-### 7.3 关系的显式复观测应更新语义概率
+### 7.3 关系的显式复观测更新语义概率 ✅
 
-`IngestPipeline._step_relations()` 对已存在的显式关系只 `reinforce()`（操作权重），
-不更新 `probability`。建议：无概率值的显式复观测按
-`update_probability(evidence_probability=spec.propagation_strength, evidence_strength=1.0)`
-处理；Hebbian 复现保持不动。同时把 `adjust_strength()` 的 `probability = confidence`
-改成独立的增量。
+`RelationEdge.confirm()`：Agent/抽取器再次**显式陈述**一条 typed relation 时，
+$p \leftarrow p + (1-p)\cdot 0.05$（递减收益，20 次把 0.70 推到 ≈0.89），并计入
+`probability_observation_count`；`IngestPipeline._step_relations()` 对无概率值的
+显式复观测同时调用 `reinforce()`（操作权重）与 `confirm()`（语义概率）。Hebbian
+共现只走 `reinforce()`，不碰概率（`test_hebbian_cooccurrence_does_not_touch_probability`）。
+`RelationManager.adjust_strength()` 改为按 `confidence_delta` 增量移动概率，不再
+把 confidence 尺度复制进去。
 
-### 7.4 有向传播与视角
+### 7.4 有向传播与视角 ✅
 
-激活是无向遍历：`A depends_on B` 从 B 出发同样以全强度到达 A。对"debug"视角，
-沿依赖方向（我依赖什么）与逆依赖方向（谁依赖我）的价值不同。建议在
-`Perspective` 增加 `direction_bias: {semantic_relation: (forward, backward)}`，
-默认 (1, 1) 保持现状。
+`Perspective.direction_weights = {"forward": …, "backward": …}`：forward 是沿
+关系 source→target 遍历（`A depends_on B` 从 A 出发："我依赖什么"），backward
+相反（"谁依赖我"）。缺省 1.0，默认视角保持无向；`ActivationEngine` 把该系数乘进
+`edge_strength`。这是"同一世界在不同视角下给出不同投影"的第三个杠杆（前两个是
+关系轴权重与域亲和）。按语义关系细分方向权重留作后续扩展。
 
 ### 7.5 投影冗余度量与相对阈值
 
@@ -449,22 +464,26 @@ developing → established: recurrence ≥ 10 ∧ evidence ≥ 0.6
 - MMR 的 $\lambda=0.3$ 未经任何任务级评测标定；建议用
   `tests/_cognitive_benchmark.py` 的 precision/recall 做一次扫描。
 
-### 7.6 身份解析索引化
+### 7.6 身份解析索引化 ✅
 
-`_find_synonym_match()` 改为先用 `TokenIndex.candidates()` 取短名单（同域、有
-共享签名词），再打分；把 O(N) 降到 O(候选数)。这是万级概念世界 ingest 延迟的主要
-来源。
+`_find_synonym_match()` 现在先用 `TokenIndex.candidates()` 取短名单再打分。
+任何正的同义分都要求共享一个标签词或一个 sense/description 词，因此短名单是
+完备的（`TokenIndex` 现在同时索引 `sense` 词，只用于短名单，不影响签名相似度）；
+探针完全不可分词（如纯中文标签且无描述）时回退到全量扫描。候选按
+`(created_tick, id)` 排序，平局结果与原实现一致。复杂度从 O(N) 降到 O(候选数)。
 
 ### 7.7 存储层
 
 当前 JSON-per-file 适合 <10k 概念。下一步建议 SQLite（单文件、事务、按 id 更新）
 或 append-only 事件日志 + 周期快照；`Store` Protocol 已经把这一步隔离好了。
 
-### 7.8 持续运行模式
+### 7.8 持续运行模式 ✅
 
-有了认知时钟和幂等衰减，可以定义 `World.tick()`：每 N 次 ingest 执行一次轻量
-`reflect()`（decay + lifecycle，不做群落检测），把群落/色场留给低频的完整
-`reflect()`。这样"持续更新"就不再依赖使用者记得在任务结束时调用 `reflect()`。
+`World.reflect(light=True)` 只执行 decay + lifecycle + prune，跳过群落检测与
+色场；`World(store_path, auto_reflect_every=N)` 让 `ingest()` 每 N 次观察自动
+执行一次轻量 reflect（`test_auto_reflect_every_consolidates_without_explicit_calls`）。
+因为衰减对认知时间幂等，自动周期只决定"何时结算"，不改变遗忘量；群落/色场仍留给
+显式的完整 `reflect()`（只有完整 reflect 才更新 `last_reflect`）。
 `DCTMTemporalDynamics.md` 中的 episode / phase 层可以直接建立在 tick 之上
 （episode = tick 区间）。
 

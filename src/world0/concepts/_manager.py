@@ -223,7 +223,26 @@ class ConceptManager:
         labels = [name, *aliases]
         best: ConceptNode | None = None
         best_score = 0.0
-        for node in self._concepts.values():
+        # Every positive synonym score needs a shared label or a shared
+        # sense/description token, so the token index yields a complete
+        # shortlist; only an untokenizable probe (e.g. CJK-only labels
+        # without a description) falls back to scanning every concept.
+        probe_tokens: set[str] = set()
+        for label in labels:
+            probe_tokens |= tokenize_signature(label)
+        probe_tokens |= tokenize_signature(sense)
+        probe_tokens |= tokenize_signature(description)
+        if probe_tokens:
+            candidate_ids = self._token_index.candidates(probe_tokens)
+            pool = [
+                self._concepts[cid]
+                for cid in candidate_ids
+                if cid in self._concepts
+            ]
+            pool.sort(key=lambda node: (node.created_tick, node.id))
+        else:
+            pool = list(self._concepts.values())
+        for node in pool:
             if not self._semantic_boundary_compatible(
                 node,
                 description=description,

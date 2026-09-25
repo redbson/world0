@@ -204,7 +204,13 @@ class IngestPipeline:
                 result.new_relations.append(label)
             else:
                 if prior is None:
+                    # Operational reinforcement plus semantic confirmation:
+                    # an Agent re-stating a typed relation is evidence that
+                    # the relation is correct, not just that its endpoints
+                    # co-occur (Hebbian learning only does the former).
                     self._relations.reinforce(edge.id, provenance=observation.task)
+                    edge.confirm()
+                    self._relations.mark_dirty(edge.id)
                 result.reinforced_relations.append(label)
 
     @staticmethod
