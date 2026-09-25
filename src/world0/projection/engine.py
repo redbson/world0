@@ -21,8 +21,12 @@ if TYPE_CHECKING:
     from world0.core import ConceptStore, RelationStore
 
 # MMR diversity weight. 0 = pure score ranking, 1 = pure diversity.
-# 0.3 gives a mild diversity nudge while keeping relevance primary.
-MMR_LAMBDA: float = 0.3
+# Calibrated on two scenarios (docs/world0-cognitive-dynamics-analysis.md
+# §7.5): the cognitive benchmark is insensitive to λ in [0.1, 0.5], while a
+# hub with a cluster of six near-identical siblings plus a three-concept
+# chain needs λ ≥ 0.5 before the projection covers both regions instead of
+# filling half its slots with siblings.
+MMR_LAMBDA: float = 0.5
 
 # Task affinity discount applied in MMR when a candidate has *no*
 # association with the current task.  Reduces the effective relevance

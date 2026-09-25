@@ -403,3 +403,80 @@ class TestSynonymShortlistScaling:
         world.concepts.add_alias(node.id, "α-letter")
         labels, _, _ = world.concepts._node_signature(node)  # type: ignore[attr-defined]
         assert "α letter" in labels or "α-letter".lower() in {l.replace(" ", "-") for l in labels}
+
+
+class TestNumericIdentityTokens:
+    def test_generation_number_keeps_concepts_distinct(self, world):
+        a, _ = world.concepts.get_or_create(
+            "GPT 4", kind="model", sense="large language model generation 4 by openai"
+        )
+        b, is_new = world.concepts.get_or_create(
+            "GPT 5", kind="model", sense="large language model generation 5 by openai"
+        )
+        assert is_new and b.id != a.id
+
+    def test_single_digit_tokens_survive_tokenization(self):
+        from world0.schemas.concept import tokenize_signature
+
+        assert tokenize_signature("GPT 4 model") == {"gpt", "4", "model"}
+        assert tokenize_signature("a b c 7") == {"7"}  # letters < 2 chars still dropped
+
+    def test_true_synonym_with_numbers_still_merges(self, world):
+        a, _ = world.concepts.get_or_create(
+            "Python 3", kind="language", sense="python programming language version 3"
+        )
+        b, is_new = world.concepts.get_or_create(
+            "Python3", aliases=["Python 3"], kind="language", sense="python programming language version 3"
+        )
+        assert not is_new and b.id == a.id
+
+
+class TestProjectionDiversity:
+    """A redundancy-sensitive scenario: six near-identical siblings hanging
+    off the same anchors compete with a short chain of distinct concepts.
+    Pure relevance ranking fills the projection with siblings; MMR must
+    reserve room for the other region."""
+
+    @pytest.fixture
+    def sibling_world(self, world):
+        siblings = [f"siblingA{i}" for i in range(6)]
+        for _ in range(8):
+            world.ingest(
+                Observation(
+                    concepts=["hub", "anchorA1", "anchorA2"] + siblings,
+                    relations=[("hub", "anchorA1", "depends_on"), ("hub", "anchorA2", "depends_on")]
+                    + [(s, "anchorA1", "depends_on") for s in siblings]
+                    + [(s, "anchorA2", "depends_on") for s in siblings]
+                    + [("hub", s, "supports") for s in siblings],
+                    task="t",
+                    source="s",
+                )
+            )
+            world.ingest(
+                Observation(
+                    concepts=["hub", "b1", "b2", "b3"],
+                    relations=[("hub", "b1", "depends_on"), ("b1", "b2", "depends_on"), ("b2", "b3", "depends_on")],
+                    task="t",
+                    source="s",
+                )
+            )
+        return world
+
+    def test_projection_covers_both_regions(self, sibling_world):
+        names = {c.name for c in sibling_world.project(["hub"], task="t", max_concepts=6, max_depth=3).concepts}
+        siblings = {n for n in names if n.startswith("siblingA")}
+        chain = {n for n in names if n in {"b1", "b2", "b3"}}
+        assert "hub" in names
+        assert len(chain) >= 2, names
+        assert len(siblings) <= 3, names
+
+    def test_pure_relevance_would_have_filled_with_siblings(self, sibling_world):
+        import world0.projection.engine as pe
+
+        original = pe.MMR_LAMBDA
+        try:
+            pe.MMR_LAMBDA = 0.0
+            names = {c.name for c in sibling_world.project(["hub"], task="t", max_concepts=6, max_depth=3).concepts}
+        finally:
+            pe.MMR_LAMBDA = original
+        assert sum(n.startswith("siblingA") for n in names) >= 4

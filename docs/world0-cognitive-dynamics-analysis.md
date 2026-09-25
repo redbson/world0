@@ -395,6 +395,10 @@ $\gamma_{task} = 1 + 0.5\cdot\text{affinity}$，affinity 来自词级匹配（§
 | `dynamics/activation.py`、`projection/engine.py` | 相对接受阈值 `min(min_activation, 0.02·S)`；加权 Jaccard 实测否定后保留普通 Jaccard |
 | `schemas/concept.py`、`schemas/types.py` | `evidence()`、`salience()`；`render()` 同时输出 evidence |
 | `tests/test_roadmap_dynamics.py` | +6 个测试（弱种子视野、证据/显著性独立、常见词短名单、缓存失效） |
+| **第四轮** | |
+| `schemas/concept.py` | `tokenize_signature` 保留纯数字 token（"GPT 4" ≠ "GPT 5"） |
+| `projection/engine.py` | `MMR_LAMBDA` 0.3 → 0.5（同族场景标定） |
+| `tests/test_roadmap_dynamics.py` | +5 个测试（数字身份、投影跨区域覆盖） |
 
 所有字段均有默认值，旧的 JSON 存储可直接加载（`task_profile` 自动回填，tick 与
 recurrence 默认 0）。
@@ -473,10 +477,20 @@ $p \leftarrow p + (1-p)\cdot 0.05$（递减收益，20 次把 0.70 推到 ≈0.8
 - **加权 Jaccard ✗**：按 `weight × ρ_type` 的加权冗余在认知基准上实测**没有
   收益**：λ=0.3 时只是把 ML/Ops 的精度互换（0.67/0.83 → 0.83/0.67），λ≥0.4
   两边都掉到 0.67。因此保留普通集合 Jaccard，代码里留了说明。
-- **λ 扫描**：普通 Jaccard 下 λ ∈ {0.1…0.5} 对基准结果**完全不敏感**
-  （ML 0.67/0.67、Ops 0.83/0.83、交集 4 恒定）。这说明当前基准由相关性主导，
-  冗余项没有发挥作用——在做任何 λ 调参之前，需要先构造一个含"同邻域冗余概念"
-  的基准，否则调参没有信号。扫描脚本见 §8。
+- **λ 扫描**：普通 Jaccard 下 λ ∈ {0.1…0.5} 对认知基准**完全不敏感**
+  （ML 0.67/0.67、Ops 0.83/0.83、交集 4 恒定）——该基准由相关性主导，冗余项
+  没有信号。于是构造了一个**对冗余敏感**的场景：hub 下挂 6 个共享同两个锚点的
+  近似同族概念，另有一条 3 个概念的链（`TestProjectionDiversity`）。6 个名额下：
+
+  | λ | 同族概念 | 链上概念 |
+  |---|---|---|
+  | 0.0（纯相关性） | 4 | 1 |
+  | 0.1 / 0.3（原默认） | 3 | 1 |
+  | **0.5** | **2** | **3** |
+  | 0.7 | 2 | 3 |
+
+  λ=0.5 起投影才同时覆盖两个区域；认知基准在该值下不变，全套测试通过，因此
+  **默认 λ 改为 0.5**，并把该场景固化为回归测试。扫描脚本见 §8。
 
 ### 7.6 身份解析索引化 ✅
 
@@ -498,9 +512,10 @@ $p \leftarrow p + (1-p)\cdot 0.05$（递减收益，20 次把 0.70 推到 ≈0.8
 | N=5000 | 建 5000 个概念 | （未等完） | **2.4 s** |
 | N=5000 | 摄入 50×10 个语义候选 | — | **1.65 s** |
 
-顺带发现一个既有的身份风险：`tokenize_signature` 丢弃单字符 token，因此
-"GPT 4"/"GPT 5" 这类只靠单个数字区分、其余描述相同的概念会被判为同义并合并。
-建议后续让纯数字 token 不受长度限制（需重新跑一遍整合阈值相关测试）。
+顺带发现并修复了一个既有的身份风险：`tokenize_signature` 原来丢弃所有单字符
+token，因此"GPT 4"/"GPT 5"这类只靠一个数字区分、其余描述相同的概念会被判为
+同义并合并。现在纯数字 token 不受长度限制（"Python 3"/"Python3" 这类真同义仍
+通过别名合并，`TestNumericIdentityTokens`）。
 
 ### 7.7 存储层
 

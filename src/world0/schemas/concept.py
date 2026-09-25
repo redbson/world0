@@ -73,14 +73,18 @@ def representation_part(value: str, *, fallback: str = "concept") -> str:
 def tokenize_signature(text: str) -> set[str]:
     """Produce the signature token set for a piece of text.
 
-    Two-character tokens are preserved (covers 'go', 'ai', 'ml', etc.).
+    Two-character tokens are preserved (covers 'go', 'ai', 'ml', etc.), and
+    purely numeric tokens of any length are kept: a version or generation
+    number is often the *only* thing separating two concepts ("GPT 4" vs
+    "GPT 5", "v1" vs "v2"), and dropping it would make them signature
+    twins that consolidation merges.
     """
     if not text:
         return set()
     return {
         tok.lower()
         for tok in _TOKEN_RE.findall(text)
-        if len(tok) >= 2 and tok.lower() not in _STOPWORDS
+        if (len(tok) >= 2 or tok.isdigit()) and tok.lower() not in _STOPWORDS
     }
 
 

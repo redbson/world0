@@ -116,6 +116,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   posterior × count saturation, time-independent) and
   `ConceptNode.salience()` (cognitive-time freshness); `Projection.render()`
   prints evidence next to confidence.
+- **MMR λ 0.3 → 0.5** — calibrated on a redundancy-sensitive scenario (six
+  near-identical siblings vs a three-concept chain): at 0.3 the projection
+  spent half its slots on siblings, at 0.5 it covers both regions; the
+  cognitive benchmark is unchanged.
+- **Numeric identity tokens** — `tokenize_signature` keeps purely numeric
+  tokens of any length, so "GPT 4" and "GPT 5" are no longer signature
+  twins that consolidation merges.
 
 ### Fixed
 - Relation `probability` (belief the typed relation is correct) is no
