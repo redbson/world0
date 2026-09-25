@@ -585,6 +585,23 @@ models / visualization / world / spaces`；`world/`（门面）可以用 extract
 prompts（文本摄入需要抽取器），但不得导入 agents；仓库内没有任何包导入
 `agents`。新增顶层包必须先在该测试里归类，否则测试失败。当前依赖图完全满足。
 
+### 7.10 投影稳定性（探针，负结果 = 稳定）✅
+
+AGENTS.md 要求测试"投影稳定性"。第六轮在认知基准世界上做了四组扰动，投影
+（`model serving` / `ml training` / 6 名额 / 深度 4）的**有序**结果：
+
+| 扰动 | 结果 |
+|---|---|
+| 逐条摄入 12 条无关观察（weather / cooking） | 12 次全部逐字相同 |
+| 一次域内复提（PyTorch / optimizer / gradient descent / monitoring / model serving） | 只有 gradient descent 与 optimizer 互换（二者激活分严格相等 0.1732，按 id 平局） |
+| 闲置 0 / 1 / 5 / 20 / 100 tick 后 `reflect()` | 全部相同 |
+| 交替摄入两个无关概念 20 次 | 相邻投影变化 0 次、只出现 1 种结果 |
+
+第 5 项探针显示纳入/排除边界上是一个四路平局（optimizer、gradient descent、
+neural network、training pipeline 都是 0.1732）——这是基准世界的 Hebbian 全连接
+结构造成的真实对称，不是数值噪声；平局由 `(−score, id)` 决定性打破。
+`tests/test_projection_stability.py` 把前四项固化为回归测试。
+
 ---
 
 ## 8. 复现
