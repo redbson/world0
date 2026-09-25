@@ -399,6 +399,9 @@ $\gamma_{task} = 1 + 0.5\cdot\text{affinity}$，affinity 来自词级匹配（§
 | `schemas/concept.py` | `tokenize_signature` 保留纯数字 token（"GPT 4" ≠ "GPT 5"） |
 | `projection/engine.py` | `MMR_LAMBDA` 0.3 → 0.5（同族场景标定） |
 | `tests/test_roadmap_dynamics.py` | +5 个测试（数字身份、投影跨区域覆盖） |
+| **第五轮** | |
+| `store/sqlite_store.py`、`store/__init__.py`、`world/facade.py` | SQLite 后端；`World(backend=)` 选择（后缀自动识别） |
+| `tests/test_sqlite_store.py` | 9 个测试（契约、重启一致性、剪枝、flush 成本对比） |
 
 所有字段均有默认值，旧的 JSON 存储可直接加载（`task_profile` 自动回填，tick 与
 recurrence 默认 0）。
@@ -517,10 +520,16 @@ token，因此"GPT 4"/"GPT 5"这类只靠一个数字区分、其余描述相同
 同义并合并。现在纯数字 token 不受长度限制（"Python 3"/"Python3" 这类真同义仍
 通过别名合并，`TestNumericIdentityTokens`）。
 
-### 7.7 存储层
+### 7.7 存储层 ✅（SQLite 后端）
 
-当前 JSON-per-file 适合 <10k 概念。下一步建议 SQLite（单文件、事务、按 id 更新）
-或 append-only 事件日志 + 周期快照；`Store` Protocol 已经把这一步隔离好了。
+`store/sqlite_store.py`：单文件 SQLite（WAL），四张 `(id, payload)` 表存放与
+JSON 后端完全相同的 pydantic 载荷；一次 flush 的 N 条脏记录是**一个事务内的
+N 次 upsert**，加载是每表一次顺序扫描。`World(store_path, backend=)` 选择后端：
+`"auto"`（默认）在路径后缀为 `.sqlite/.sqlite3/.db` 时用 SQLite，否则保持
+JSON-per-file，因此既有存储不受影响。实测 60 次 ingest × 40 个概念的 flush
+总成本：JSON 0.59 s，SQLite 0.23 s。`test_sqlite_store.py` 覆盖 Store 契约、
+World 全周期重启一致性（时钟、Hebbian 待定对、投影渲染逐字相同）与剪枝删行。
+append-only 事件日志 + 周期快照仍是更远的选项。
 
 ### 7.8 持续运行模式 ✅
 

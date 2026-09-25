@@ -123,6 +123,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Numeric identity tokens** — `tokenize_signature` keeps purely numeric
   tokens of any length, so "GPT 4" and "GPT 5" are no longer signature
   twins that consolidation merges.
+- **SQLite storage backend** — `world0.store.SqliteStore` (single WAL
+  file, one transaction per flush, same JSON payloads as the file
+  backend).  `World(store_path, backend="auto"|"json"|"sqlite")`; `auto`
+  picks SQLite for `.sqlite` / `.sqlite3` / `.db` paths and JSON-per-file
+  otherwise, so existing stores are unaffected.  Flushing 60 × 40 dirty
+  concepts: 0.59 s (JSON) → 0.23 s (SQLite).
 
 ### Fixed
 - Relation `probability` (belief the typed relation is correct) is no

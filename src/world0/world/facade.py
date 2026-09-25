@@ -39,6 +39,7 @@ from world0.schemas.types import (
 )
 from world0.sources import SourceLibrary
 from world0.store.json_store import JsonStore
+from world0.store.sqlite_store import SqliteStore
 from world0.visualization.renderer import visualize as _visualize
 from world0.world._identity import IdentityOps
 from world0.world._ingest import IngestPipeline
@@ -78,8 +79,12 @@ class World:
         llm: LLMProvider | None = None,
         prompt_registry: PromptRegistry | None = None,
         auto_reflect_every: int | None = None,
+        backend: str = "auto",
     ) -> None:
-        self._store = JsonStore(store_path)
+        # ``backend``: "json" (one file per record under ``store_path``),
+        # "sqlite" (a single database file at ``store_path``), or "auto"
+        # (sqlite when ``store_path`` ends in .sqlite/.sqlite3/.db, else json).
+        self._store = self._open_store(store_path, backend)
         self._prompts = prompt_registry or PromptRegistry()
         # Continuous mode: run a light reflect (decay + lifecycle + prune,
         # no community / colour passes) every N observations so the world
@@ -152,6 +157,18 @@ class World:
         )
 
     # ── Agent interface ───────────────────────────────────────────────
+
+    @staticmethod
+    def _open_store(store_path: str | Path, backend: str):
+        choice = (backend or "auto").strip().lower()
+        if choice == "auto":
+            suffix = Path(store_path).suffix.lower()
+            choice = "sqlite" if suffix in {".sqlite", ".sqlite3", ".db"} else "json"
+        if choice == "sqlite":
+            return SqliteStore(store_path)
+        if choice == "json":
+            return JsonStore(store_path)
+        raise ValueError(f"unknown store backend: {backend!r} (use 'json', 'sqlite' or 'auto')")
 
     @property
     def clock(self) -> CognitiveClock:

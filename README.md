@@ -145,6 +145,9 @@ It is not just “store some notes and query later”.
 from world0 import World, Observation
 
 w = World(store_path=".world0")
+# or a single-file SQLite store (chosen automatically by the suffix):
+# 或使用单文件 SQLite 存储（按后缀自动选择）：
+# w = World(store_path="world0.sqlite")
 
 # Agent submits observations from its work
 # Agent 提交工作中的观察
