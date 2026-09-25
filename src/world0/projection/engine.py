@@ -106,6 +106,9 @@ class ProjectionEngine:
         # candidate.  Both are multiplied into the MMR relevance score.
         task_lower = task.strip().lower()
         task_affinity: dict[str, float] = {}
+        # 1 − raw affinity: how far a candidate is from the task (0 when
+        # no task is given).  Used as a redundancy floor below.
+        task_mismatch: dict[str, float] = {}
         temporal_freshness: dict[str, float] = {}
         now_tick = self._clock.tick
         now = datetime.now(timezone.utc)
@@ -117,14 +120,17 @@ class ProjectionEngine:
             # unrelated → 0), blended above the discount floor.
             if not task_lower:
                 task_affinity[cid] = 1.0
+                task_mismatch[cid] = 0.0
             elif node:
                 affinity = node.task_affinity(task_lower)
                 task_affinity[cid] = (
                     TASK_AFFINITY_DISCOUNT
                     + (1.0 - TASK_AFFINITY_DISCOUNT) * affinity
                 )
+                task_mismatch[cid] = 1.0 - affinity
             else:
                 task_affinity[cid] = TASK_AFFINITY_DISCOUNT
+                task_mismatch[cid] = 1.0
 
             # Temporal freshness: blend 1.0 (ignore time) with the
             # concept's salience (freshness, or evidence-backed persistence
@@ -157,6 +163,9 @@ class ProjectionEngine:
         while remaining and len(selected) < max_concepts:
             best_id = None
             best_mmr = -float("inf")
+            # The best task match still available: candidates further
+            # from the task than this are "redundant with the task".
+            min_mismatch = min(task_mismatch[cid] for cid in remaining)
 
             for cid in remaining:
                 # Relevance incorporates task affinity and temporal
@@ -183,6 +192,17 @@ class ProjectionEngine:
                         if sim > max_sim:
                             max_sim = sim
                     redundancy = max_sim
+                    # Off-task candidates are redundant with the task
+                    # itself while better-matching candidates remain:
+                    # otherwise a dense on-task cluster (whose members
+                    # share one neighbourhood, sim ≈ 1) loses slots to an
+                    # unrelated cluster that merely looks "diverse".  An
+                    # off-task candidate can still enter when its raw
+                    # relevance beats an on-task one by more than the
+                    # task discount, and it is unconstrained once no
+                    # better match is left (docs §7.12).
+                    if task_mismatch[cid] > min_mismatch:
+                        redundancy = max(redundancy, task_mismatch[cid])
                 else:
                     redundancy = 0.0
 

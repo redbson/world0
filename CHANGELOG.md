@@ -154,6 +154,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reaches parity near 1 000 and yields to fresh context after that.  The
   cognitive benchmark is unchanged; one-off concepts (evidence ≈ 0.06)
   still collapse to the freshness floor.  Sweep: `scripts/sweep_salience.py`.
+- **Task-aware projection redundancy.**  In MMR an off-task candidate
+  is now as redundant as a duplicate (`redundancy = max(sim, 1 −
+  affinity)`) while better-matching candidates remain, so a dense
+  on-task cluster — whose members share one neighbourhood and look
+  fully redundant with each other — no longer loses slots to an
+  unrelated cluster that merely looks diverse.  After a concept drifts
+  from data-engineering to ML usage, `project(task="data eng")` showed
+  the ML concept `checkpoint` in second place; it now returns the
+  data-engineering neighbourhood only.  The cognitive benchmark rises
+  from ML 0.67/0.67, Ops 0.83/0.83 to 1.00/1.00 on both.  Without a task
+  nothing changes.
 - **Hebbian discovery is gated on association strength.**  Besides
   co-occurring at least twice, a pair is linked only when its Jaccard
   association over observations (`co-occurrences / (mentions_a +

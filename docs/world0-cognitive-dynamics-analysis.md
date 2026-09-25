@@ -423,6 +423,9 @@ $\gamma_{task} = 1 + 0.5\cdot\text{affinity}$，affinity 来自词级匹配（§
 | `scripts/sweep_hebbian.py` | §7.11 的阈值扫描 |
 | `dynamics/hebbian.py`、`world/_reflect.py`、`schemas/types.py`、`core/interfaces.py` | `revalidate()`（第 5b 步）、`ReflectResult.stale_relations`、`HebbianLearner.revalidate` |
 | `tests/test_roadmap_dynamics.py` | +11 个测试 |
+| **第九轮** | |
+| `projection/engine.py` | 任务感知冗余：`redundancy = max(sim, 1 − affinity)`（仅当仍有更贴合任务的候选） |
+| `tests/test_context_drift.py`（新） | 概念漂移下的上下文（4 个测试）；基准 ML/Ops 精度 0.67/0.83 → 1.00/1.00 |
 
 所有字段均有默认值，旧的 JSON 存储可直接加载（`task_profile` 自动回填，tick 与
 recurrence 默认 0）。
@@ -548,7 +551,7 @@ $p \leftarrow p + (1-p)\cdot 0.05$（递减收益，20 次把 0.70 推到 ≈0.8
 - **加权 Jaccard ✗**：按 `weight × ρ_type` 的加权冗余在认知基准上实测**没有
   收益**：λ=0.3 时只是把 ML/Ops 的精度互换（0.67/0.83 → 0.83/0.67），λ≥0.4
   两边都掉到 0.67。因此保留普通集合 Jaccard，代码里留了说明。
-- **λ 扫描**：普通 Jaccard 下 λ ∈ {0.1…0.5} 对认知基准**完全不敏感**
+- **λ 扫描**（第三轮时的数字；第九轮的任务感知冗余之后基准在所有 λ 下都是 1.0，见 §7.12）：普通 Jaccard 下 λ ∈ {0.1…0.5} 对认知基准**完全不敏感**
   （ML 0.67/0.67、Ops 0.83/0.83、交集 4 恒定）——该基准由相关性主导，冗余项
   没有信号。于是构造了一个**对冗余敏感**的场景：hub 下挂 6 个共享同两个锚点的
   近似同族概念，另有一条 3 个概念的链（`TestProjectionDiversity`）。6 个名额下：
@@ -689,6 +692,41 @@ generic 边：当两概念的提及数之和 ≥ 20（`REVALIDATION_MIN_MENTIONS
 结果记入 `ReflectResult.stale_relations`。随机世界一次 reflect：151 → 10 条
 （130 条复验删除、11 条衰减剪枝）；显式关系与被显式复述升级为 typed 关系的边
 永不触碰（`TestHebbianRevalidation`）。
+
+### 7.12 概念漂移下的上下文：任务感知的投影冗余 ✅
+
+**探针**：`pipeline` 先在数据工程语境（ETL、warehouse、Airflow、Spark、schema，
+task="data eng"）用 150 次观察，再在 ML 语境（training、model、GPU、dataset、
+checkpoint，task="ml"）用 150 次。之后：
+
+| 投影 | 修复前 | 修复后 |
+|---|---|---|
+| 无任务 | ML 邻域为主（近因） | 不变 |
+| task="data eng" | Spark、**checkpoint**（ML！）、warehouse、schema、Airflow | Spark、warehouse、schema、Airflow、ETL |
+| task="ml" | 全 ML | 不变 |
+
+分解（激活 / 任务亲和 / 显著性 / 投影相关性）：数据工程概念相关性 0.24–0.25，
+checkpoint 0.19（任务折扣 0.6）——相关性上并没有输。输在 **MMR 的冗余项**：数据工程
+概念两两之间邻居集合完全相同（一个团），选了 Spark 之后其余成员的 Jaccard 冗余
+= 1.0，罚项 0.5；checkpoint 与 Spark 只共享种子，冗余 0.14。$0.5\cdot0.19-0.5\cdot0.14
+> 0.5\cdot0.25-0.5\cdot1.0$，于是"多样性"从任务外的簇里买来了第二个名额，渲染
+出来的"Core Understanding"第二条就是 checkpoint。相关性被种子归一化压在 0.25 的
+窄带里，而冗余项的动态范围是整个 [0, 1]——只靠调 `TASK_AFFINITY_DISCOUNT` 或 λ
+都救不回来（任务外候选要赢，只需 sim 差 > 相关性差 / λ）。
+
+**修复：任务外候选与"任务本身"冗余。** 在 MMR 中
+$\text{redundancy}(c) = \max\big(\max_{s\in S}\text{sim}(c,s),\; 1-\text{affinity}(c)\big)$，
+且只在剩余候选里还有比 $c$ 更贴合任务的候选时生效（`min_mismatch`）；无任务时
+affinity ≡ 1，行为不变。含义：在还有任务内候选可选时，一个与任务无关的概念和一个
+重复概念一样"冗余"；它仍可进入投影——只要其原始相关性超过任务内候选 1/折扣 倍
+（≈1.67×），或任务内候选已用尽。
+
+**副作用是正向的**：认知基准从 ML 0.67/0.67、Ops 0.83/0.83 变为 **1.00/1.00 /
+1.00/1.00**，两个任务投影只共享种子（`scripts/sweep_mmr.py` 现在对 λ ∈ [0.1, 0.5]
+全部 1.0）。原来 0.67 的损失正是同一机制：ML 团自冗余后，MMR 把名额买给了 Ops 簇。
+`tests/test_context_drift.py` 固化漂移场景（任务选中对应邻域、无任务随近因、域视角
+一致、漂移概念保留两个域）；`test_same_world_produces_different_rank_order_under_task_context`
+改为更强的契约（任务外依赖可以不出现）。
 
 ---
 

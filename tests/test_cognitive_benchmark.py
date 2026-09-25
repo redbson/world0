@@ -184,8 +184,17 @@ class TestContextSensitivityBenchmark:
         ops_ranked = ranked_projection_names(ops_projection)
 
         assert ml_ranked != ops_ranked
-        assert ml_ranked.index("PyTorch") < ml_ranked.index("deployment")
-        assert ops_ranked.index("deployment") < ops_ranked.index("PyTorch")
+        # The task's own dependency leads; the other task's dependency is
+        # either absent (task-aware redundancy keeps off-task concepts out
+        # while on-task ones remain) or ranked behind it.
+        assert "PyTorch" in ml_ranked
+        assert "deployment" in ops_ranked
+        assert ml_ranked.index("PyTorch") < (
+            ml_ranked.index("deployment") if "deployment" in ml_ranked else len(ml_ranked)
+        )
+        assert ops_ranked.index("deployment") < (
+            ops_ranked.index("PyTorch") if "PyTorch" in ops_ranked else len(ops_ranked)
+        )
 
 
 class TestControlGroupBenchmark:
