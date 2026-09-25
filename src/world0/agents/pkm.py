@@ -173,6 +173,19 @@ class PKMAgent:
         self._skill_registry = None
         self._skill_executor = None
 
+    def close(self) -> None:
+        """Persist the world's learning state and release its store.
+
+        ``World`` flushes concepts and relations on every observation but
+        writes the bulky Hebbian learning record on an amortised schedule
+        once a world is large; call this at the end of a session (the CLI
+        and web app do) so the record on disk is exact.  Safe to call
+        more than once.
+        """
+        world = getattr(self, "_world", None)
+        if world is not None:
+            world.close()
+
     @property
     def world(self) -> World:
         """Access the underlying World 0 instance."""

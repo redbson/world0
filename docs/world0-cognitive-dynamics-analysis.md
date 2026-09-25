@@ -811,6 +811,9 @@ reflect 0.28 s、投影 0.3 ms、重启加载 0.28 s——都没问题；但**�
    与新增的 `World.close()`（也支持 `with World(...) as w`）时强制写。概念与关系仍然
    每次观察 flush；崩溃最多丢失 20 次观察的**共现计数**。
 
+agents 层：`PKMAgent.close()` 调用 `World.close()`，CLI 在退出时（`try/finally`）、Web 在
+`shutdown` 事件时调用。
+
 `tests/test_learning_state.py`：小世界不 close 也重启一致、记录与 state 分离、旧
 格式迁移、大世界 60 次观察只写 2–4 次学习记录、reflect/close 强制写、close 后重启
 逐字一致、SQLite 记录往返。

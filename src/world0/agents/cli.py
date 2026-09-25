@@ -578,56 +578,60 @@ Examples:
 
     llm = _create_provider(args.provider, args.model)
     agent = PKMAgent(store_path=args.store, llm=llm, space_id=args.space)
+    try:
 
-    if args.command is None:
-        # Interactive mode
-        if agent.space is not None:
-            print(f"[space: {agent.space.name} ({agent.space.id})]")
-        agent.chat()
-        return
+        if args.command is None:
+            # Interactive mode
+            if agent.space is not None:
+                print(f"[space: {agent.space.name} ({agent.space.id})]")
+            agent.chat()
+            return
 
-    if args.command == "learn":
-        print(agent.learn(args.text, task=args.task, source=args.source))
-    elif args.command == "ask":
-        print(agent.ask(args.query))
-    elif args.command == "explore":
-        print(agent.explore(args.concept))
-    elif args.command == "connect":
-        print(agent.connect(args.source, args.target, args.type))
-    elif args.command == "search":
-        print(agent.search(args.query))
-    elif args.command == "web-search":
-        print(agent.search_web(
-            args.query,
-            focus=args.focus,
-            max_results=args.limit,
-            domains=args.domains,
-            fetch_pages=args.fetch_pages,
-        ))
-    elif args.command == "status":
-        print(agent.status())
-    elif args.command == "reflect":
-        print(agent.reflect())
-    elif args.command == "claude":
-        print(agent.consult_external_agent(
-            "claude",
-            args.prompt,
-            workspace=args.workspace,
-            problem=args.problem,
-            model=args.external_model,
-            use_world0_context=not args.no_world0_context,
-        ))
-    elif args.command == "codex":
-        print(agent.consult_external_agent(
-            "codex",
-            args.prompt,
-            workspace=args.workspace,
-            problem=args.problem,
-            model=args.external_model,
-            use_world0_context=not args.no_world0_context,
-        ))
-    elif args.command == "viz":
-        print(agent.visualize(output=args.output))
+        if args.command == "learn":
+            print(agent.learn(args.text, task=args.task, source=args.source))
+        elif args.command == "ask":
+            print(agent.ask(args.query))
+        elif args.command == "explore":
+            print(agent.explore(args.concept))
+        elif args.command == "connect":
+            print(agent.connect(args.source, args.target, args.type))
+        elif args.command == "search":
+            print(agent.search(args.query))
+        elif args.command == "web-search":
+            print(agent.search_web(
+                args.query,
+                focus=args.focus,
+                max_results=args.limit,
+                domains=args.domains,
+                fetch_pages=args.fetch_pages,
+            ))
+        elif args.command == "status":
+            print(agent.status())
+        elif args.command == "reflect":
+            print(agent.reflect())
+        elif args.command == "claude":
+            print(agent.consult_external_agent(
+                "claude",
+                args.prompt,
+                workspace=args.workspace,
+                problem=args.problem,
+                model=args.external_model,
+                use_world0_context=not args.no_world0_context,
+            ))
+        elif args.command == "codex":
+            print(agent.consult_external_agent(
+                "codex",
+                args.prompt,
+                workspace=args.workspace,
+                problem=args.problem,
+                model=args.external_model,
+                use_world0_context=not args.no_world0_context,
+            ))
+        elif args.command == "viz":
+            print(agent.visualize(output=args.output))
+    finally:
+        # Persist the amortised learning record before exiting.
+        agent.close()
 
 
 if __name__ == "__main__":

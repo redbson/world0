@@ -169,6 +169,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ingest cost in a 2 000-concept world.  Older stores with inline
   counters are migrated on first open; concepts and relations are still
   flushed on every observation.
+  `PKMAgent.close()` persists it; the CLI calls it on exit and the web
+  app on shutdown.
 - **Explicit relations relax toward a probability-anchored floor.**
   Relation `weight` / `confidence` decay toward `0.1 × probability`
   (forgotten on the 4380-observation era scale) instead of toward 0, so
