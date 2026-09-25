@@ -4,9 +4,21 @@ When multiple concepts co-occur in a single observation, their connections
 are automatically strengthened (or created if they don't exist).
 This is the primary mechanism by which relations are *discovered*.
 
-Optimization: a co-occurrence threshold prevents O(n²) relation explosion.
-Only concept pairs that have co-occurred >= COOCCURRENCE_THRESHOLD times
-actually produce a RelationEdge. Below that, only a counter is incremented.
+Two gates keep discovery from degenerating into a clique:
+
+1. **Count.**  A pair must co-occur at least ``COOCCURRENCE_THRESHOLD``
+   times; below that only a counter is incremented.
+2. **Association.**  Co-occurring twice is not evidence of a relation
+   when both concepts are mentioned all the time — in a world of 60
+   concepts observed six at a time every pair co-occurs by chance every
+   ~100 observations, and with the count gate alone 83 % of all pairs
+   were linked after 400 observations (analysis doc §7.11).  A pair is
+   therefore linked only when its Jaccard association over observations
+   (``co-occurrences / (mentions_a + mentions_b − co-occurrences)``) is
+   at least ``HEBBIAN_MIN_ASSOCIATION``: "of the observations mentioning
+   either concept, this share mentions both".  Concepts that always
+   appear together score 1.0; a hub mentioned everywhere is not linked to
+   a concept it merely happens to share a few observations with.
 
 The pending counters are part of the world's learning state: ``snapshot``
 / ``restore`` let the owning ``World`` persist them alongside the rest of
@@ -28,6 +40,12 @@ if TYPE_CHECKING:
 # Minimum co-occurrence count before a Hebbian relation is created.
 # Prevents noise relations from a single shared observation.
 COOCCURRENCE_THRESHOLD: int = 2
+
+# Minimum Jaccard association over observations before a pair that has
+# crossed COOCCURRENCE_THRESHOLD is linked.  Calibrated in
+# scripts/sweep_hebbian.py: uniformly random co-mention scores ≈ 0.05–0.1,
+# concepts drawn from one topic ≈ 0.4, always-together pairs 1.0.
+HEBBIAN_MIN_ASSOCIATION: float = 0.2
 
 # Maximum concept pairs to process per learn() call.
 # When an observation contains many concepts, only the first MAX_PAIRS
@@ -55,6 +73,11 @@ class HebbianEngine:
         # Key: frozenset({id_a, id_b}), Value: count.  Insertion-ordered so
         # eviction under MAX_PENDING_PAIRS drops the oldest pairs first.
         self._cooccurrence: dict[frozenset[str], int] = {}
+        # Association statistics: observations seen and mentions per
+        # concept (unique per observation).  Persisted with the pending
+        # counters so the association gate survives restarts.
+        self._observations: int = 0
+        self._mentions: dict[str, int] = {}
 
     def learn(
         self,
@@ -67,13 +90,20 @@ class HebbianEngine:
         For every pair of concepts in the list:
           - If a relation exists → reinforce it
           - If no relation exists and co-occurrence < threshold → increment counter
-          - If no relation exists and co-occurrence >= threshold → create PARALLEL
+          - If no relation exists, co-occurrence >= threshold and the
+            pair's association >= HEBBIAN_MIN_ASSOCIATION → create PARALLEL
 
         Returns list of relation ids that were created (not reinforced).
         """
         new_relation_ids: list[str] = []
 
-        pairs = list(combinations(dict.fromkeys(concept_ids), 2))
+        unique_ids = list(dict.fromkeys(concept_ids))
+        if unique_ids:
+            self._observations += 1
+            for cid in unique_ids:
+                self._mentions[cid] = self._mentions.get(cid, 0) + 1
+
+        pairs = list(combinations(unique_ids, 2))
         if len(pairs) > MAX_PAIRS:
             pairs = pairs[:MAX_PAIRS]
 
@@ -85,7 +115,11 @@ class HebbianEngine:
             else:
                 key = frozenset((id_a, id_b))
                 count = self._cooccurrence.get(key, 0) + 1
-                if count >= COOCCURRENCE_THRESHOLD:
+                if (
+                    count >= COOCCURRENCE_THRESHOLD
+                    and self._association(id_a, id_b, count)
+                    >= HEBBIAN_MIN_ASSOCIATION
+                ):
                     edge, is_new = self._relations.discover(
                         id_a,
                         id_b,
@@ -102,6 +136,27 @@ class HebbianEngine:
 
         self._evict_overflow()
         return new_relation_ids
+
+    def _association(self, id_a: str, id_b: str, cooccurrences: int) -> float:
+        """Jaccard association of two concepts over observations."""
+        either = (
+            self._mentions.get(id_a, 0) + self._mentions.get(id_b, 0) - cooccurrences
+        )
+        return cooccurrences / max(either, cooccurrences, 1)
+
+    def association(self, id_a: str, id_b: str) -> float:
+        """Current association of a still-pending pair (0.0 if none)."""
+        count = self._cooccurrence.get(frozenset((id_a, id_b)), 0)
+        return self._association(id_a, id_b, count) if count else 0.0
+
+    @property
+    def observations(self) -> int:
+        """Observations processed by ``learn()`` (for association stats)."""
+        return self._observations
+
+    def mentions(self, concept_id: str) -> int:
+        """Observations in which ``concept_id`` was mentioned."""
+        return self._mentions.get(concept_id, 0)
 
     @property
     def pending_pairs(self) -> int:
@@ -135,11 +190,47 @@ class HebbianEngine:
         self._evict_overflow()
 
     def forget_concept(self, concept_id: str) -> int:
-        """Drop pending pairs that reference a removed concept."""
+        """Drop pending pairs (and mention stats) of a removed concept."""
         stale = [key for key in self._cooccurrence if concept_id in key]
         for key in stale:
             del self._cooccurrence[key]
+        self._mentions.pop(concept_id, None)
         return len(stale)
+
+    # ── persistence of association statistics ────────────────────────
+
+    def stats_snapshot(self) -> dict:
+        """JSON-serialisable observation / mention counts."""
+        return {
+            "observations": self._observations,
+            "mentions": dict(self._mentions),
+        }
+
+    def restore_stats(self, snapshot: dict | None) -> None:
+        """Replace the association statistics with a saved snapshot.
+
+        A world persisted before association statistics existed starts
+        counting from zero; until statistics accumulate the gate then
+        sees ``cooccurrences ≥ mentions`` and behaves like the old
+        count-only rule.
+        """
+        self._observations = 0
+        self._mentions.clear()
+        if not snapshot or not isinstance(snapshot, dict):
+            return
+        try:
+            self._observations = max(0, int(snapshot.get("observations", 0)))
+        except (TypeError, ValueError):
+            self._observations = 0
+        mentions = snapshot.get("mentions") or {}
+        if isinstance(mentions, dict):
+            for cid, count in mentions.items():
+                try:
+                    value = int(count)
+                except (TypeError, ValueError):
+                    continue
+                if value > 0:
+                    self._mentions[str(cid)] = value
 
     def _evict_overflow(self) -> None:
         overflow = len(self._cooccurrence) - MAX_PENDING_PAIRS

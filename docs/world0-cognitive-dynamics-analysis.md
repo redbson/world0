@@ -417,6 +417,11 @@ $\gamma_{task} = 1 + 0.5\cdot\text{affinity}$，affinity 来自词级匹配（§
 | `perspectives/__init__.py`（新） | 命名画像 `PROFILES`、`get_perspective()`、`perspective_names()` |
 | `world/facade.py` | `project(perspective="<profile>")` |
 | `tests/test_perspective.py` | +10 个测试 |
+| **第八轮** | |
+| `dynamics/hebbian.py` | 观察/提及统计、`HEBBIAN_MIN_ASSOCIATION = 0.2` 关联门、`association()`、`stats_snapshot()/restore_stats()` |
+| `world/facade.py` | 持久化 `hebbian_stats` |
+| `scripts/sweep_hebbian.py` | §7.11 的阈值扫描 |
+| `tests/test_roadmap_dynamics.py` | +7 个测试 |
 
 所有字段均有默认值，旧的 JSON 存储可直接加载（`task_profile` 自动回填，tick 与
 recurrence 默认 0）。
@@ -633,6 +638,45 @@ AGENTS.md 要求测试"投影稳定性"。第六轮在认知基准世界上做�
 neural network、training pipeline 都是 0.1732）——这是基准世界的 Hebbian 全连接
 结构造成的真实对称，不是数值噪声；平局由 `(−score, id)` 决定性打破。
 `tests/test_projection_stability.py` 把前四项固化为回归测试。
+
+### 7.11 Hebbian 发现的关联门（防止泛化边蔓延）✅
+
+**第八轮探针**：60 个概念、每次观察随机取 6 个、400 次观察（无结构的对照世界）。
+只有"共现 ≥ 2 次"这一道门时：
+
+| 观察数 | 关系数 | 其中 generic_relation | 平均度 / 最大度 |
+|---|---|---|---|
+| 50 | 138 | 126 | 4.7 / 15 |
+| 100 | 393 | 378 | 13.1 / 26 |
+| 200 | 901 | 874 | 30.0 / 48 |
+| 400 | 1503 | 1468（全部 1770 对的 83%） | 50.1 / 58 |
+
+一次 `reflect()` 只剪掉 73 条；投影里 18 条关系全是 generic_relation，显式声明的
+35 条 depends_on 骨干完全不可见——这正是 AGENTS.md 警告的"无结构语义蔓延"，也违反
+规则 3（`related_to` 只能是临时兜底）。原因是概率上的：P 个概念每次取 k 个，任一
+对的期望共现次数为 $N k^2/P^2$，400 次观察下 ≈ 4，**每一对都会靠运气过门**。
+
+**修复：** `HebbianEngine` 记录观察数与每个概念的提及数（每次观察去重），一对概念
+过了计数门之后还要满足 Jaccard 关联度
+$J = \frac{c_{ab}}{n_a + n_b - c_{ab}} \ge$ `HEBBIAN_MIN_ASSOCIATION`（"提到两者之一
+的观察里，有多大比例同时提到两者"）。总是一起出现的对 $J=1$；无处不在的枢纽概念
+与偶然同框的概念 $J = n_x/N$ 很小，不会被连上。统计量随 `hebbian_pending` 一起持久化
+（`hebbian_stats`），旧存储没有该字段时从零计数，在统计积累前退化为旧的计数门。
+
+`scripts/sweep_hebbian.py`（随机世界、6 主题世界各 400 次观察，认知基准）：
+
+| θ | 随机世界 generic 边（占全部对） | 主题内 270 对被连 | 跨主题边 | 基准 ML / Ops |
+|---|---|---|---|---|
+| 0.0（修复前） | 1505（85%） | 270（100%） | 127 | 0.67/0.67、0.83/0.83 |
+| 0.1 | 516（29%） | 270（100%） | 12 | 不变 |
+| **0.2** | **152（9%）** | **269（100%）** | **3** | **不变** |
+| 0.3 | 54（3%） | 248（92%） | 0 | 不变 |
+| 0.4 | 39（2%） | 183（68%） | 0 | 不变 |
+
+取 **0.2**：主题内的关联完整保留，跨主题噪声几乎消失，随机同框的蔓延下降一个量级；
+认知基准（同一批概念反复共现，$J=1$）不受影响。`TestHebbianAssociationGate` 覆盖
+随机世界不成团、主题伙伴仍相连、总是同现两次即连、枢纽不与过客相连、统计量重启后
+保留、旧状态兼容、删除概念清理统计。
 
 ---
 

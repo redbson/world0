@@ -139,6 +139,7 @@ class World:
         # so a pair first seen last session and again now still crosses
         # the discovery threshold.
         self._hebbian.restore(self._state.get("hebbian_pending"))
+        self._hebbian.restore_stats(self._state.get("hebbian_stats"))
 
         # ── Pipelines ────────────────────────────────────────────────
         self._ingest_pipeline = IngestPipeline(
@@ -193,7 +194,7 @@ class World:
         return result
 
     def _persist_learning_state(self) -> None:
-        """Save the clock and pending Hebbian counters when they changed."""
+        """Save the clock and Hebbian learning state when they changed."""
         changed = False
         if self._state.get("tick") != self._clock.tick:
             self._state["tick"] = self._clock.tick
@@ -201,6 +202,10 @@ class World:
         pending = self._hebbian.snapshot()
         if pending != self._state.get("hebbian_pending"):
             self._state["hebbian_pending"] = pending
+            changed = True
+        stats = self._hebbian.stats_snapshot()
+        if stats != self._state.get("hebbian_stats"):
+            self._state["hebbian_stats"] = stats
             changed = True
         if changed:
             self._store.save_state(self._state)

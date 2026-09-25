@@ -154,6 +154,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reaches parity near 1 000 and yields to fresh context after that.  The
   cognitive benchmark is unchanged; one-off concepts (evidence ≈ 0.06)
   still collapse to the freshness floor.  Sweep: `scripts/sweep_salience.py`.
+- **Hebbian discovery is gated on association strength.**  Besides
+  co-occurring at least twice, a pair is linked only when its Jaccard
+  association over observations (`co-occurrences / (mentions_a +
+  mentions_b − co-occurrences)`) is at least `HEBBIAN_MIN_ASSOCIATION`
+  (0.2).  With the count gate alone, 60 concepts observed six at a time
+  linked 85 % of all pairs with untyped `generic_relation` edges after
+  400 random observations and buried the explicit backbone; the gate
+  keeps that at 9 % while every pair drawn from one topic stays linked
+  and the benchmark is unchanged.  Observation and mention counts are
+  persisted as `hebbian_stats`; stores without it start counting from
+  zero.  Sweep: `scripts/sweep_hebbian.py`.
 - **Perspectives condition propagation at the semantic level.**
   `Perspective.relation_type_weights` accepts semantic relation names and
   aliases (`dependence` / `depends_on`, `inclusion` / `contains`, …) as

@@ -565,3 +565,90 @@ class TestSaliencePersistence:
         for t in (0, 10, 100, 1000, 5000, 20_000):
             s = node.salience(now_tick=t)
             assert node.temporal_relevance(now_tick=t) <= s <= 1.0
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# §7.11 Hebbian discovery gated on association strength
+# ═══════════════════════════════════════════════════════════════════════
+
+
+class TestHebbianAssociationGate:
+    """Co-occurring twice is not a relation when both concepts are
+    mentioned all the time.  With the count gate alone, 60 concepts
+    observed six at a time linked 85 % of all pairs after 400 random
+    observations; the Jaccard gate keeps that at ~9 % while every pair
+    drawn from one topic is still linked (scripts/sweep_hebbian.py)."""
+
+    POOL = [f"c{i}" for i in range(60)]
+
+    def _generic_edges(self, world: World) -> int:
+        return sum(1 for r in world.relations.all() if r.semantic_relation == "generic_relation")
+
+    def test_random_co_mention_does_not_form_a_clique(self, world):
+        import random
+
+        rng = random.Random(7)
+        for _ in range(400):
+            world.ingest(Observation(concepts=rng.sample(self.POOL, 6), source="s"))
+        total_pairs = 60 * 59 // 2
+        assert self._generic_edges(world) < 0.15 * total_pairs
+
+    def test_topic_mates_are_still_linked(self, world):
+        import random
+
+        rng = random.Random(7)
+        topics = [self.POOL[i * 10 : (i + 1) * 10] for i in range(6)]
+        for _ in range(400):
+            world.ingest(Observation(concepts=rng.sample(rng.choice(topics), 6), source="s"))
+        topic = topics[0]
+        linked = 0
+        for i, a in enumerate(topic):
+            for b in topic[i + 1 :]:
+                ia, ib = world.concepts.resolve(a).id, world.concepts.resolve(b).id
+                linked += bool(world.relations.find_any_between(ia, ib))
+        assert linked >= 0.95 * (10 * 9 // 2)
+
+    def test_always_together_pair_links_at_threshold(self, world):
+        world.ingest(Observation(concepts=["x", "y"], source="s"))
+        result = world.ingest(Observation(concepts=["x", "y"], source="s"))
+        assert result.hebbian_relations == ["x ↔ y"]
+
+    def test_hub_is_not_linked_to_a_passing_acquaintance(self, world):
+        # "hub" is in every observation; "rare" shares only two of forty.
+        for i in range(40):
+            others = [f"o{i}a", f"o{i}b"]
+            if i in (10, 30):
+                others.append("rare")
+            world.ingest(Observation(concepts=["hub", *others], source="s"))
+        hub, rare = world.concepts.resolve("hub"), world.concepts.resolve("rare")
+        assert world.relations.find_any_between(hub.id, rare.id) == []
+        assert world._hebbian.association(hub.id, rare.id) < 0.2
+
+    def test_association_statistics_survive_restart(self, tmp_path):
+        root = tmp_path / "heb"
+        first = World(store_path=root)
+        for i in range(5):
+            first.ingest(Observation(concepts=["hub", f"o{i}"], source="s"))
+        hub = first.concepts.resolve("hub").id
+        assert first._hebbian.mentions(hub) == 5
+        assert first._hebbian.observations == 5
+        second = World(store_path=root)
+        assert second._hebbian.mentions(hub) == 5
+        assert second._hebbian.observations == 5
+
+    def test_legacy_state_without_statistics_restores(self, world):
+        world._hebbian.restore_stats(None)
+        world._hebbian.restore_stats({"observations": "x", "mentions": {"a": "b", "c": 2}})
+        assert world._hebbian.observations == 0
+        assert world._hebbian.mentions("c") == 2
+        assert world._hebbian.mentions("a") == 0
+        # and the count-only behaviour holds until statistics accumulate
+        world.ingest(Observation(concepts=["p", "q"], source="s"))
+        assert world.ingest(Observation(concepts=["p", "q"], source="s")).hebbian_relations == ["p ↔ q"]
+
+    def test_forget_concept_drops_mentions(self, world):
+        world.ingest(Observation(concepts=["a", "b"], source="s"))
+        a = world.concepts.resolve("a").id
+        assert world._hebbian.mentions(a) == 1
+        world._hebbian.forget_concept(a)
+        assert world._hebbian.mentions(a) == 0
