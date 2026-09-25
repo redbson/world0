@@ -163,12 +163,12 @@ class ActivationEngine:
             source_score
             * relation.weight * perspective.weight_for(relation.type)
             * perspective.weight_for_direction(forward | backward)
-            * max(neighbor.confidence, PROPAGATION_FLOOR)
+            * max(neighbor.confidence, neighbor.evidence, PROPAGATION_FLOOR)
             * depth_decay
             * task_affinity
             * domain_affinity
             * relation.temporal_relevance
-            * neighbor.temporal_relevance
+            * neighbor.salience  (freshness ∨ evidence-backed persistence)
 
         Contributions arriving at the same concept in the same layer are
         combined with a bounded noisy-OR (see module docstring).
@@ -278,8 +278,15 @@ class ActivationEngine:
                         * perspective.weight_for_direction(direction)
                     )
 
+                    # Readiness = "is this a real concept worth visiting":
+                    # the stronger of the current (decayed) confidence and
+                    # the time-independent evidence, so a dormant but
+                    # well-confirmed neighbor is not charged for its age
+                    # here as well as in the salience term below.
                     neighbor_readiness = max(
-                        neighbor.confidence, PROPAGATION_FLOOR
+                        neighbor.confidence,
+                        neighbor.evidence(),
+                        PROPAGATION_FLOOR,
                     )
 
                     task_boost = 1.0
@@ -300,7 +307,10 @@ class ActivationEngine:
                     rel_freshness = rel.temporal_relevance(
                         RELATION_TEMPORAL_HL, now_tick=now_tick, now=now
                     )
-                    neighbor_freshness = neighbor.temporal_relevance(
+                    # Salience, not raw freshness: a well-evidenced but
+                    # dormant neighbor keeps a persistence floor so time is
+                    # not charged twice (decayed confidence × freshness).
+                    neighbor_freshness = neighbor.salience(
                         CONCEPT_TEMPORAL_HL, now_tick=now_tick, now=now
                     )
 

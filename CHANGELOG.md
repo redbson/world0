@@ -35,6 +35,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   so a dormant world still ages a little.  `WorldStatus.cognitive_tick`
   exposes the current tick; `world.clock.advance(n)` is the time
   simulator for tests and calibration.
+- **Layer-boundary test** (`tests/test_layer_boundaries.py`) — walks the
+  imports of every core module and fails if the conceptual core reaches
+  into `agents`, `llm`, `extraction` or the presentation packages, or if
+  anything outside `agents` imports it (AGENTS.md Rule 6).
 - **Cognitive-dynamics analysis** (`docs/world0-cognitive-dynamics-analysis.md`)
   — mathematical review of decay, activation, projection, lifecycle and
   Hebbian learning with before/after probe evidence, parameter calibration
@@ -129,6 +133,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   picks SQLite for `.sqlite` / `.sqlite3` / `.db` paths and JSON-per-file
   otherwise, so existing stores are unaffected.  Flushing 60 × 40 dirty
   concepts: 0.59 s (JSON) → 0.23 s (SQLite).
+- **Salience is a real quantity; time is charged once per hop.**
+  `ConceptNode.salience()` is now freshness *or* evidence-backed
+  persistence (`0.7 × evidence()`, forgotten on the same 4380-observation
+  era as the confidence floor), whichever is larger; activation and
+  projection read it instead of raw `temporal_relevance()`.  Propagation
+  readiness is `max(confidence, evidence(), 0.3)` instead of
+  `max(confidence, 0.3)`.  A dependency confirmed fifty times then dormant
+  scored ~0.2× a same-observation one-off and never entered a
+  slot-limited projection; it now holds a top slot for ~500 observations,
+  reaches parity near 1 000 and yields to fresh context after that.  The
+  cognitive benchmark is unchanged; one-off concepts (evidence ≈ 0.06)
+  still collapse to the freshness floor.  Sweep: `scripts/sweep_salience.py`.
 
 ### Fixed
 - Relation `probability` (belief the typed relation is correct) is no

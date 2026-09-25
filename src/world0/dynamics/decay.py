@@ -46,7 +46,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING
 
 from world0.schemas.clock import CognitiveClock, wall_now
-from world0.schemas.concept import ConceptNode, Maturity
+from world0.schemas.concept import SALIENCE_ERA_HL, ConceptNode, Maturity
 
 if TYPE_CHECKING:
     from world0.core import ConceptStore, RelationStore
@@ -98,7 +98,7 @@ CONCEPT_MAX_HALF_LIFE: float = 8760.0
 # forget.
 EVIDENCE_FLOOR_MAX: float = 0.35
 EVIDENCE_FLOOR_K: float = 10.0
-EVIDENCE_FLOOR_ERA_HL: float = 4380.0
+EVIDENCE_FLOOR_ERA_HL: float = SALIENCE_ERA_HL  # one era for both halves of belief
 
 # Confidence below which a concept is marked FADING.
 FADING_THRESHOLD: float = 0.05

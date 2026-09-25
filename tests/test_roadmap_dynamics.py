@@ -6,12 +6,14 @@ analysis (``docs/world0-cognitive-dynamics-analysis.md`` §7):
 - §7.4 perspective-level directional propagation
 - §7.6 token-indexed synonym shortlist (same decisions, no full scan)
 - §7.8 light reflect and ``auto_reflect_every`` continuous mode
+- §7.1 salience = freshness ∨ evidence-backed persistence (single clock)
 """
 
 from __future__ import annotations
 
 import pytest
 
+from tests._cognitive_benchmark import ranked_projection_names
 from world0 import Observation, Perspective, World
 from world0.schemas.concept import (
     RECURRENCE_WINDOW,
@@ -480,3 +482,86 @@ class TestProjectionDiversity:
         finally:
             pe.MMR_LAMBDA = original
         assert sum(n.startswith("siblingA") for n in names) >= 4
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# §7.1 Salience: freshness ∨ evidence-backed persistence
+# ═══════════════════════════════════════════════════════════════════════
+
+
+class TestSaliencePersistence:
+    """Time must be charged once per concept during activation.
+
+    Before: a dormant neighbor paid for its age through the decayed
+    ``confidence`` *and* the freshness term, so a dependency confirmed
+    fifty times scored ~0.2× a same-observation one-off mention and never
+    made a slot-limited projection.  Now readiness reads the stronger of
+    confidence and evidence, and salience keeps an evidence-backed floor
+    that forgets on the era scale.
+    """
+
+    @staticmethod
+    def _dormant_veteran(world: World, dormant: int, rookies: int = 6):
+        for _ in range(50):
+            world.ingest(
+                Observation(
+                    concepts=["Seed", "Veteran"],
+                    relations=[("Seed", "Veteran", "depends_on")],
+                    source="s",
+                )
+            )
+            world.clock.advance(23)
+        world.clock.advance(dormant)
+        world.reflect(light=True)
+        for i in range(rookies):
+            world.ingest(
+                Observation(
+                    concepts=["Seed", f"Rookie{i}"],
+                    relations=[("Seed", f"Rookie{i}", "depends_on")],
+                    source="s",
+                )
+            )
+        seed = world.concepts.resolve("Seed").id
+        scores = world._activation.activate([seed], record=False)
+        veteran = scores[world.concepts.resolve("Veteran").id]
+        best_rookie = max(
+            scores[world.concepts.resolve(f"Rookie{i}").id] for i in range(rookies)
+        )
+        return veteran, best_rookie
+
+    def test_confirmed_dependency_holds_a_slot_against_fresh_one_offs(self, world):
+        veteran, rookie = self._dormant_veteran(world, dormant=500)
+        assert veteran > rookie
+        ranked = ranked_projection_names(world.project(["Seed"], max_concepts=4))
+        assert "Veteran" in ranked
+
+    def test_fresh_context_still_wins_after_long_dormancy(self, world):
+        """Context changes relevance: persistence is a floor, not immunity."""
+        veteran, rookie = self._dormant_veteran(world, dormant=3000)
+        assert veteran < rookie
+
+    def test_disconfirmation_lowers_propagation_through_dormant_neighbor(self, world):
+        before, _ = self._dormant_veteran(world, dormant=500)
+        node = world.concepts.resolve("Veteran")
+        for _ in range(40):
+            node.weaken(source="s")
+        seed = world.concepts.resolve("Seed").id
+        after = world._activation.activate([seed], record=False)[node.id]
+        assert after < before
+
+    def test_one_off_does_not_persist(self):
+        node = ConceptNode(name="noise", activation_count=1, last_activated_tick=0)
+        assert node.salience(now_tick=2000) == pytest.approx(0.1)
+        assert node.salience(now_tick=2000) == node.temporal_relevance(now_tick=2000)
+
+    def test_persistence_forgets_on_the_era_scale(self):
+        node = ConceptNode(name="old", activation_count=50, last_activated_tick=0)
+        assert node.salience(now_tick=500) > 0.5
+        assert node.salience(now_tick=5000) < node.salience(now_tick=500)
+        assert node.salience(now_tick=30_000) == pytest.approx(0.1)
+
+    def test_salience_is_bounded_by_freshness_and_one(self):
+        node = ConceptNode(name="x", activation_count=20, last_activated_tick=0)
+        for t in (0, 10, 100, 1000, 5000, 20_000):
+            s = node.salience(now_tick=t)
+            assert node.temporal_relevance(now_tick=t) <= s <= 1.0

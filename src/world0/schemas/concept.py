@@ -108,6 +108,23 @@ MAX_TASK_PROFILE_ENTRIES: int = 64
 RECURRENCE_WINDOW: int = 24
 REVIVAL_RECURRENCE: int = 3
 
+# ── Salience: freshness ∨ evidence-backed persistence ────────────────
+# ``salience()`` keeps a well-evidenced concept in view while it is
+# dormant: the persistence floor is SALIENCE_EVIDENCE_SHARE × evidence(),
+# forgotten on the era scale SALIENCE_ERA_HL (ticks) — the same era the
+# decay engine uses for the confidence floor, so both halves of the
+# belief forget deep history at one rate.
+#
+# 0.7 was chosen by sweep (docs/world0-cognitive-dynamics-analysis.md
+# §7.1, scripts/sweep_salience.py): the cognitive benchmark is unchanged
+# for every share in [0, 1]; in a slot-limited projection a dependency
+# confirmed fifty times then dormant keeps a top slot against six fresh
+# one-off mentions for ~500 observations, reaches parity around 1 000
+# and yields to fresh context after that.  A one-off (evidence ≈ 0.06)
+# never rises above the freshness floor, so noise does not persist.
+SALIENCE_EVIDENCE_SHARE: float = 0.7
+SALIENCE_ERA_HL: float = 4380.0
+
 
 def normalize_task_label(task: str) -> str:
     """Canonical form of a task label used as a ``task_profile`` key."""
@@ -575,14 +592,32 @@ class ConceptNode(BaseModel):
         now_tick: int | None = None,
         now: datetime | None = None,
     ) -> float:
-        """How *current* this concept is, in [0.1, 1] — independent of evidence.
+        """How *present* this concept is in the world right now, in [0.1, 1].
 
-        The "is this relevant now?" half of the belief: freshness in
-        cognitive time (an alias of ``temporal_relevance``).  ``confidence``
-        blends both halves; callers that need them apart should read
-        ``evidence()`` and ``salience()`` directly.
+        The "is this relevant now?" half of the belief.  A concept is
+        salient either because it was **recently active** (freshness in
+        cognitive time, ``temporal_relevance``) or because it is **well
+        established** (structural persistence: ``evidence()`` scaled by
+        ``SALIENCE_EVIDENCE_SHARE`` and forgotten on the era scale
+        ``SALIENCE_ERA_HL``).  The two are combined with ``max`` — the
+        stronger reason to keep the concept in view wins.
+
+        Without the persistence term, time would be charged twice against
+        a dormant concept during activation (once through the decayed
+        ``confidence``, once through freshness) and a dependency confirmed
+        fifty times fell below the activation cut after ~1 000 unrelated
+        observations while a fresh one-off mention stayed.  A one-off
+        concept has evidence ≈ 0.06, so its salience still collapses to
+        the freshness floor: noise does not persist.
         """
-        return self.temporal_relevance(half_life, now_tick=now_tick, now=now)
+        fresh = self.temporal_relevance(half_life, now_tick=now_tick, now=now)
+        persistence = SALIENCE_EVIDENCE_SHARE * self.evidence()
+        if persistence <= fresh:
+            return fresh
+        elapsed = self.elapsed_since_activation(now_tick, now)
+        if elapsed > 0 and SALIENCE_ERA_HL > 0:
+            persistence *= math.pow(0.5, elapsed / SALIENCE_ERA_HL)
+        return max(fresh, persistence)
 
     def hours_since_activation(self, now: datetime | None = None) -> float:
         reference = now or datetime.now(timezone.utc)

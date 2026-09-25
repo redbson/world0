@@ -177,7 +177,8 @@ $$c \leftarrow \text{floor} + (c - \text{floor})\cdot 2^{-\Delta/HL_{\text{eff}}
 **仍存的结构性问题（见 §7.1）：** `confidence` 同时承担"证据"和"当前显著性"
 两种语义；`temporal_relevance()`（软新鲜度，168 次观察半衰期）与硬衰减作用在
 同一时钟上，等效遗忘率是二者之和。这是有意设计（文档已说明），但意味着调参时
-二者必须一起看。
+二者必须一起看。**第六轮已处理**：传播 readiness 改读 `max(confidence, evidence)`，
+新鲜度项改读 `salience()`（新鲜度 ∨ 证据持续性），见 §7.1。
 
 ### 3.2 关系概率与权重（`schemas/relation.py`、`dynamics/decay.py`）
 
@@ -402,6 +403,12 @@ $\gamma_{task} = 1 + 0.5\cdot\text{affinity}$，affinity 来自词级匹配（§
 | **第五轮** | |
 | `store/sqlite_store.py`、`store/__init__.py`、`world/facade.py` | SQLite 后端；`World(backend=)` 选择（后缀自动识别） |
 | `tests/test_sqlite_store.py` | 9 个测试（契约、重启一致性、剪枝、flush 成本对比） |
+| **第六轮** | |
+| `schemas/concept.py` | `salience()` = 新鲜度 ∨ `SALIENCE_EVIDENCE_SHARE·evidence()·2^(−Δ/SALIENCE_ERA_HL)`；`dynamics/decay.py` 共用同一纪元常数 |
+| `dynamics/activation.py`、`projection/engine.py` | readiness = `max(confidence, evidence, 0.3)`；新鲜度项改读 `salience()` |
+| `tests/test_roadmap_dynamics.py` | +6 个测试（休眠依赖占位、新语境仍胜、否证降低传播、噪声不持续、纪元遗忘、边界） |
+| `tests/test_layer_boundaries.py`（新） | AST 级层边界测试：核心包不得导入 agents/llm/extraction/…（§7.9） |
+| `scripts/sweep_salience.py` | §7.1 的标定扫描 |
 
 所有字段均有默认值，旧的 JSON 存储可直接加载（`task_profile` 自动回填，tick 与
 recurrence 默认 0）。
@@ -410,29 +417,52 @@ recurrence 默认 0）。
 
 ## 7. 结构性问题与建议路线
 
-按对"持续动态更新的认知系统"的重要性排序。第二轮已实现 §7.2、§7.3、§7.4、
-§7.6、§7.8（标注 ✅，行为测试在 `tests/test_roadmap_dynamics.py`）；§7.1、
-§7.5、§7.7、§7.9 仍是建议。
+按对"持续动态更新的认知系统"的重要性排序。第二轮实现了 §7.2、§7.3、§7.4、
+§7.6、§7.8，第三、四轮完成 §7.5（相对阈值，加权 Jaccard 实测否定），第五轮
+§7.7（SQLite 后端），第六轮 §7.1（单时钟显著性）并把 §7.9 变成测试。标注 ✅ 的
+条目都有行为测试（`tests/test_roadmap_dynamics.py`、`tests/test_sqlite_store.py`、
+`tests/test_layer_boundaries.py`）。
 
-### 7.1 把 `confidence` 拆成"证据"与"显著性"（部分 ✅）
+### 7.1 把 `confidence` 拆成"证据"与"显著性" ✅（单时钟）
 
-`confidence` 现在同时表示"这个概念是真的/有用的"（证据）和"它现在相关"
-（显著性）。第三轮把这两个量作为**只读派生量**暴露出来：
-`ConceptNode.evidence()` = Beta 后验均值 × $n/(n+10)$（与时间无关，只被
-activate/weaken 改变）；`ConceptNode.salience(now_tick=)` = 认知时间新鲜度；
-`Projection.render()` 在 confidence 旁边同时给出 evidence，下游 Agent 不再被
-"confidence: 0.06"单独误导。成熟度门槛已通过 §7.2 的复现分数部分转向证据。
-完整拆分（衰减只作用于 salience、confidence 成为派生量）仍是建议：
+`confidence` 同时表示"这个概念是真的/有用的"（证据）和"它现在相关"（显著性）。
+第三轮把两者作为只读派生量暴露：`ConceptNode.evidence()` = Beta 后验均值 ×
+$n/(n+10)$（与时间无关）；`salience()` 当时只是 `temporal_relevance` 的别名。
+
+**第六轮探针**发现这带来了"双时钟"的实际后果：传播权重同时乘
+`max(confidence, 0.3)`（confidence 已衰减）与 `temporal_relevance`（下限 0.1），
+一个被确认 50 次、随后休眠的依赖在其种子的邻域里得分只有**同一次观察刚提到的
+一次性概念的 0.2 倍**，在名额受限的投影（4 个名额、6 个新概念）中永远进不去——
+而它的 `evidence()` 仍是 0.82。
+
+**修复：** 时间在一次传播中只计一次。
 
 ```text
-evidence(v)  = Beta 后验均值 × 饱和(n)         ——只被 activate/weaken 改变，慢速纪元遗忘
-salience(v)  = temporal_relevance × 任务/视角亲和 ——只被认知时间与上下文改变
-confidence   = evidence × g(salience)            ——派生量，供旧接口读取
+readiness(v) = max(confidence, evidence(v), 0.3)         ——"是不是真概念"，与时间无关
+salience(v)  = max(freshness, 0.7·evidence(v)·2^(−Δ/4380)) ——"现在是否在场"
 ```
 
-成熟度门槛改为基于 `evidence`（加上 §7.2 的复现），衰减只作用于 `salience`。
-这会消除 §3.1 的"双时钟"问题，也让 `render()` 里的 "confidence: 0.06" 不再误导
-下游 Agent。
+`salience()` 成为真正的量：新鲜度**或**证据支撑的持续性，二者取大；持续性按
+与置信度地板相同的纪元半衰期（`SALIENCE_ERA_HL = EVIDENCE_FLOOR_ERA_HL = 4380`）
+遗忘，因此信念的两半以同一速率忘记深历史。激活与投影的新鲜度项都改读
+`salience()`；`temporal_relevance()` 保持纯时间量（群落耦合仍用它）。一次性概念
+的证据 ≈ 0.06，永远抬不过 0.1 的新鲜度下限——噪声不会因此持续。
+
+`scripts/sweep_salience.py` 的标定（认知基准在所有取值下 ML 0.67/0.67、
+Ops 0.83/0.83 不变）：
+
+| 方案 | Δ500 老兵/新兵 | Δ1000 | Δ3000 | Δ8000 | Δ500 时进 4 名额投影 |
+|---|---|---|---|---|---|
+| 修复前 | 0.22 | 0.21 | 0.21 | 0.20 | 否 |
+| 仅 readiness | 0.34 | 0.25 | 0.22 | 0.21 | 否 |
+| share 0.5 | 1.14 | 0.87 | 0.30 | 0.21 | 否（投影再乘一次新鲜度） |
+| **share 0.7** | **1.59** | **1.22** | **0.41** | **0.21** | **是（第 2 位）** |
+| share 1.0 | 2.28 | 1.74 | 0.59 | 0.21 | 是 |
+
+取 **0.7**：被反复确认的依赖在休眠约 500 次观察内仍占据种子投影的前排，约
+1 000 次时与新鲜的一次性提及打平，之后让位给新语境（`test_fresh_context_still_wins_after_long_dormancy`）——
+"上下文改变相关性"仍然成立，只是不再把已建立的知识在一千次观察后从邻域里抹掉。
+投影层的新鲜度混合（`0.7 + 0.3·salience`）保留：它有界，且是种子唯一的时间项。
 
 ### 7.2 基于复现（recurrence）的晋升 ✅
 
@@ -548,6 +578,13 @@ projection ≈ 2.9k 行）的 4 倍。AGENTS.md 明确警告不要滑向"伪装�
 流引擎"。建议后续把 agent 侧的会话/失败/恢复逻辑视为**相邻系统**维护，核心的
 演进优先级放在 §7.1–7.5。
 
+第六轮把这条边界从提醒变成测试：`tests/test_layer_boundaries.py` 用 AST 遍历
+`schemas / core / concepts / relations / dynamics / projection / communities /
+store / metrics` 的每个模块，断言它们不导入 `agents / llm / extraction / prompts /
+models / visualization / world / spaces`；`world/`（门面）可以用 extraction 与
+prompts（文本摄入需要抽取器），但不得导入 agents；仓库内没有任何包导入
+`agents`。新增顶层包必须先在该测试里归类，否则测试失败。当前依赖图完全满足。
+
 ---
 
 ## 8. 复现
@@ -563,6 +600,9 @@ python scripts/calibrate_decay.py 0.1 0.2 0.3
 
 # MMR λ × 冗余度量扫描（§7.5 的结论）
 python scripts/sweep_mmr.py
+
+# 显著性持续性份额扫描（§7.1 的表）
+python scripts/sweep_salience.py
 ```
 
 时间模拟只有一个原语：`world.clock.advance(n)` 让 n 次观察"无事发生"地流逝；

@@ -127,9 +127,10 @@ class ProjectionEngine:
                 task_affinity[cid] = TASK_AFFINITY_DISCOUNT
 
             # Temporal freshness: blend 1.0 (ignore time) with the
-            # actual temporal_relevance using TEMPORAL_WEIGHT.
+            # concept's salience (freshness, or evidence-backed persistence
+            # for well-established dormant concepts) using TEMPORAL_WEIGHT.
             if node:
-                raw_freshness = node.temporal_relevance(
+                raw_freshness = node.salience(
                     PROJECTION_TEMPORAL_HL, now_tick=now_tick, now=now
                 )
                 temporal_freshness[cid] = (
