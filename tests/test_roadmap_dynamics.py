@@ -717,3 +717,62 @@ class TestHebbianRevalidation:
         p_, q_ = world.concepts.resolve("p"), world.concepts.resolve("q")
         edges = world.relations.find_any_between(p_.id, q_.id)
         assert edges and edges[0].semantic_relation == "dependence"
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# §7.14 Probability-anchored relation floor
+# ═══════════════════════════════════════════════════════════════════════
+
+
+class TestRelationEvidenceFloor:
+    """An explicit relation's belief (``probability``) is never
+    time-decayed, but the edge used to be pruned by weight alone after
+    ~1 000 idle observations, losing the belief with it."""
+
+    @staticmethod
+    def _idle_world(idle: int) -> tuple[World, dict[str, str]]:
+        import tempfile
+
+        w = World(store_path=tempfile.mkdtemp())
+        w.ingest(Observation(concepts=["A", "B"], relations=[("A", "B", "depends_on")], source="s"))
+        for _ in range(3):
+            w.ingest(Observation(concepts=["E", "F"], source="s"))  # Hebbian only
+        ids = {n: w.concepts.resolve(n).id for n in "ABEF"}
+        w.clock.advance(idle)
+        for n in "ABEF":  # keep the concepts alive; only relations are under test
+            w.ingest(Observation(concepts=[n], source="s"))
+        w.reflect(light=True)
+        return w, ids
+
+    def test_explicit_relation_survives_long_idle(self):
+        w, ids = self._idle_world(3000)
+        edges = w.relations.find_any_between(ids["A"], ids["B"])
+        assert edges, "explicit relation was pruned"
+        assert edges[0].probability == pytest.approx(0.7, abs=0.05)
+        assert edges[0].weight >= 0.02
+
+    def test_hebbian_relation_still_fades(self):
+        w, ids = self._idle_world(3000)
+        assert w.relations.find_any_between(ids["E"], ids["F"]) == []
+
+    def test_explicit_relation_is_forgotten_on_the_era_scale(self):
+        w, ids = self._idle_world(12_000)
+        assert w.relations.find_any_between(ids["A"], ids["B"]) == []
+
+    def test_confirmation_raises_the_floor(self):
+        import tempfile
+
+        w = World(store_path=tempfile.mkdtemp())
+        w.ingest(Observation(concepts=["A", "B"], relations=[("A", "B", "depends_on")], source="s"))
+        for _ in range(20):  # explicit re-statements move probability toward 1
+            w.ingest(Observation(concepts=["A", "B"], relations=[("A", "B", "depends_on")], source="s"))
+        ids = {n: w.concepts.resolve(n).id for n in "AB"}
+        w.clock.advance(3000)
+        for n in "AB":
+            w.ingest(Observation(concepts=[n], source="s"))
+        w.reflect(light=True)
+        confirmed = w.relations.find_any_between(ids["A"], ids["B"])[0]
+        once, ids1 = self._idle_world(3000)
+        single = once.relations.find_any_between(ids1["A"], ids1["B"])[0]
+        assert confirmed.probability > single.probability
+        assert confirmed.weight > single.weight

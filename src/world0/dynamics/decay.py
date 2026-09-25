@@ -47,6 +47,7 @@ from typing import TYPE_CHECKING
 
 from world0.schemas.clock import CognitiveClock, wall_now
 from world0.schemas.concept import SALIENCE_ERA_HL, ConceptNode, Maturity
+from world0.schemas.relation import RelationEdge
 
 if TYPE_CHECKING:
     from world0.core import ConceptStore, RelationStore
@@ -103,6 +104,20 @@ EVIDENCE_FLOOR_ERA_HL: float = SALIENCE_ERA_HL  # one era for both halves of bel
 # Confidence below which a concept is marked FADING.
 FADING_THRESHOLD: float = 0.05
 
+# ── Probability-anchored relation floor ───────────────────────────────
+# An *explicit* relation's traversal weight (and structural confidence)
+# relax toward RELATION_FLOOR_SHARE × probability instead of toward 0,
+# on the same era scale as the concept floor.  ``probability`` is the
+# belief that the typed relation is correct and is never time-decayed
+# (guarantee 3) — but a belief attached to an edge that has been pruned
+# is lost all the same.  Before this floor an explicit relation stated
+# once (p = 0.70) was pruned after ~1 000 idle observations and one
+# re-stated five times (p = 0.76) after ~3 000; now the floor keeps it
+# above the prune threshold for ~7 900 / ~8 400 observations, after which
+# era forgetting lets it go.  Auto-discovered (Hebbian) edges get no
+# floor: they live on reinforcement and are revalidated by reflect.
+RELATION_FLOOR_SHARE: float = 0.1
+
 
 def concept_half_life(node: ConceptNode) -> float:
     """Effective half-life in ticks: maturity base × evidence scale."""
@@ -113,6 +128,22 @@ def concept_half_life(node: ConceptNode) -> float:
         1.0 + CONCEPT_EVIDENCE_HL_GAIN * extra_evidence,
     )
     return min(CONCEPT_MAX_HALF_LIFE, base * scale)
+
+
+def relation_floor(
+    edge: RelationEdge,
+    *,
+    now_tick: int | None = None,
+    now: datetime | None = None,
+) -> float:
+    """Weight floor an explicit relation relaxes toward (0 for Hebbian edges)."""
+    if not edge.is_explicit:
+        return 0.0
+    floor = RELATION_FLOOR_SHARE * edge.probability
+    elapsed = edge.elapsed_since_reinforced(now_tick, now)
+    if elapsed > 0 and EVIDENCE_FLOOR_ERA_HL > 0:
+        floor *= math.pow(0.5, elapsed / EVIDENCE_FLOOR_ERA_HL)
+    return floor
 
 
 def evidence_floor(
@@ -215,8 +246,15 @@ class DecayEngine:
             )
             decay_factor = math.pow(0.5, elapsed / half_life)
 
-            edge.weight = max(0.0, edge.weight * decay_factor)
-            edge.confidence = max(0.0, edge.confidence * decay_factor)
+            # Relax toward the probability-anchored floor (explicit edges)
+            # or toward zero (auto-discovered edges).
+            floor = relation_floor(edge, now_tick=now_tick, now=now)
+            if edge.weight > floor:
+                edge.weight = max(0.0, floor + (edge.weight - floor) * decay_factor)
+            if edge.confidence > floor:
+                edge.confidence = max(
+                    0.0, floor + (edge.confidence - floor) * decay_factor
+                )
             # ``probability`` (belief the typed relation is correct) is
             # deliberately left alone: the passage of time is not evidence
             # against a relation, only against its current salience.

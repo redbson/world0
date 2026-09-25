@@ -61,8 +61,13 @@ class TestRelationDecay:
 
         # Simulate 336 observations (relation gets 1 reinforcement from hebbian)
         rel.last_reinforced_tick = world.clock.tick - 336
+        initial = rel.weight
         world._decay.decay_relations()
-        assert rel.weight < 0.10
+        # Explicit relations relax toward a probability-anchored floor
+        # (0.1 × p ≈ 0.08 here) rather than toward zero, so the weight
+        # collapses to the floor's neighbourhood instead of vanishing.
+        assert rel.weight < 0.2
+        assert rel.weight < initial * 0.25
 
     def test_heavily_reinforced_relation_persists(self, world):
         """A relation reinforced many times should decay slowly."""

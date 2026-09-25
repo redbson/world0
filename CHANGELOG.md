@@ -154,6 +154,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reaches parity near 1 000 and yields to fresh context after that.  The
   cognitive benchmark is unchanged; one-off concepts (evidence ≈ 0.06)
   still collapse to the freshness floor.  Sweep: `scripts/sweep_salience.py`.
+- **Explicit relations relax toward a probability-anchored floor.**
+  Relation `weight` / `confidence` decay toward `0.1 × probability`
+  (forgotten on the 4380-observation era scale) instead of toward 0, so
+  an explicitly stated relation is no longer pruned after ~1 000 idle
+  observations while its never-decayed `probability` was still 0.70; it
+  now persists ~7 900 observations without re-statement, and
+  `confirm()` raises the floor.  Auto-discovered edges get no floor.
 - **Seeds are always part of their projection.**  `World.project()`
   passes the seed ids to the projection engine, which selects them
   first (by score, capped by `max_concepts`) and exempts them from the

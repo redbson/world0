@@ -429,6 +429,9 @@ $\gamma_{task} = 1 + 0.5\cdot\text{affinity}$，affinity 来自词级匹配（§
 | **第十轮** | |
 | `projection/engine.py`、`core/interfaces.py`、`world/facade.py` | `project(..., seed_ids=)`：种子先选、不受阈值过滤 |
 | `tests/test_projection_seeds.py`（新） | 4 个测试 |
+| **第十一轮** | |
+| `dynamics/decay.py` | `relation_floor()`、`RELATION_FLOOR_SHARE = 0.1`；显式关系向概率地板回归 |
+| `tests/test_roadmap_dynamics.py` | +4 个测试 |
 
 所有字段均有默认值，旧的 JSON 存储可直接加载（`task_profile` 自动回填，tick 与
 recurrence 默认 0）。
@@ -751,6 +754,29 @@ affinity ≡ 1，行为不变。含义：在还有任务内候选可选时，一
 才由 MMR 填充。`tests/test_projection_seeds.py`：跨域双种子在任务下都在、6 个种子
 3 个名额时恰好是分数最高的 3 个种子、团种子 + 弱种子都在、种子排在 `concepts`
 前面。认知基准与漂移、稳定性测试全部不变。
+
+### 7.14 关系的概率锚定地板 ✅
+
+**探针**（概念一直保持活跃，只让关系闲置）：
+
+| 闲置观察数 | 显式声明 1 次（p=0.70） | 显式复述 5 次（p=0.76, r=9） | Hebbian（p=0.15） |
+|---|---|---|---|
+| 200 | w=0.197 | w=0.694 | w=0.054 |
+| 500 | w=0.029 | w=0.410 | **剪掉** |
+| 1000 | **剪掉** | w=0.171 | 剪掉 |
+| 3000 | 剪掉 | **剪掉** | 剪掉 |
+
+第一轮把 `probability`（"这条 typed relation 是对的"）从时间衰减里拿了出来，但
+剪枝只看 `weight < 0.02`：边被删了，信念也就没了——一个 Agent 明确声明过的依赖
+在 400–1000 次无关观察后消失，与概念侧"被确认的概念不蒸发"不对称。
+
+**修复：** 与 §3.1 的概念地板同构。显式关系的 `weight`/`confidence` 向
+$\text{floor} = 0.1\cdot p\cdot 2^{-\Delta/4380}$ 回归而不是向 0（`RELATION_FLOOR_SHARE`，
+纪元半衰期与概念地板共用）；Hebbian 边没有地板（靠强化存活，由 §7.11 的复验清理）；
+剪枝阈值不变。p=0.70 的一次声明地板 0.07，约 7 900 次观察后才随纪元遗忘降到 0.02
+以下；`confirm()` 抬高 p 即抬高地板。基准里的半衰期测试（0.8 → 0.4 ± 0.05）仍然
+成立（0.8 → 0.435）。`TestRelationEvidenceFloor`：3 000 次闲置后显式关系仍在、Hebbian
+边仍消失、12 000 次后显式关系按纪元遗忘、复述过的关系地板更高。
 
 ---
 
