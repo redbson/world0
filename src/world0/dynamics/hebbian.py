@@ -47,6 +47,17 @@ COOCCURRENCE_THRESHOLD: int = 2
 # concepts drawn from one topic ≈ 0.4, always-together pairs 1.0.
 HEBBIAN_MIN_ASSOCIATION: float = 0.2
 
+# ``revalidate()`` (run by reflect) removes an auto-discovered generic
+# edge whose association, recomputed from its reinforcement count and the
+# current mention statistics, has fallen below
+# HEBBIAN_MIN_ASSOCIATION × REVALIDATION_HYSTERESIS — the gap between the
+# creation and removal thresholds stops a pair from flapping.  Edges are
+# judged only once both concepts have been mentioned often enough
+# (REVALIDATION_MIN_MENTIONS, summed) for the association to mean
+# anything: two concepts seen twice, together both times, stay linked.
+REVALIDATION_HYSTERESIS: float = 0.5
+REVALIDATION_MIN_MENTIONS: int = 20
+
 # Maximum concept pairs to process per learn() call.
 # When an observation contains many concepts, only the first MAX_PAIRS
 # pairs in *observation order* are considered.  Extraction lists concepts
@@ -196,6 +207,36 @@ class HebbianEngine:
             del self._cooccurrence[key]
         self._mentions.pop(concept_id, None)
         return len(stale)
+
+    def revalidate(self) -> list[str]:
+        """Remove auto-discovered generic edges that no longer pass the gate.
+
+        Early in a world's life the association gate sees thin statistics
+        (two mentions, both shared → J = 1), so chance pairs get linked
+        and then keep being reinforced by further chance co-occurrences.
+        Reflect calls this to re-judge every non-explicit
+        ``generic_relation`` edge against the accumulated statistics.
+        Explicit relations and edges that were upgraded to a typed
+        semantic relation are never touched.
+
+        Returns the ids of the removed relations.
+        """
+        cutoff = HEBBIAN_MIN_ASSOCIATION * REVALIDATION_HYSTERESIS
+        removed: list[str] = []
+        for edge in list(self._relations.all()):
+            if edge.is_explicit or edge.semantic_relation != "generic_relation":
+                continue
+            n_a = self._mentions.get(edge.source_id, 0)
+            n_b = self._mentions.get(edge.target_id, 0)
+            if n_a + n_b < REVALIDATION_MIN_MENTIONS:
+                continue
+            # Created at the COOCCURRENCE_THRESHOLD-th co-occurrence and
+            # reinforced on each later one.
+            cooccurrences = edge.reinforcement_count + COOCCURRENCE_THRESHOLD
+            if self._association(edge.source_id, edge.target_id, cooccurrences) < cutoff:
+                if self._relations.remove(edge.id):
+                    removed.append(edge.id)
+        return removed
 
     # ── persistence of association statistics ────────────────────────
 

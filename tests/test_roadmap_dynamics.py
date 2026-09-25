@@ -652,3 +652,68 @@ class TestHebbianAssociationGate:
         assert world._hebbian.mentions(a) == 1
         world._hebbian.forget_concept(a)
         assert world._hebbian.mentions(a) == 0
+
+
+class TestHebbianRevalidation:
+    """Generic edges linked on thin early statistics are re-judged by
+    reflect once the statistics are meaningful (§7.11)."""
+
+    POOL = [f"c{i}" for i in range(60)]
+
+    def _generic(self, world: World):
+        return [r for r in world.relations.all() if r.semantic_relation == "generic_relation"]
+
+    def test_reflect_removes_stale_chance_edges(self, world):
+        import random
+
+        rng = random.Random(7)
+        backbone = [("c1", "c2"), ("c3", "c4"), ("c5", "c6")]
+        for _ in range(400):
+            concepts = rng.sample(self.POOL, 6)
+            rels = [(a, b, "depends_on") for a, b in backbone if a in concepts and b in concepts]
+            world.ingest(Observation(concepts=concepts, relations=rels, source="s"))
+        before_ids = {r.id for r in self._generic(world)}
+        assert before_ids
+        result = world.reflect(light=True)
+        after_ids = {r.id for r in self._generic(world)}
+        removed = before_ids - after_ids
+        # Every removed generic edge was either revalidated away or decayed
+        # below the prune threshold in the same cycle — nothing else.
+        assert removed == set(result.stale_relations) | (set(result.pruned_relations) & before_ids)
+        assert len(result.stale_relations) > 0.8 * len(before_ids)
+        assert len(after_ids) < 0.2 * len(before_ids)
+        # explicit relations are untouched
+        explicit = [r for r in world.relations.all() if r.is_explicit]
+        assert all(r.semantic_relation == "dependence" for r in explicit)
+        assert explicit
+
+    def test_thin_statistics_are_not_judged(self, world):
+        world.ingest(Observation(concepts=["x", "y"], source="s"))
+        world.ingest(Observation(concepts=["x", "y"], source="s"))
+        assert len(self._generic(world)) == 1
+        result = world.reflect(light=True)
+        assert result.stale_relations == []
+        assert len(self._generic(world)) == 1
+
+    def test_well_associated_edges_survive(self, world):
+        for _ in range(15):
+            world.ingest(Observation(concepts=["a", "b"], source="s"))
+            world.ingest(Observation(concepts=["c", "d"], source="s"))
+        assert len(self._generic(world)) == 2
+        result = world.reflect()
+        assert result.stale_relations == []
+        assert len(self._generic(world)) == 2
+
+    def test_upgraded_edge_is_protected(self, world):
+        """A generic edge later re-stated as a typed relation is no longer
+        generic and is never revalidated away."""
+        world.ingest(Observation(concepts=["p", "q"], source="s"))
+        world.ingest(Observation(concepts=["p", "q"], source="s"))
+        world.ingest(Observation(concepts=["p", "q"], relations=[("p", "q", "depends_on")], source="s"))
+        for i in range(30):  # p and q now appear apart, association collapses
+            world.ingest(Observation(concepts=["p", f"m{i}"], source="s"))
+            world.ingest(Observation(concepts=["q", f"n{i}"], source="s"))
+        world.reflect(light=True)
+        p_, q_ = world.concepts.resolve("p"), world.concepts.resolve("q")
+        edges = world.relations.find_any_between(p_.id, q_.id)
+        assert edges and edges[0].semantic_relation == "dependence"

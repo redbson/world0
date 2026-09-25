@@ -421,7 +421,8 @@ $\gamma_{task} = 1 + 0.5\cdot\text{affinity}$，affinity 来自词级匹配（§
 | `dynamics/hebbian.py` | 观察/提及统计、`HEBBIAN_MIN_ASSOCIATION = 0.2` 关联门、`association()`、`stats_snapshot()/restore_stats()` |
 | `world/facade.py` | 持久化 `hebbian_stats` |
 | `scripts/sweep_hebbian.py` | §7.11 的阈值扫描 |
-| `tests/test_roadmap_dynamics.py` | +7 个测试 |
+| `dynamics/hebbian.py`、`world/_reflect.py`、`schemas/types.py`、`core/interfaces.py` | `revalidate()`（第 5b 步）、`ReflectResult.stale_relations`、`HebbianLearner.revalidate` |
+| `tests/test_roadmap_dynamics.py` | +11 个测试 |
 
 所有字段均有默认值，旧的 JSON 存储可直接加载（`task_profile` 自动回填，tick 与
 recurrence 默认 0）。
@@ -677,6 +678,17 @@ $J = \frac{c_{ab}}{n_a + n_b - c_{ab}} \ge$ `HEBBIAN_MIN_ASSOCIATION`（"提到�
 认知基准（同一批概念反复共现，$J=1$）不受影响。`TestHebbianAssociationGate` 覆盖
 随机世界不成团、主题伙伴仍相连、总是同现两次即连、枢纽不与过客相连、统计量重启后
 保留、旧状态兼容、删除概念清理统计。
+
+**复验（reflect 第 5b 步）。** 门只在创建时判断，而世界早期的统计很薄：两次提及、
+两次同框就是 $J=1$，于是随机世界里仍有 146 条 generic 边靠早期运气建立，之后又被
+偶然同框不断强化（权重 0.15–0.42）。用当前统计重算它们的关联度
+（$c_{ab}$ = `reinforcement_count` + 2）：中位数 0.063，**没有一条 ≥ 0.2**。
+`HebbianEngine.revalidate()` 在每次 `reflect()`（含 light）末尾重判所有非显式的
+generic 边：当两概念的提及数之和 ≥ 20（`REVALIDATION_MIN_MENTIONS`，薄统计不判）
+且 $J <$ 0.2 × 0.5（`REVALIDATION_HYSTERESIS`，创建与移除阈值之间留出迟滞）时删除，
+结果记入 `ReflectResult.stale_relations`。随机世界一次 reflect：151 → 10 条
+（130 条复验删除、11 条衰减剪枝）；显式关系与被显式复述升级为 typed 关系的边
+永不触碰（`TestHebbianRevalidation`）。
 
 ---
 

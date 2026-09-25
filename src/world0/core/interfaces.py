@@ -257,6 +257,11 @@ class HebbianLearner(Protocol):
         self, concept_ids: list[str], *, provenance: str = ...
     ) -> list[str]: ...
 
+    def revalidate(self) -> list[str]:
+        """Remove auto-discovered edges that no longer pass the
+        association gate; returns their ids."""
+        ...
+
 
 @runtime_checkable
 class DecayPolicy(Protocol):

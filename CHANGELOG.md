@@ -165,6 +165,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and the benchmark is unchanged.  Observation and mention counts are
   persisted as `hebbian_stats`; stores without it start counting from
   zero.  Sweep: `scripts/sweep_hebbian.py`.
+  `reflect()` additionally revalidates auto-discovered generic edges
+  against the accumulated statistics (`HebbianEngine.revalidate()`,
+  hysteresis 0.5, judged once both concepts total ≥ 20 mentions) and
+  reports removals in `ReflectResult.stale_relations`; edges linked on
+  thin early statistics no longer survive on chance reinforcement
+  (151 → 10 in the random world after one reflect).
 - **Perspectives condition propagation at the semantic level.**
   `Perspective.relation_type_weights` accepts semantic relation names and
   aliases (`dependence` / `depends_on`, `inclusion` / `contains`, …) as

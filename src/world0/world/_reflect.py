@@ -6,7 +6,8 @@ Five-stage process per ``docs/world0-color-field-dynamics.md``:
 2. community detection / reconciliation, color-source identification
 3. color-field dynamics: per-component fade → community injection → settle
 4. lifecycle promotions/demotions
-5. prune deeply decayed items
+5. prune deeply decayed items, then re-judge auto-discovered generic
+   edges against the accumulated co-occurrence statistics
 
 Step 3a (per-component fade) intentionally runs *before* fresh
 injection so old support-less components drain and do not fight new
@@ -21,7 +22,12 @@ from world0.schemas.types import ReflectResult
 
 if TYPE_CHECKING:
     from world0.communities.manager import CommunityManager
-    from world0.core import ColorField, DecayPolicy, LifecyclePolicy
+    from world0.core import (
+        ColorField,
+        DecayPolicy,
+        HebbianLearner,
+        LifecyclePolicy,
+    )
 
 
 class ReflectPipeline:
@@ -39,11 +45,13 @@ class ReflectPipeline:
         lifecycle: LifecyclePolicy,
         color: ColorField,
         communities: CommunityManager,
+        hebbian: HebbianLearner | None = None,
     ) -> None:
         self._decay = decay
         self._lifecycle = lifecycle
         self._color = color
         self._communities = communities
+        self._hebbian = hebbian
 
     def run(self, *, light: bool = False) -> ReflectResult:
         """Run one reflect cycle.
@@ -91,5 +99,10 @@ class ReflectPipeline:
         # 5. Prune
         result.pruned_relations = self._decay.prune_relations()
         result.pruned_concepts = self._decay.prune_concepts()
+
+        # 5b. Generic edges linked on thin early statistics are re-judged
+        #     now that mention counts are meaningful (dynamics/hebbian.py).
+        if self._hebbian is not None:
+            result.stale_relations = self._hebbian.revalidate()
 
         return result

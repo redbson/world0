@@ -153,6 +153,7 @@ class World:
             lifecycle=self._lifecycle,
             color=self._color_diffusion,
             communities=self._communities,
+            hebbian=self._hebbian,
         )
         self._identity = IdentityOps(
             concepts=self.concepts, relations=self.relations

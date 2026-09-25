@@ -201,6 +201,9 @@ class ReflectResult(BaseModel):
     pruned_concepts: list[str] = Field(default_factory=list)
     decayed_relations: list[str] = Field(default_factory=list)
     pruned_relations: list[str] = Field(default_factory=list)
+    # Auto-discovered generic edges removed because their association no
+    # longer passes the Hebbian gate (dynamics/hebbian.py ``revalidate``).
+    stale_relations: list[str] = Field(default_factory=list)
     # Color-field dynamics (doc §29 Stage A observation layer).
     new_communities: list[str] = Field(default_factory=list)
     stable_communities: list[str] = Field(default_factory=list)

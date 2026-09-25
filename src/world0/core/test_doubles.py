@@ -602,6 +602,9 @@ class FakeHebbianLearner:
         self.calls: list[tuple[list[str], str]] = []
         self.next_new_relation_ids: list[str] = []
 
+    def revalidate(self) -> list[str]:
+        return []
+
     def learn(
         self, concept_ids: list[str], *, provenance: str = ""
     ) -> list[str]:
