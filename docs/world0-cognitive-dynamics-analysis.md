@@ -358,6 +358,9 @@ $\gamma_{task} = 1 + 0.5\cdot\text{affinity}$，affinity 来自词级匹配（§
 该模型下**每 168 次复现永远达不到 established（0.6）**——这是加性递减增益的
 固有上界（$b(n)\to 0$），不是参数问题，见 §7.1/7.2。
 
+> 注意：这张表的模拟只执行 decay + lifecycle，不执行 prune。第十三轮发现真实流水线
+> 会在第一个长间隔里把概念删掉（§7.16），已用剪枝宽限期修正；表中的稳态数值本身不受影响。
+
 > 这些常数的"合理性"取决于 Agent 的观察粒度：如果一次 ingest 是一轮对话，
 > 24 次观察大约是一次工作会话；如果一次 ingest 是一篇文档，则是一天的阅读量。
 > 需要更快/更慢的遗忘时，调 `CONCEPT_HALF_LIFE` 的整体尺度即可，无需碰墙钟。
@@ -436,7 +439,10 @@ $\gamma_{task} = 1 + 0.5\cdot\text{affinity}$，affinity 来自词级匹配（§
 | `dynamics/hebbian.py` | 规范字符串键；`tracked_concepts` |
 | `store/base.py`、`core/interfaces.py`、`store/json_store.py`、`store/sqlite_store.py`、`core/test_doubles.py` | `save_learning_state()/load_learning_state()` |
 | `world/facade.py` | 摊销持久化、旧格式迁移、`close()`/上下文管理器 |
-| `tests/test_learning_state.py`（新） | 8 个测试 |
+| `tests/test_learning_state.py`（新） | 7 个测试 |
+| **第十三轮** | |
+| `dynamics/decay.py` | `PRUNE_MIN_IDLE_TICKS = 720`；`prune_concepts()` 增加闲置条件 |
+| `tests/test_roadmap_dynamics.py` | +5 个测试 |
 
 所有字段均有默认值，旧的 JSON 存储可直接加载（`task_profile` 自动回填，tick 与
 recurrence 默认 0）。
@@ -808,6 +814,31 @@ reflect 0.28 s、投影 0.3 ms、重启加载 0.28 s——都没问题；但**�
 `tests/test_learning_state.py`：小世界不 close 也重启一致、记录与 state 分离、旧
 格式迁移、大世界 60 次观察只写 2–4 次学习记录、reflect/close 强制写、close 后重启
 逐字一致、SQLite 记录往返。
+
+### 7.16 剪枝宽限期：快褪色、慢删除 ✅
+
+**探针**（`auto_reflect_every=25`，概念 X 提到一次，`gap` 次无关观察后再提一次）：
+
+| gap | 修复前：第二次提及时 X 还在？ | 修复后 |
+|---|---|---|
+| 25 / 50 / 80 | 在（同一节点，n=2） | 在 |
+| 100 / 200 / 400 | **已删除，第二次提及新建节点（n=1）** | 在（同一节点，n=2） |
+| 800 | 已删除 | 已删除 |
+
+embryonic 半衰期 24、`prune` 阈值 0.02：一次性概念 ~54 次观察后 FADING，~80 次后
+被删——连同它的关系、任务画像、来源引用一起；第二次提及只能从零开始。§5 的标定
+模拟只跑 decay + lifecycle，**没有 prune**，所以"每 720 次复现 → developing"在真实
+流水线里根本到不了——概念在第一个间隔里就被删了。100 主题 × 20 概念、每 100 次
+观察 light reflect 的世界：创建过 1 937 个概念，只剩 797 个，430 个孤立，established
+仅 2 个。
+
+**修复：** `PRUNE_MIN_IDLE_TICKS = 720`——FADING 且置信度 < 0.02 的概念还要**闲置
+满 720 次观察**才删除。褪色仍然很快（可逆：再提及即复苏同一节点），删除变慢（不可
+逆）。同一世界修复后：1 885 个概念、1 444 个 developing（复现门现在能积累）、
+421 个 FADING 痕迹、关系 274 → 1 380。代价是褪色痕迹多占一个月的存储；它们在激活
+里只以 `0.3 × salience下限 0.1` 的强度传播，极少进入投影。
+`TestPruneGrace`：gap 100/400/700 复苏同一节点、770 后删除、100 时已 FADING；
+两个假设"立即剪枝"的旧测试改为先闲置 800 tick。
 
 ---
 

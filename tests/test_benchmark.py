@@ -581,7 +581,8 @@ class TestScaleBehavior:
             if node:
                 node.confidence = 0.01
                 node.maturity = Maturity.FADING
-                node.last_activated_tick = world.clock.tick - 200
+                # idle past the prune grace (PRUNE_MIN_IDLE_TICKS = 720)
+                node.last_activated_tick = world.clock.tick - 800
 
         result = world.reflect()
         after = world.status().total_concepts

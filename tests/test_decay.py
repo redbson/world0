@@ -96,6 +96,11 @@ class TestPruning:
         node.maturity = Maturity.FADING
         node.confidence = 0.001
 
+        # Fade fast, delete slowly: a fading concept is pruned only once
+        # it has also been idle for PRUNE_MIN_IDLE_TICKS observations.
+        assert world._decay.prune_concepts() == []
+        node.last_activated_tick = world.clock.tick - 800
+
         pruned = world._decay.prune_concepts()
         assert node.id in pruned
         assert world.concepts.resolve("Garbage") is None

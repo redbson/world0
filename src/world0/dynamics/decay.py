@@ -104,6 +104,19 @@ EVIDENCE_FLOOR_ERA_HL: float = SALIENCE_ERA_HL  # one era for both halves of bel
 # Confidence below which a concept is marked FADING.
 FADING_THRESHOLD: float = 0.05
 
+# ── Prune grace: fade fast, delete slowly ─────────────────────────────
+# A FADING concept is deleted only once it has also been idle for this
+# many observations.  Fading is reversible (a re-mention revives the
+# same node with its relations, task profile and sources); deletion is
+# not.  Without the grace a concept mentioned once was deleted unless
+# re-mentioned within ~80 observations (embryonic half-life 24, prune at
+# confidence < 0.02), and the second mention created a fresh node from
+# zero — in a 100-topic world with periodic light reflects 1 937 created
+# concepts shrank to 797 (analysis doc §7.16).  720 observations is the
+# "established" half-life: a one-off trace survives about a month of
+# observations at 24 per day, then goes.
+PRUNE_MIN_IDLE_TICKS: float = 720.0
+
 # ── Probability-anchored relation floor ───────────────────────────────
 # An *explicit* relation's traversal weight (and structural confidence)
 # relax toward RELATION_FLOOR_SHARE × probability instead of toward 0,
@@ -268,11 +281,21 @@ class DecayEngine:
         return weak_relations
 
     def prune_concepts(self, threshold: float = 0.02) -> list[str]:
-        """Remove concepts that have decayed beyond recovery (batch)."""
+        """Remove concepts that have decayed beyond recovery (batch).
+
+        A concept is pruned when it is FADING, its confidence is below
+        ``threshold`` *and* it has been idle for ``PRUNE_MIN_IDLE_TICKS``
+        observations — fading marks it as noise, the grace period keeps
+        deletion from racing a slow re-mention.
+        """
+        now_tick = self._clock.tick
+        now = wall_now()
         to_prune = [
             n.id
             for n in self._concepts.all()
-            if n.maturity == Maturity.FADING and n.confidence < threshold
+            if n.maturity == Maturity.FADING
+            and n.confidence < threshold
+            and n.elapsed_since_activation(now_tick, now) >= PRUNE_MIN_IDLE_TICKS
         ]
         for cid in to_prune:
             self._relations.remove_for_concept(cid)

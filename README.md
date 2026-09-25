@@ -336,7 +336,7 @@ print(f"Promoted: {len(result.promoted_concepts)}")
 print(f"Pruned:   {len(result.pruned_concepts)}")
 ```
 
-Call after a task is complete. Decays unused concepts, promotes frequently activated ones through maturity stages, and prunes noise. `reflect(light=True)` skips the community / colour-field passes; `World(store_path, auto_reflect_every=50)` runs that light consolidation automatically every 50 observations so the world keeps evolving without explicit calls.
+Call after a task is complete. Decays unused concepts, promotes frequently activated ones through maturity stages, and prunes noise (a faded concept is deleted only after 720 further idle observations, so a slow re-mention revives the same node). `reflect(light=True)` skips the community / colour-field passes; `World(store_path, auto_reflect_every=50)` runs that light consolidation automatically every 50 observations so the world keeps evolving without explicit calls.
 
 在任务完成后调用。衰减未使用的概念，将频繁激活的概念通过成熟度阶段晋升，修剪噪声。`reflect(light=True)` 跳过群落/色场步骤；`World(store_path, auto_reflect_every=50)` 每 50 次观察自动执行一次轻量巩固，世界无需显式调用也会持续演化。
 

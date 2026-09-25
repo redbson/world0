@@ -154,6 +154,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reaches parity near 1 000 and yields to fresh context after that.  The
   cognitive benchmark is unchanged; one-off concepts (evidence ≈ 0.06)
   still collapse to the freshness floor.  Sweep: `scripts/sweep_salience.py`.
+- **Prune grace period: fade fast, delete slowly.**  A FADING concept
+  is deleted only after `PRUNE_MIN_IDLE_TICKS` (720) idle observations.
+  Previously a concept mentioned once was deleted unless re-mentioned
+  within ~80 observations and the second mention started a fresh node
+  from zero; in a 100-topic world with periodic light reflects 1 937
+  created concepts shrank to 797.  Fading (reversible) is unchanged.
 - **Learning-state persistence is amortised.**  Hebbian co-occurrence
   counters and mention statistics now live in a separate store record
   (`learning.json` / the `learning` row) written on every observation

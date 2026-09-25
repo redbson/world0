@@ -776,3 +776,45 @@ class TestRelationEvidenceFloor:
         single = once.relations.find_any_between(ids1["A"], ids1["B"])[0]
         assert confirmed.probability > single.probability
         assert confirmed.weight > single.weight
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# §7.16 Prune grace: fade fast, delete slowly
+# ═══════════════════════════════════════════════════════════════════════
+
+
+class TestPruneGrace:
+    """A once-mentioned concept used to be deleted unless re-mentioned
+    within ~80 observations; the second mention then started a fresh
+    node.  Fading stays fast; deletion waits PRUNE_MIN_IDLE_TICKS."""
+
+    @staticmethod
+    def _gap_world(gap: int, tmp_path):
+        w = World(store_path=tmp_path / f"g{gap}", auto_reflect_every=25)
+        w.ingest(Observation(concepts=["X"], source="s"))
+        first_id = w.concepts.resolve("X").id
+        for _ in range(gap - 1):
+            w.ingest(Observation(concepts=["filler"], source="s"))
+        return w, first_id
+
+    @pytest.mark.parametrize("gap", [100, 400, 700])
+    def test_second_mention_within_grace_revives_the_same_node(self, gap, tmp_path):
+        from world0.dynamics.decay import PRUNE_MIN_IDLE_TICKS
+
+        assert gap < PRUNE_MIN_IDLE_TICKS
+        w, first_id = self._gap_world(gap, tmp_path)
+        assert w.concepts.get(first_id) is not None
+        w.ingest(Observation(concepts=["X"], source="s"))
+        x = w.concepts.resolve("X")
+        assert x.id == first_id
+        assert x.activation_count == 2
+
+    def test_one_off_is_deleted_after_the_grace(self, tmp_path):
+        from world0.dynamics.decay import PRUNE_MIN_IDLE_TICKS
+
+        w, first_id = self._gap_world(int(PRUNE_MIN_IDLE_TICKS) + 50, tmp_path)
+        assert w.concepts.get(first_id) is None
+
+    def test_fading_still_happens_fast(self, tmp_path):
+        w, first_id = self._gap_world(100, tmp_path)
+        assert w.concepts.get(first_id).maturity == Maturity.FADING
