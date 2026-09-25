@@ -20,7 +20,13 @@ ones can be built inline for a single ``project()`` call; stable ones
 
 from __future__ import annotations
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+from world0.schemas.relation import (
+    RelationType,
+    canonical_relation_label,
+    normalize_semantic_relation,
+)
 
 
 class Perspective(BaseModel):
@@ -34,21 +40,31 @@ class Perspective(BaseModel):
             task="triage prod latency",
             active_domains=["observability", "infra"],
             relation_type_weights={
-                "positive": 1.2,  # attraction matters most in this frame
+                "dependence": 1.4,  # semantic relation: what latency relies on
+                "positive": 1.0,  # every other attraction relation
                 "parallel": 0.7,  # resonance is useful but secondary
                 "negative": 1.0,  # repulsion/counter-evidence is fully valued
             },
+            direction_weights={"forward": 1.0, "backward": 0.4},
         )
         proj = world.project(["latency"], perspective=p)
+
+    ``relation_type_weights`` is keyed by **semantic relation** names
+    (``dependence``, ``inclusion``, ``enables`` … and their aliases such
+    as ``depends_on`` / ``contains``) or by **axis** (``positive`` /
+    ``negative`` / ``parallel``).  A semantic key wins over its axis key;
+    an unknown key is rejected at construction so a typo cannot silently
+    leave the perspective inert.  Ready-made role profiles live in
+    ``world0.perspectives``.
     """
 
     name: str = "default"
     role: str = ""
     task: str = ""
     active_domains: list[str] = Field(default_factory=list)
-    # Keyed by the string value of RelationType for JSON-friendliness.
-    # Missing keys fall back to the default RELATION_TYPE_FACTOR values
-    # used by the activation engine.
+    # Keyed by semantic relation name (or alias) or by axis value, for
+    # JSON-friendliness.  Missing keys fall back to the default
+    # RELATION_TYPE_FACTOR of the relation's axis.
     relation_type_weights: dict[str, float] = Field(default_factory=dict)
     # Multiplier applied to concepts whose dominant domain appears in
     # ``active_domains``.  Stacks on top of the task-affinity boost.
@@ -60,11 +76,44 @@ class Perspective(BaseModel):
     # the default perspective keeps activation undirected.
     direction_weights: dict[str, float] = Field(default_factory=dict)
 
-    def weight_for(self, relation_type: str, default: float) -> float:
-        """Resolve the propagation weight for a relation type under this view."""
-        if not self.relation_type_weights:
+    @field_validator("relation_type_weights", mode="before")
+    @classmethod
+    def _check_relation_keys(cls, value: object) -> object:
+        if not isinstance(value, dict):
+            return value
+        canonical: dict[str, float] = {}
+        unknown: list[str] = []
+        for key, weight in value.items():
+            try:
+                canonical[canonical_relation_label(str(key))] = float(weight)
+            except KeyError:
+                unknown.append(str(key))
+        if unknown:
+            raise ValueError(
+                "unknown relation label(s) in relation_type_weights: "
+                f"{sorted(unknown)} — use a semantic relation name "
+                "(e.g. 'dependence', 'inclusion') or an axis "
+                "('positive', 'negative', 'parallel')"
+            )
+        return canonical
+
+    def weight_for(
+        self, relation_type: str, default: float, semantic_relation: str = ""
+    ) -> float:
+        """Resolve the propagation weight for a relation under this view.
+
+        Lookup order: the relation's canonical semantic name, then its
+        axis, then ``default`` (keys were canonicalized at construction).
+        """
+        weights = self.relation_type_weights
+        if not weights:
             return default
-        return float(self.relation_type_weights.get(relation_type, default))
+        if semantic_relation:
+            canonical = normalize_semantic_relation(semantic_relation)
+            if canonical in weights:
+                return float(weights[canonical])
+        axis = relation_type.value if isinstance(relation_type, RelationType) else str(relation_type)
+        return float(weights.get(axis, default))
 
     def weight_for_direction(self, direction: str) -> float:
         """Resolve the traversal-direction multiplier (``forward``/``backward``)."""

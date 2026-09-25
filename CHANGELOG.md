@@ -35,6 +35,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   so a dormant world still ages a little.  `WorldStatus.cognitive_tick`
   exposes the current tick; `world.clock.advance(n)` is the time
   simulator for tests and calibration.
+- **Perspective profiles** (`world0.perspectives`) — named, documented
+  reading strategies over the same relations: `dependency_map` (what a
+  concept relies on), `impact_map` (what relies on it), `taxonomy`,
+  `analogy`, `contrast`, `default`.  `World.project(seeds,
+  perspective="taxonomy", task=…)` accepts a profile name.
+- **Projection stability tests** (`tests/test_projection_stability.py`)
+  — unrelated observations, reflect cadence and alternating mentions
+  must leave a projection identical; an in-domain re-mention may only
+  reorder an exact tie.
 - **Layer-boundary test** (`tests/test_layer_boundaries.py`) — walks the
   imports of every core module and fails if the conceptual core reaches
   into `agents`, `llm`, `extraction` or the presentation packages, or if
@@ -145,6 +154,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reaches parity near 1 000 and yields to fresh context after that.  The
   cognitive benchmark is unchanged; one-off concepts (evidence ≈ 0.06)
   still collapse to the freshness floor.  Sweep: `scripts/sweep_salience.py`.
+- **Perspectives condition propagation at the semantic level.**
+  `Perspective.relation_type_weights` accepts semantic relation names and
+  aliases (`dependence` / `depends_on`, `inclusion` / `contains`, …) as
+  well as axes; a semantic key wins over its axis key, and unknown keys
+  are rejected at construction instead of being silently ignored.
+  Direction weights now apply only to directed (positive / negative)
+  relations — a parallel / Hebbian edge's stored orientation is
+  arbitrary, so scaling it merely rescaled every neighbor and left the
+  projection unchanged.  `RelationEdge.is_directed` exposes the rule.
 
 ### Fixed
 - Relation `probability` (belief the typed relation is correct) is no

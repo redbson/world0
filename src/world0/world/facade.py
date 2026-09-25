@@ -24,6 +24,7 @@ from world0.dynamics.decay import DecayEngine
 from world0.dynamics.hebbian import HebbianEngine
 from world0.dynamics.lifecycle import LifecycleEngine
 from world0.extraction.extractor import ConceptExtractor
+from world0.perspectives import get_perspective
 from world0.prompts import PromptRegistry
 from world0.projection.engine import ProjectionEngine
 from world0.relations.manager import RelationManager
@@ -247,12 +248,19 @@ class World:
         seeds: list[str],
         *,
         task: str = "",
-        perspective: Perspective | None = None,
+        perspective: Perspective | str | None = None,
         max_concepts: int = 15,
         max_depth: int = 2,
         decay: float = 0.5,
     ) -> Projection:
-        """Generate a cognitive projection for the current task."""
+        """Generate a cognitive projection for the current task.
+
+        ``perspective`` may be a ``Perspective`` or the name of a profile
+        from ``world0.perspectives`` (``"dependency_map"``, ``"taxonomy"``,
+        …); a bare ``task`` is applied to a named profile that has none.
+        """
+        if isinstance(perspective, str):
+            perspective = get_perspective(perspective, task=task)
         seed_ids: list[str] = []
         for name in seeds:
             node = self.concepts.resolve(name)

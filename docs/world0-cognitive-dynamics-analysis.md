@@ -409,6 +409,14 @@ $\gamma_{task} = 1 + 0.5\cdot\text{affinity}$，affinity 来自词级匹配（§
 | `tests/test_roadmap_dynamics.py` | +6 个测试（休眠依赖占位、新语境仍胜、否证降低传播、噪声不持续、纪元遗忘、边界） |
 | `tests/test_layer_boundaries.py`（新） | AST 级层边界测试：核心包不得导入 agents/llm/extraction/…（§7.9） |
 | `scripts/sweep_salience.py` | §7.1 的标定扫描 |
+| `tests/test_projection_stability.py`（新） | 投影稳定性回归（§7.10） |
+| **第七轮** | |
+| `schemas/context.py` | `relation_type_weights` 语义级键 + 构造校验；`weight_for(axis, default, semantic_relation)` |
+| `schemas/relation.py` | `is_known_relation_label()`、`RelationEdge.is_directed` |
+| `dynamics/activation.py` | 语义级类型系数；方向系数只作用于有向边 |
+| `perspectives/__init__.py`（新） | 命名画像 `PROFILES`、`get_perspective()`、`perspective_names()` |
+| `world/facade.py` | `project(perspective="<profile>")` |
+| `tests/test_perspective.py` | +10 个测试 |
 
 所有字段均有默认值，旧的 JSON 存储可直接加载（`task_profile` 自动回填，tick 与
 recurrence 默认 0）。
@@ -493,13 +501,37 @@ $p \leftarrow p + (1-p)\cdot 0.05$（递减收益，20 次把 0.70 推到 ≈0.8
 `RelationManager.adjust_strength()` 改为按 `confidence_delta` 增量移动概率，不再
 把 confidence 尺度复制进去。
 
-### 7.4 有向传播与视角 ✅
+### 7.4 有向传播与视角 ✅（第七轮：语义级权重、方向只作用于有向关系、命名画像）
 
 `Perspective.direction_weights = {"forward": …, "backward": …}`：forward 是沿
 关系 source→target 遍历（`A depends_on B` 从 A 出发："我依赖什么"），backward
-相反（"谁依赖我"）。缺省 1.0，默认视角保持无向；`ActivationEngine` 把该系数乘进
-`edge_strength`。这是"同一世界在不同视角下给出不同投影"的第三个杠杆（前两个是
-关系轴权重与域亲和）。按语义关系细分方向权重留作后续扩展。
+相反（"谁依赖我"）。缺省 1.0，默认视角保持无向。
+
+**第七轮探针**在认知基准世界上逐个变体检查"视角是否真的改变投影"：
+
+| 变体 | 修复前 | 修复后 |
+|---|---|---|
+| `direction_weights={"forward": 0.2}` | 所有邻居等比缩小 0.2，**投影不变**（种子的 Hebbian 平行边也被按"方向"缩放） | 只有 depends_on 邻居缩小；投影从 PyTorch/deployment/FastAPI 换成 optimizer/gradient descent/… |
+| `relation_type_weights={"co_occurs": 0.05}` | 键不在三轴词表里，**静默无效** | 构造时即拒绝（`ValueError`，列出可用标签） |
+| `relation_type_weights={"positive": 0.05}` | 生效 | 生效（不变） |
+| 语义级键 `{"dependence": 1.4, "inclusion": 0.3}` | 不支持——dependence 与 inclusion 同属 positive 轴，无法区分 | 语义键优先于轴键；别名（`depends_on`、`contains`）等价 |
+
+三处改动：
+
+1. `Perspective.weight_for(axis, default, semantic_relation)`：查找顺序为语义名
+   （原键 → 规范名）→ 轴 → 默认；`relation_type_weights` 的键在构造时用
+   `is_known_relation_label()` 校验。
+2. `RelationEdge.is_directed`（positive/negative 为有向，parallel 对称）；激活引擎
+   只对有向边乘方向系数——平行边的 source→target 只是存储顺序，不是语义。
+3. 新增 `world0.perspectives`（AGENTS.md 建议的 `perspectives/` 模块）：
+   `dependency_map`（我依赖什么）、`impact_map`（谁依赖我，同一组边反向读）、
+   `taxonomy`（归属/包含）、`analogy`（共振）、`contrast`（冲突）、`default`；
+   `World.project(seeds, perspective="taxonomy", task=…)` 直接按名字使用。画像
+   刻意少而明确——视角是一种有文档的阅读策略，不是调参旋钮。
+
+`tests/test_perspective.py` 新增 10 个测试：同轴语义区分、别名等价、语义键优先、
+未知键拒绝、平行边不受方向影响、`is_directed`、画像可解析、依赖图与影响图对同一
+组边反向排序、分类与类比前景不同、命名画像保留 task。
 
 ### 7.5 投影冗余度量与相对阈值（相对阈值 ✅，加权 Jaccard ✗ 已实测否定）
 

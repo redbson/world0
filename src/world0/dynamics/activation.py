@@ -161,8 +161,8 @@ class ActivationEngine:
 
         Propagation strength (excitatory edges) =
             source_score
-            * relation.weight * perspective.weight_for(relation.type)
-            * perspective.weight_for_direction(forward | backward)
+            * relation.weight * perspective.weight_for(axis, semantic)
+            * perspective.weight_for_direction(forward | backward)  (directed edges only)
             * max(neighbor.confidence, neighbor.evidence, PROPAGATION_FLOOR)
             * depth_decay
             * task_affinity
@@ -269,14 +269,19 @@ class ActivationEngine:
                         rel.relation_type, 0.5
                     )
                     type_factor = perspective.weight_for(
-                        rel.relation_type.value, default_type_factor
+                        rel.relation_type.value,
+                        default_type_factor,
+                        rel.semantic_relation,
                     )
-                    direction = "forward" if rel.source_id == cid else "backward"
-                    edge_strength = (
-                        rel.weight
-                        * type_factor
-                        * perspective.weight_for_direction(direction)
-                    )
+                    # Direction is meaningful only for directed relations;
+                    # a parallel (resonance / Hebbian) edge has an arbitrary
+                    # source→target orientation, so it must not be scaled.
+                    if rel.is_directed:
+                        direction = "forward" if rel.source_id == cid else "backward"
+                        direction_factor = perspective.weight_for_direction(direction)
+                    else:
+                        direction_factor = 1.0
+                    edge_strength = rel.weight * type_factor * direction_factor
 
                     # Readiness = "is this a real concept worth visiting":
                     # the stronger of the current (decayed) confidence and

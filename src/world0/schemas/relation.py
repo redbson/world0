@@ -242,6 +242,34 @@ def is_known_relation_type(value: str | RelationType | None) -> bool:
     )
 
 
+def is_known_relation_label(value: str | RelationType | None) -> bool:
+    """True for any label a ``Perspective`` may weight: an axis
+    (``positive`` / ``negative`` / ``parallel``), a canonical semantic
+    relation (``dependence``, ``inclusion`` …) or one of its aliases
+    (``depends_on``, ``contains`` …)."""
+    return is_known_relation_type(value)
+
+
+def canonical_relation_label(value: str | RelationType | None) -> str:
+    """Canonical form of a label a ``Perspective`` may weight.
+
+    An axis stays an axis value (``"positive"``); a semantic relation or
+    one of its aliases becomes its canonical semantic name
+    (``"depends_on"`` → ``"dependence"``).  Raises ``KeyError`` for an
+    unknown label.
+    """
+    if isinstance(value, RelationType):
+        return value.value
+    raw = str(value or "").strip().lower().replace(" ", "_")
+    if raw in {axis.value for axis in RelationType}:
+        return raw
+    if raw in _SEMANTIC_RELATION_ALIASES:
+        return _SEMANTIC_RELATION_ALIASES[raw]
+    if raw in _LEGACY_RELATION_TYPE_MAP:
+        return _LEGACY_RELATION_TYPE_MAP[raw].value
+    raise KeyError(raw)
+
+
 def normalize_semantic_relation(value: str | None) -> str:
     """Normalize a language relation label to a canonical semantic relation."""
     raw = str(value or "").strip().lower()
@@ -434,6 +462,17 @@ class RelationEdge(BaseModel):
         if self.target_id == concept_id:
             return self.source_id
         return None
+
+    @property
+    def is_directed(self) -> bool:
+        """Whether source→target orientation carries meaning.
+
+        Positive and negative relations are directed (``A depends_on B``,
+        ``A excludes B``); parallel relations (equivalence, overlap,
+        Hebbian co-occurrence) are symmetric and their stored orientation
+        is arbitrary, so direction-conditioned propagation ignores them.
+        """
+        return self.relation_type != RelationType.PARALLEL
 
     def reinforce(self, provenance: str = "", *, tick: int | None = None) -> None:
         """Strengthen this relation through repeated observation.

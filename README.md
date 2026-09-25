@@ -299,6 +299,35 @@ Projection uses spreading activation with task-affinity boosting and MMR (Maxima
 
 投影使用扩散激活与任务亲和度加权，并通过 MMR（最大边际相关性）选择策略保证多样性。
 
+### `project(seeds, perspective=)` — Perspectives / 视角
+
+The same concept-world read under different roles. A `Perspective` weights
+relations by **semantic name** (`dependence`, `inclusion`, `enables`, … or
+aliases like `depends_on`) or by axis (`positive` / `negative` / `parallel`),
+and can follow or oppose the direction of directed relations. Named profiles
+live in `world0.perspectives`.
+同一个概念世界在不同角色下的读法。`Perspective` 按**语义关系名**（或轴）给关系加权，
+并可顺着或逆着有向关系传播；内置画像在 `world0.perspectives`。
+
+```python
+from world0 import Perspective
+
+w.project(["latency"], perspective="dependency_map")   # what latency relies on / 依赖什么
+w.project(["latency"], perspective="impact_map")       # what relies on latency / 谁依赖它
+w.project(["latency"], perspective="taxonomy")         # where it sits / 归属结构
+w.project(["latency"], perspective="analogy")          # what it resembles / 类比
+w.project(["latency"], perspective="contrast")         # what it conflicts with / 冲突
+
+# or assemble one — unknown relation labels are rejected at construction
+# 或自行组合——未知的关系标签在构造时即被拒绝
+p = Perspective(
+    task="incident triage",
+    relation_type_weights={"dependence": 1.4, "parallel": 0.4},
+    direction_weights={"forward": 1.0, "backward": 0.4},
+)
+w.project(["latency"], perspective=p)
+```
+
 ### `reflect()` — Consolidate / 巩固
 
 ```python
