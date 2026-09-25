@@ -551,6 +551,35 @@ class ConceptNode(BaseModel):
             return 0.5
         return alpha / total
 
+    def evidence(self, saturation_k: float = 10.0) -> float:
+        """How well confirmed this concept is, in [0, 1) — independent of time.
+
+        Beta posterior mean of confirmations vs disconfirmations, scaled by
+        a saturating count term ``n / (n + k)`` so one lucky observation
+        cannot claim near-certainty.  Unlike ``confidence`` this never
+        decays: it is the "is this real?" half of the belief.
+        """
+        n = self.activation_count
+        if n <= 0:
+            return 0.0
+        return self.evidence_balance() * (n / (n + saturation_k))
+
+    def salience(
+        self,
+        half_life: float = 168.0,
+        *,
+        now_tick: int | None = None,
+        now: datetime | None = None,
+    ) -> float:
+        """How *current* this concept is, in [0.1, 1] — independent of evidence.
+
+        The "is this relevant now?" half of the belief: freshness in
+        cognitive time (an alias of ``temporal_relevance``).  ``confidence``
+        blends both halves; callers that need them apart should read
+        ``evidence()`` and ``salience()`` directly.
+        """
+        return self.temporal_relevance(half_life, now_tick=now_tick, now=now)
+
     def hours_since_activation(self, now: datetime | None = None) -> float:
         reference = now or datetime.now(timezone.utc)
         delta = reference - self.last_activated

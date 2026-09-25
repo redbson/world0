@@ -105,8 +105,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Hebbian pair cap** (`MAX_PAIRS`) now keeps pairs in observation
   (salience) order rather than lexicographic id order.
 - **Synonym resolution is indexed** — `ConceptManager._find_synonym_match`
-  scores only the token-index shortlist (labels, description and sense
-  tokens) instead of scanning every concept; decisions are unchanged.
+  scores only a shortlist (exact-label hits plus the postings of the
+  rarest probe tokens) with cached per-concept signatures instead of
+  re-tokenizing every concept; decisions are unchanged.  Building 1 000
+  semantic concepts drops from 16.8 s to 0.14 s; 5 000 take 2.4 s.
+- **Relative activation cut** — activation and projection accept
+  candidates above `min(min_activation, 0.02 × strongest seed)`, so weak
+  (embryonic) seeds keep the same multi-hop horizon as confident ones.
+- **Evidence and salience accessors** — `ConceptNode.evidence()` (Beta
+  posterior × count saturation, time-independent) and
+  `ConceptNode.salience()` (cognitive-time freshness); `Projection.render()`
+  prints evidence next to confidence.
 
 ### Fixed
 - Relation `probability` (belief the typed relation is correct) is no

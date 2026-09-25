@@ -136,7 +136,8 @@ class Projection(BaseModel):
                 linked = f" Linked to: {', '.join(neighbors)}." if neighbors else ""
                 lines.append(
                     f"- **{c.representation()}** ({c.name}, {c.maturity.value}, "
-                    f"confidence: {c.confidence:.2f}){desc}{linked}"
+                    f"confidence: {c.confidence:.2f}, evidence: {c.evidence():.2f})"
+                    f"{desc}{linked}"
                 )
             lines.append("")
 
@@ -146,7 +147,8 @@ class Projection(BaseModel):
                 desc = f": {c.description}" if c.description else ""
                 lines.append(
                     f"- **{c.representation()}** ({c.name}, {c.maturity.value}, "
-                    f"confidence: {c.confidence:.2f}){desc}"
+                    f"confidence: {c.confidence:.2f}, evidence: {c.evidence():.2f})"
+                    f"{desc}"
                 )
             lines.append("")
 
@@ -155,7 +157,7 @@ class Projection(BaseModel):
             for c, s in emerging:
                 lines.append(
                     f"- **{c.representation()}** ({c.name}, {c.maturity.value}, "
-                    f"confidence: {c.confidence:.2f})"
+                    f"confidence: {c.confidence:.2f}, evidence: {c.evidence():.2f})"
                 )
             lines.append("")
 

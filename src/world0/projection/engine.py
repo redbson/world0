@@ -39,6 +39,11 @@ TEMPORAL_WEIGHT: float = 0.3
 # (observations) of cognitive time.
 PROJECTION_TEMPORAL_HL: float = 168.0
 
+# Candidate cut as a fraction of the strongest activation.  Applied as
+# ``min(min_activation, RELATIVE_MIN_ACTIVATION × peak)`` so it only ever
+# *loosens* the absolute floor (for weak seeds), never tightens it.
+RELATIVE_MIN_ACTIVATION: float = 0.02
+
 
 class ProjectionEngine:
     """Generates a Projection from activation scores.
@@ -73,11 +78,16 @@ class ProjectionEngine:
         4. Include relations between selected concepts
         5. Return LLM-prompt-ready Projection
         """
-        # Filter candidates
+        # Filter candidates.  The cut is the *lower* of the absolute floor
+        # and a fraction of the strongest activation, so a projection from
+        # low-confidence seeds keeps its horizon instead of being emptied
+        # by a threshold calibrated for confident seeds.
+        peak = max(activations.values(), default=0.0)
+        cut = min(min_activation, RELATIVE_MIN_ACTIVATION * peak)
         candidates = {
             cid: score
             for cid, score in activations.items()
-            if score >= min_activation
+            if score >= cut
         }
 
         if not candidates:
@@ -124,7 +134,11 @@ class ProjectionEngine:
             else:
                 temporal_freshness[cid] = 1.0
 
-        # Build neighbor sets for similarity computation
+        # Build neighbor sets for the redundancy term.  A coupling-weighted
+        # Jaccard was evaluated against the cognitive benchmark and did not
+        # improve precision/recall at any λ (it merely traded ML for Ops
+        # precision at λ=0.3 and lost at λ≥0.4), so the plain set overlap
+        # stays — see docs/world0-cognitive-dynamics-analysis.md §7.5.
         neighbor_sets: dict[str, set[str]] = {}
         for cid in candidates:
             neighbor_sets[cid] = set(self._relations.neighbors(cid))

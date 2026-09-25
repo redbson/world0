@@ -390,6 +390,11 @@ $\gamma_{task} = 1 + 0.5\cdot\text{affinity}$，affinity 来自词级匹配（§
 | `concepts/_manager.py`、`concepts/_indexes.py` | 同义匹配短名单；索引 sense 词 |
 | `world/_reflect.py`、`world/facade.py` | `reflect(light=)`、`auto_reflect_every` |
 | `tests/test_roadmap_dynamics.py` | 22 个行为测试 |
+| **第三轮** | |
+| `concepts/_manager.py`、`concepts/_indexes.py` | 稀有词短名单 + `NameIndex.ids_for`、签名缓存、探针签名只算一次 |
+| `dynamics/activation.py`、`projection/engine.py` | 相对接受阈值 `min(min_activation, 0.02·S)`；加权 Jaccard 实测否定后保留普通 Jaccard |
+| `schemas/concept.py`、`schemas/types.py` | `evidence()`、`salience()`；`render()` 同时输出 evidence |
+| `tests/test_roadmap_dynamics.py` | +6 个测试（弱种子视野、证据/显著性独立、常见词短名单、缓存失效） |
 
 所有字段均有默认值，旧的 JSON 存储可直接加载（`task_profile` 自动回填，tick 与
 recurrence 默认 0）。
@@ -402,11 +407,15 @@ recurrence 默认 0）。
 §7.6、§7.8（标注 ✅，行为测试在 `tests/test_roadmap_dynamics.py`）；§7.1、
 §7.5、§7.7、§7.9 仍是建议。
 
-### 7.1 把 `confidence` 拆成"证据"与"显著性"
+### 7.1 把 `confidence` 拆成"证据"与"显著性"（部分 ✅）
 
 `confidence` 现在同时表示"这个概念是真的/有用的"（证据）和"它现在相关"
-（显著性）。`evidence_balance()`（Beta 后验）和 `temporal_relevance()`
-（新鲜度）已经分别是这两者的干净度量。建议：
+（显著性）。第三轮把这两个量作为**只读派生量**暴露出来：
+`ConceptNode.evidence()` = Beta 后验均值 × $n/(n+10)$（与时间无关，只被
+activate/weaken 改变）；`ConceptNode.salience(now_tick=)` = 认知时间新鲜度；
+`Projection.render()` 在 confidence 旁边同时给出 evidence，下游 Agent 不再被
+"confidence: 0.06"单独误导。成熟度门槛已通过 §7.2 的复现分数部分转向证据。
+完整拆分（衰减只作用于 salience、confidence 成为派生量）仍是建议：
 
 ```text
 evidence(v)  = Beta 后验均值 × 饱和(n)         ——只被 activate/weaken 改变，慢速纪元遗忘
@@ -455,22 +464,43 @@ $p \leftarrow p + (1-p)\cdot 0.05$（递减收益，20 次把 0.70 推到 ≈0.8
 `edge_strength`。这是"同一世界在不同视角下给出不同投影"的第三个杠杆（前两个是
 关系轴权重与域亲和）。按语义关系细分方向权重留作后续扩展。
 
-### 7.5 投影冗余度量与相对阈值
+### 7.5 投影冗余度量与相对阈值（相对阈值 ✅，加权 Jaccard ✗ 已实测否定）
 
-- 冗余用加权 Jaccard（按 `weight × ρ_type`），使"通过一条强依赖边相连"与
-  "通过一条弱泛化边相连"的重叠含义不同。
-- 候选阈值改为相对值 `max(min_activation, 0.02·S)`，低置信种子也能得到完整视野；
-  当前 0.01 绝对阈值意味着种子置信度 <0.33 时 3% 下限带会被整体裁掉。
-- MMR 的 $\lambda=0.3$ 未经任何任务级评测标定；建议用
-  `tests/_cognitive_benchmark.py` 的 precision/recall 做一次扫描。
+- **相对阈值 ✅**：激活与投影的接受阈值都改为
+  `min(min_activation, 0.02·S)`（S = 最强种子分数）——只会放松绝对阈值、
+  从不收紧。置信度 ≈0.2 的一次性种子现在与置信种子一样保留 4 跳视野
+  （`test_weak_seed_keeps_its_horizon`），基准测试不受影响。
+- **加权 Jaccard ✗**：按 `weight × ρ_type` 的加权冗余在认知基准上实测**没有
+  收益**：λ=0.3 时只是把 ML/Ops 的精度互换（0.67/0.83 → 0.83/0.67），λ≥0.4
+  两边都掉到 0.67。因此保留普通集合 Jaccard，代码里留了说明。
+- **λ 扫描**：普通 Jaccard 下 λ ∈ {0.1…0.5} 对基准结果**完全不敏感**
+  （ML 0.67/0.67、Ops 0.83/0.83、交集 4 恒定）。这说明当前基准由相关性主导，
+  冗余项没有发挥作用——在做任何 λ 调参之前，需要先构造一个含"同邻域冗余概念"
+  的基准，否则调参没有信号。扫描脚本见 §8。
 
 ### 7.6 身份解析索引化 ✅
 
-`_find_synonym_match()` 现在先用 `TokenIndex.candidates()` 取短名单再打分。
-任何正的同义分都要求共享一个标签词或一个 sense/description 词，因此短名单是
-完备的（`TokenIndex` 现在同时索引 `sense` 词，只用于短名单，不影响签名相似度）；
-探针完全不可分词（如纯中文标签且无描述）时回退到全量扫描。候选按
-`(created_tick, id)` 排序，平局结果与原实现一致。复杂度从 O(N) 降到 O(候选数)。
+`_find_synonym_match()` 现在只对短名单打分：**精确标签命中**（`NameIndex`，覆盖
+词面重叠路径）∪ **最稀有的 40%（至少 3 个）探针词的倒排列表**（覆盖签名重叠
+路径——真同义词必须共享 ≥78% 的词，因此必然共享最稀有的那几个）。仅按"任一
+共享词"取短名单在真实语料里会退化为全量扫描（"system"、"data"这类词几乎在
+每个概念里出现），剖析显示 600 次插入触发了 179 700 次打分、每次都重新分词。
+现在每个概念的签名（标签键、sense+description 词集、规范化 sense）按派生字段
+构成的键缓存，探针侧签名对整个短名单只算一次；探针完全不可分词（纯中文标签且
+无描述）时回退到全量扫描。候选按 `(created_tick, id)` 排序，平局结果不变。
+
+实测（`kind`/`sense` 语义候选，同一台机器）：
+
+| 规模 | 操作 | 修复前（O(N²)） | 修复后 |
+|------|------|-----------------|--------|
+| N=1000 | 建 1000 个概念 | 16.8 s | **0.14 s** |
+| N=1000 | 摄入 50×10 个语义候选 | 23.6 s | **0.55 s** |
+| N=5000 | 建 5000 个概念 | （未等完） | **2.4 s** |
+| N=5000 | 摄入 50×10 个语义候选 | — | **1.65 s** |
+
+顺带发现一个既有的身份风险：`tokenize_signature` 丢弃单字符 token，因此
+"GPT 4"/"GPT 5" 这类只靠单个数字区分、其余描述相同的概念会被判为同义并合并。
+建议后续让纯数字 token 不受长度限制（需重新跑一遍整合阈值相关测试）。
 
 ### 7.7 存储层
 
@@ -506,6 +536,9 @@ python -m pytest -q tests/test_dynamics_analysis.py tests/test_temporal.py
 
 # 标定扫描（§5 的表）
 python scripts/calibrate_decay.py 0.1 0.2 0.3
+
+# MMR λ × 冗余度量扫描（§7.5 的结论）
+python scripts/sweep_mmr.py
 ```
 
 时间模拟只有一个原语：`world.clock.advance(n)` 让 n 次观察"无事发生"地流逝；

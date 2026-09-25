@@ -38,6 +38,10 @@ class NameIndex:
             return None
         return next(iter(ids))
 
+    def ids_for(self, name: str) -> set[str]:
+        """Every concept id carrying this label (ambiguous labels included)."""
+        return set(self._map.get(name.strip().lower(), ()))
+
     def add(self, name: str, concept_id: str) -> None:
         """Add ``concept_id`` to the label's candidate set."""
         normalized = name.strip().lower()
@@ -93,6 +97,26 @@ class TokenIndex:
             if ids:
                 result.update(ids)
         return result
+
+    def candidates_by_rarity(
+        self,
+        tokens: set[str],
+        *,
+        fraction: float = 0.4,
+        min_tokens: int = 3,
+    ) -> set[str]:
+        """Concept ids sharing one of the *rarest* probe tokens.
+
+        Common tokens ("system", "data") post to most of the world and
+        would turn a shortlist back into a full scan.  A genuine synonym
+        shares the large majority of the probe's tokens, so it necessarily
+        shares one of the rarest ``max(min_tokens, fraction × n)`` of them.
+        """
+        if not tokens:
+            return set()
+        ranked = sorted(tokens, key=lambda tok: (len(self._map.get(tok, ())), tok))
+        keep = max(min_tokens, int(-(-len(ranked) * fraction // 1)))
+        return self.candidates(set(ranked[:keep]))
 
     def index_node(self, node) -> None:
         """Refresh entries for ``node`` from its current signature tokens.

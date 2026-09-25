@@ -60,6 +60,12 @@ class ConceptManager:
         self._token_index = TokenIndex()
         self._dirty: set[str] = set()
         self._matcher = SignatureMatcher(self._token_index, self._concepts.get)
+        # Per-concept synonym signature (label keys, sense+description
+        # tokens, normalized sense), validated by a key built from the
+        # fields it derives from so it never goes stale.
+        self._signature_cache: dict[
+            str, tuple[tuple, set[str], set[str], str]
+        ] = {}
 
     # ── persistence ───────────────────────────────────────────────────
 
@@ -233,7 +239,13 @@ class ConceptManager:
         probe_tokens |= tokenize_signature(sense)
         probe_tokens |= tokenize_signature(description)
         if probe_tokens:
-            candidate_ids = self._token_index.candidates(probe_tokens)
+            # Exact-label hits cover the lexical-overlap path; the rarest
+            # probe tokens cover the signature-overlap paths without letting
+            # common words ("system", "data") pull in the whole world.
+            candidate_ids: set[str] = set()
+            for label in labels:
+                candidate_ids |= self._name_index.ids_for(label)
+            candidate_ids |= self._token_index.candidates_by_rarity(probe_tokens)
             pool = [
                 self._concepts[cid]
                 for cid in candidate_ids
@@ -242,20 +254,36 @@ class ConceptManager:
             pool.sort(key=lambda node: (node.created_tick, node.id))
         else:
             pool = list(self._concepts.values())
+        # Probe-side signature, computed once for the whole shortlist.
+        label_keys = {
+            normalize_identity_part(label)
+            for label in labels
+            if normalize_identity_part(label)
+        }
+        candidate_tokens = tokenize_signature(" ".join([sense, description]))
+        candidate_sense = normalize_identity_part(sense)
+        domain_norm = normalize_identity_part(domain)
+        kind_norm = normalize_identity_part(kind)
+        if kind_norm in _SALIENCE_KINDS:
+            kind_norm = ""
+
         for node in pool:
+            node_label_keys, node_tokens, node_sense = self._node_signature(node)
             if not self._semantic_boundary_compatible(
                 node,
-                description=description,
-                kind=kind,
-                sense=sense,
-                domain=domain,
+                candidate_tokens=candidate_tokens,
+                node_tokens=node_tokens,
+                kind_norm=kind_norm,
+                domain_norm=domain_norm,
             ):
                 continue
             score = self._synonym_score(
-                node,
-                labels=labels,
-                description=description,
-                sense=sense,
+                label_keys=label_keys,
+                candidate_tokens=candidate_tokens,
+                candidate_sense=candidate_sense,
+                node_label_keys=node_label_keys,
+                node_tokens=node_tokens,
+                node_sense=node_sense,
             )
             if score > best_score:
                 best = node
@@ -264,28 +292,36 @@ class ConceptManager:
             return best
         return None
 
-    def _synonym_score(
-        self,
-        node: ConceptNode,
-        *,
-        labels: list[str],
-        description: str,
-        sense: str,
-    ) -> float:
+    def _node_signature(
+        self, node: ConceptNode
+    ) -> tuple[set[str], set[str], str]:
+        """(label keys, sense+description tokens, normalized sense), cached."""
+        key = (node.name, tuple(node.aliases), node.sense, node.description)
+        cached = self._signature_cache.get(node.id)
+        if cached is not None and cached[0] == key:
+            return cached[1], cached[2], cached[3]
         label_keys = {
-            normalize_identity_part(label)
-            for label in labels
-            if normalize_identity_part(label)
-        }
-        node_label_keys = {
             normalize_identity_part(label)
             for label in [node.name, *node.aliases]
             if normalize_identity_part(label)
         }
+        tokens = tokenize_signature(" ".join([node.sense, node.description]))
+        sense_norm = normalize_identity_part(node.sense)
+        self._signature_cache[node.id] = (key, label_keys, tokens, sense_norm)
+        return label_keys, tokens, sense_norm
+
+    @staticmethod
+    def _synonym_score(
+        *,
+        label_keys: set[str],
+        candidate_tokens: set[str],
+        candidate_sense: str,
+        node_label_keys: set[str],
+        node_tokens: set[str],
+        node_sense: str,
+    ) -> float:
         lexical_overlap = bool(label_keys & node_label_keys)
 
-        candidate_tokens = tokenize_signature(" ".join([sense, description]))
-        node_tokens = tokenize_signature(" ".join([node.sense, node.description]))
         if not candidate_tokens or not node_tokens:
             return 1.0 if lexical_overlap else 0.0
 
@@ -294,8 +330,6 @@ class ConceptManager:
         jaccard = len(shared) / len(union)
         containment = len(shared) / min(len(candidate_tokens), len(node_tokens))
 
-        candidate_sense = normalize_identity_part(sense)
-        node_sense = normalize_identity_part(node.sense)
         exact_specific_sense = (
             bool(candidate_sense)
             and candidate_sense == node_sense
@@ -313,27 +347,21 @@ class ConceptManager:
     def _semantic_boundary_compatible(
         node: ConceptNode,
         *,
-        description: str,
-        kind: str,
-        sense: str,
-        domain: str,
+        candidate_tokens: set[str],
+        node_tokens: set[str],
+        kind_norm: str,
+        domain_norm: str,
     ) -> bool:
-        domain_norm = normalize_identity_part(domain)
         node_domain = normalize_identity_part(node.domain)
         if domain_norm and node_domain and domain_norm != node_domain:
             return False
 
-        kind_norm = normalize_identity_part(kind)
         node_kind = normalize_identity_part(node.kind)
-        if kind_norm in _SALIENCE_KINDS:
-            kind_norm = ""
         if node_kind in _SALIENCE_KINDS:
             node_kind = ""
         if kind_norm and node_kind and kind_norm != node_kind:
             return False
 
-        candidate_tokens = tokenize_signature(" ".join([sense, description]))
-        node_tokens = tokenize_signature(" ".join([node.sense, node.description]))
         return bool(candidate_tokens and node_tokens)
 
     def _record_synonym(
@@ -504,6 +532,7 @@ class ConceptManager:
         for n in node.all_names():
             self._name_index.remove_if_owned(n, concept_id)
         self._token_index.unindex(concept_id)
+        self._signature_cache.pop(concept_id, None)
         if node.identity_key:
             self._identity_index.pop(node.identity_key, None)
         self._store.delete_concept(concept_id)

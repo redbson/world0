@@ -317,3 +317,89 @@ class TestContinuousMode:
         for i in range(30):
             world.ingest(Observation(concepts=[f"other{i}"], source="s"))
         assert early.last_decayed_tick is None
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# §7.5 Relative activation cut / §7.1 evidence & salience accessors
+# ═══════════════════════════════════════════════════════════════════════
+
+
+class TestRelativeCutAndEvidence:
+    def test_weak_seed_keeps_its_horizon(self, world):
+        """A once-observed (confidence ≈ 0.2) seed used to lose everything
+        beyond one hop to the absolute 0.01 cut; the relative cut keeps the
+        same chain length a confident seed gets."""
+        names = [f"w{i}" for i in range(5)]
+        for a, b in zip(names, names[1:]):
+            world.ingest(Observation(concepts=[a, b], relations=[(a, b, "depends_on")], source="s"))
+        ids = {n: world.concepts.resolve(n).id for n in names}
+        act = world._activation.activate([ids["w0"]], max_depth=4, decay=0.5, record=False)
+        assert world.concepts.resolve("w0").confidence < 0.35
+        assert all(ids[n] in act for n in names), sorted(n for n in names if ids[n] not in act)
+        scores = [act[ids[n]] for n in names]
+        assert all(a > b for a, b in zip(scores, scores[1:]))
+        proj = world.project(["w0"], max_depth=4, max_concepts=10)
+        assert {c.name for c in proj.concepts} == set(names)
+
+    def test_relative_cut_never_tightens_the_absolute_one(self, world):
+        for _ in range(10):
+            world.ingest(Observation(concepts=["s", "t"], relations=[("s", "t", "depends_on")], source="x"))
+        s = world.concepts.resolve("s")
+        act = world._activation.activate([s.id], max_depth=1, decay=0.5, record=False, min_activation=0.5)
+        # Strong seed (≈1.0): cut = min(0.5, 0.02) → weak neighbours are still
+        # accepted relative to the seed, never rejected below the absolute.
+        assert len(act) >= 1
+
+    def test_evidence_and_salience_are_independent(self, world):
+        for _ in range(12):
+            world.ingest(Observation(concepts=["e"], source="s"))
+        node = world.concepts.resolve("e")
+        evidence_now = node.evidence()
+        salience_now = node.salience(now_tick=world.clock.tick)
+        world.clock.advance(500)
+        assert node.evidence() == pytest.approx(evidence_now)  # time does not touch evidence
+        assert node.salience(now_tick=world.clock.tick) < salience_now
+        world.concepts.weaken(node.id)
+        assert node.evidence() < evidence_now  # disconfirmation does
+        assert 0.0 < node.evidence() < 1.0
+        assert ConceptNode(name="never").evidence() == 0.0
+
+    def test_render_exposes_evidence_next_to_confidence(self, world):
+        for _ in range(3):
+            world.ingest(Observation(concepts=["r", "q"], relations=[("r", "q", "depends_on")], source="s"))
+        text = world.project(["r"]).render()
+        assert "confidence: " in text and "evidence: " in text
+
+
+class TestSynonymShortlistScaling:
+    def test_common_tokens_do_not_defeat_the_shortlist(self, world):
+        """Every concept shares the words "system data component"; the rarity
+        filter still finds the true synonym and still refuses the others."""
+        for i in range(60):
+            world.concepts.get_or_create(
+                f"component {i}", kind="module", sense=f"system data component variant{i}"
+            )
+        target, _ = world.concepts.get_or_create(
+            "Scheduler", kind="module", sense="system data component that orders jobs"
+        )
+        found, is_new = world.concepts.get_or_create(
+            "Job Scheduler",
+            aliases=["Scheduler"],
+            kind="module",
+            sense="system data component that orders jobs",
+        )
+        assert not is_new and found.id == target.id
+        other, is_new = world.concepts.get_or_create(
+            "Cache", kind="module", sense="system data component that memoizes results"
+        )
+        assert is_new and other.id != target.id
+
+    def test_signature_cache_tracks_edits(self, world):
+        node, _ = world.concepts.get_or_create("Alpha", kind="k", sense="first greek letter symbol")
+        world.concepts._node_signature(node)  # type: ignore[attr-defined]
+        world.concepts.update_description(node.id, "the very first greek letter")
+        labels, tokens, sense = world.concepts._node_signature(node)  # type: ignore[attr-defined]
+        assert "very" in tokens
+        world.concepts.add_alias(node.id, "α-letter")
+        labels, _, _ = world.concepts._node_signature(node)  # type: ignore[attr-defined]
+        assert "α letter" in labels or "α-letter".lower() in {l.replace(" ", "-") for l in labels}

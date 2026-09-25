@@ -102,6 +102,11 @@ PROPAGATION_FLOOR: float = 0.3
 # from ~1 hop to 3-4 hops.
 PROPAGATION_MIN_RATIO: float = 0.03
 
+# Acceptance cut as a fraction of the strongest seed score.  Applied as
+# ``min(min_activation, RELATIVE_MIN_ACTIVATION × seed_max)`` it only ever
+# loosens the absolute cut, for seeds too weak to clear it otherwise.
+RELATIVE_MIN_ACTIVATION: float = 0.02
+
 # Width of the floor band, as a fraction of the floor.  A lifted signal
 # lands in ``[(1 − SPREAD) · floor, floor)`` at a position proportional to
 # its raw strength, so lifted concepts remain strictly ordered by the
@@ -225,6 +230,10 @@ class ActivationEngine:
 
         # Propagation floor: minimum signal that can still pass through
         prop_floor = seed_score_max * PROPAGATION_MIN_RATIO
+        # Acceptance cut: the absolute ``min_activation`` loosened to a
+        # fraction of the strongest seed, so weak (e.g. embryonic) seeds keep
+        # the same 3–4 hop horizon as confident ones.
+        cut = min(min_activation, RELATIVE_MIN_ACTIVATION * seed_score_max)
 
         # Layered BFS propagation with decay
         for depth in range(max_depth):
@@ -233,7 +242,7 @@ class ActivationEngine:
 
             for cid in frontier:
                 source_score = activations.get(cid, 0.0)
-                if source_score < min_activation:
+                if source_score < cut:
                     continue
 
                 for rel in self._relations.for_concept(cid):
@@ -324,7 +333,7 @@ class ActivationEngine:
                     # signal to participate in projections without
                     # collapsing into a single tied score.
                     propagated = self._apply_floor(raw, prop_floor)
-                    if propagated < min_activation:
+                    if propagated < cut:
                         continue
 
                     layer[neighbor_id] = _accumulate(
@@ -353,7 +362,7 @@ class ActivationEngine:
         net: dict[str, float] = {}
         for cid, excitation in activations.items():
             score = excitation - inhibitions.get(cid, 0.0)
-            if score > min_activation:
+            if score > cut:
                 net[cid] = score
         return net
 
