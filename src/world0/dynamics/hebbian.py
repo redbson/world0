@@ -216,10 +216,14 @@ class HebbianEngine:
             support = self._mentions.get(cid, 0)
             if support < PREDICTION_MIN_SUPPORT:
                 continue
+            # One prediction per companion, however many relations (e.g.
+            # opposing explicit claims) link the pair (docs/paper §9).
+            companions: set[str] = set()
             for rel in self._relations.for_concept(cid):
                 other = rel.other_end(cid)
-                if other is None or other == cid:
+                if other is None or other == cid or other in companions:
                     continue
+                companions.add(other)
                 p = min(1.0, self._linked.get(_pair_key(cid, other), 0) / support)
                 if p < PREDICTION_MIN_PROBABILITY:
                     continue
@@ -337,15 +341,22 @@ class HebbianEngine:
             n_b = self._mentions.get(edge.target_id, 0)
             if n_a + n_b < REVALIDATION_MIN_MENTIONS:
                 continue
-            # Created at the COOCCURRENCE_THRESHOLD-th co-occurrence and
-            # reinforced on each later one.
-            cooccurrences = edge.reinforcement_count + COOCCURRENCE_THRESHOLD
+            # Exact count when tracked (``_linked``); otherwise the lower
+            # bound for an edge created at the COOCCURRENCE_THRESHOLD-th
+            # co-occurrence and reinforced on each later one.  The bound
+            # undercounts edges whose creation the association gate
+            # delayed, which biased revalidation toward removal
+            # (docs/paper, Proposition 5.4).
+            key = _pair_key(edge.source_id, edge.target_id)
+            cooccurrences = max(
+                edge.reinforcement_count + COOCCURRENCE_THRESHOLD,
+                self._linked.get(key, 0),
+            )
             if self._association(edge.source_id, edge.target_id, cooccurrences) < cutoff:
                 if self._relations.remove(edge.id):
                     removed.append(edge.id)
                     # Back to the pending counter: the pair is unlinked
                     # again but its co-occurrence history is real.
-                    key = _pair_key(edge.source_id, edge.target_id)
                     count = self._linked.pop(key, 0)
                     if count:
                         self._cooccurrence[key] = count

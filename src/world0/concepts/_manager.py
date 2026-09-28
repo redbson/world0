@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING
 from world0.concepts._consolidation import SignatureMatcher
 from world0.concepts._identity_ops import merge_concepts, split_concept
 from world0.concepts._indexes import NameIndex, TokenIndex
+from world0.dynamics.decay import settle_concept
 from world0.schemas.clock import CognitiveClock
 from world0.schemas.concept import (
     ConceptNode,
@@ -437,6 +438,9 @@ class ConceptManager:
         node = self._concepts.get(concept_id)
         if not node:
             return None
+        # Settle the decay owed since the last use first: activation moves
+        # the decay reference to now (docs/paper, Theorem 3.2).
+        settle_concept(node, self._clock.tick)
         node.activate(source=source, task=task, tick=self._clock.tick)
         self._dirty.add(node.id)
         return node

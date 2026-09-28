@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Formal paper** (`docs/paper/world0-formal.md`) — the current design
+  written as a mathematical model with propositions and proofs: the
+  semigroup property of decay with its era correction, reflect-cadence
+  independence, the six-confirmation noise threshold, relation survival
+  `E·log2(5p)`, Jaccard as a function of the two conditionals (gate 0.2 ⇔
+  P ≥ 1/3), seed dominance and horizon completeness of activation, the
+  off-task-as-duplicate lemma of the projection, focus capacity and
+  lifetime, and the calibration of the prediction error.
+  `docs/paper/verify.py` checks every proposition numerically against the
+  engines; `tests/test_formal_properties.py` (19 tests) pins them.
 - **Prediction error on ingest** (machine-consciousness track,
   `docs/mc/04-prediction.md`) — every observation is scored against
   learned co-occurrence before it is learned: `IngestResult.prediction`
@@ -281,6 +291,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   projection unchanged.  `RelationEdge.is_directed` exposes the rule.
 
 ### Fixed
+- **Forgetting no longer depends on how often `reflect()` runs** (paper
+  Theorem 3.2).  Activation moved the decay reference point to "now" and
+  the decay owed for the interval before it was dropped: a concept used
+  every 24 observations ended at confidence 0.31 when reflect ran every
+  observation and 0.93 when it ran every 1 000 or never.  The owed decay
+  is now settled right before every reinforcement
+  (`dynamics.decay.settle_concept` / `settle_relation`); all four
+  cadences give 0.31.
+- A faded or inhibited **seed is kept** in the activation result, so the
+  seeds-first rule of the projection holds for it too.
+- **Opposition between claims is symmetric**: a `generic_relation` claim
+  no longer weakens an explicit negative claim (it asserts nothing, in
+  either direction).
+- Hebbian **revalidation uses the exact co-occurrence count** when it is
+  tracked; the `reinforcements + 2` estimate undercounted links whose
+  creation the association gate had delayed (8 true vs 4 estimated).
+- The **prediction error counts each companion once**, however many
+  relations (e.g. opposing explicit claims) link the pair.
 - Relation `probability` (belief the typed relation is correct) is no
   longer eroded by time decay, and `weaken()` lowers it by the
   disconfirmation penalty instead of overwriting it with `confidence`

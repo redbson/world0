@@ -431,14 +431,18 @@ class RelationEdge(BaseModel):
             return self.source_id == id_a and self.target_id == id_b
         return {self.source_id, self.target_id} == {id_a, id_b}
 
-    def opposes(self, other_axis: RelationType) -> bool:
+    def opposes(self, other_axis: RelationType, other_semantic: str = "") -> bool:
         """Whether a claim on ``other_axis`` contradicts this edge's claim.
 
         A negative claim (conflict, exclusion, …) about a pair contradicts
         a positive or parallel one and vice versa.  ``generic_relation``
-        asserts nothing beyond "related", so it is never contradicted.
+        asserts nothing beyond "related", so it neither contradicts nor is
+        contradicted — pass the other claim's ``other_semantic`` so the
+        relation stays symmetric (docs/paper, Proposition 4.4).
         """
         if self.semantic_relation == "generic_relation":
+            return False
+        if other_semantic and normalize_semantic_relation(other_semantic) == "generic_relation":
             return False
         mine_negative = self.relation_type == RelationType.NEGATIVE
         return mine_negative != (other_axis == RelationType.NEGATIVE)

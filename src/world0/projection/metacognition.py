@@ -62,11 +62,11 @@ def assess(
             by_pair[frozenset((rel.source_id, rel.target_id))].append(rel)
     for pair in sorted(by_pair, key=lambda p: sorted(p)):
         claims = by_pair[pair]
-        if not any(a.opposes(b.relation_type) for a in claims for b in claims):
+        if not any(a.opposes(b.relation_type, b.semantic_relation) for a in claims for b in claims):
             continue
         ranked = sorted(claims, key=lambda r: (-r.probability, r.id))
         lead = ranked[0]
-        opposing = [r for r in ranked[1:] if lead.opposes(r.relation_type)]
+        opposing = [r for r in ranked[1:] if lead.opposes(r.relation_type, r.semantic_relation)]
         margin = lead.probability - opposing[0].probability
         status.contested.append(ContestedClaim(
             source_id=lead.source_id,

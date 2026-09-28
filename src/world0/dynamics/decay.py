@@ -35,6 +35,17 @@ Three guarantees this engine makes (analysis and probe evidence in
    ``probability`` is the belief that the typed relation is *correct*,
    which only evidence (reinforce / weaken / extraction) may change.
 
+4. **Schedule-independent (lazy settlement).**  Activation and
+   reinforcement move the decay reference point to "now", so the decay
+   still owed for the interval before them must be applied first — or it
+   is lost, and how much a concept forgets would depend on how often
+   ``reflect()`` happened to run between two uses (it did: a concept
+   re-used every 720 observations with no reflect in between never
+   decayed at all).  ``settle_concept`` / ``settle_relation`` apply that
+   owed decay; the managers call them right before every reinforcement.
+   Together with guarantee 1, forgetting then depends only on cognitive
+   time, never on the reflect cadence (docs/paper, Theorem 3.2).
+
 Optimization: items touched less than one tick ago are skipped entirely,
 avoiding unnecessary floating-point work.
 """
@@ -181,6 +192,71 @@ def evidence_floor(
     return floor
 
 
+def settle_concept(
+    node: ConceptNode, now_tick: int, now: datetime | None = None
+) -> bool:
+    """Apply the decay a concept owes up to ``now_tick``.
+
+    Relaxes confidence toward the evidence floor over the cognitive time
+    since decay was last applied (or since the last activation, whichever
+    is later) and moves the reference point to now.  Idempotent: calling
+    it again at the same instant changes nothing.  Returns True when the
+    concept has just crossed into FADING.
+    """
+    if node.maturity == Maturity.FADING and node.confidence <= 0.0:
+        return False
+    now = now or wall_now()
+    elapsed = node.decay_elapsed(now_tick, now)
+    # Skip recently activated (or recently decayed) concepts; the
+    # un-applied interval is not lost — it is measured from the unchanged
+    # reference point on the next call.
+    if elapsed < DECAY_GRACE_TICKS:
+        return False
+    decay_factor = math.pow(0.5, elapsed / concept_half_life(node))
+    floor = evidence_floor(node, now_tick=now_tick, now=now)
+    if node.confidence > floor:
+        node.confidence = max(0.0, floor + (node.confidence - floor) * decay_factor)
+    node.last_decayed_tick = now_tick
+    node.last_decayed_at = now
+    if node.confidence < FADING_THRESHOLD and node.maturity != Maturity.FADING:
+        node.maturity = Maturity.FADING
+        return True
+    return False
+
+
+def settle_relation(
+    edge: RelationEdge, now_tick: int, now: datetime | None = None
+) -> bool:
+    """Apply the decay a relation owes up to ``now_tick``.
+
+    Weight and structural confidence relax toward the relation floor
+    (explicit edges) or toward zero (auto-discovered edges); semantic
+    ``probability`` is never touched.  Idempotent like
+    ``settle_concept``.  Returns True when the weight is below the prune
+    threshold.
+    """
+    now = now or wall_now()
+    elapsed = edge.decay_elapsed(now_tick, now)
+    if elapsed < DECAY_GRACE_TICKS:
+        return False
+    # More reinforced relations decay slower
+    half_life = RELATION_BASE_HALF_LIFE * (1.0 + edge.reinforcement_count * 0.5)
+    decay_factor = math.pow(0.5, elapsed / half_life)
+    # Relax toward the probability-anchored floor (explicit edges) or
+    # toward zero (auto-discovered edges).
+    floor = relation_floor(edge, now_tick=now_tick, now=now)
+    if edge.weight > floor:
+        edge.weight = max(0.0, floor + (edge.weight - floor) * decay_factor)
+    if edge.confidence > floor:
+        edge.confidence = max(0.0, floor + (edge.confidence - floor) * decay_factor)
+    # ``probability`` (belief the typed relation is correct) is
+    # deliberately left alone: the passage of time is not evidence
+    # against a relation, only against its current salience.
+    edge.last_decayed_tick = now_tick
+    edge.last_decayed_at = now
+    return edge.weight < 0.02
+
+
 class DecayEngine:
     """Applies cognitive-time decay to concepts and relations.
 
@@ -207,33 +283,11 @@ class DecayEngine:
         now = wall_now()
 
         for node in self._concepts.all():
-            if node.maturity == Maturity.FADING and node.confidence <= 0.0:
-                continue
-
-            elapsed = node.decay_elapsed(now_tick, now)
-
-            # Skip recently activated (or recently decayed) concepts; the
-            # un-applied interval is not lost — it is measured from the
-            # unchanged reference point on the next call.
-            if elapsed < DECAY_GRACE_TICKS:
-                continue
-
-            decay_factor = math.pow(0.5, elapsed / concept_half_life(node))
-            floor = evidence_floor(node, now_tick=now_tick, now=now)
-            if node.confidence > floor:
-                node.confidence = max(
-                    0.0, floor + (node.confidence - floor) * decay_factor
-                )
-            node.last_decayed_tick = now_tick
-            node.last_decayed_at = now
-            self._concepts.mark_dirty(node.id)
-
-            if (
-                node.confidence < FADING_THRESHOLD
-                and node.maturity != Maturity.FADING
-            ):
-                node.maturity = Maturity.FADING
+            before = (node.last_decayed_tick, node.last_decayed_at)
+            if settle_concept(node, now_tick, now):
                 newly_fading.append(node.id)
+            if (node.last_decayed_tick, node.last_decayed_at) != before:
+                self._concepts.mark_dirty(node.id)
 
         return newly_fading
 
@@ -247,36 +301,11 @@ class DecayEngine:
         now = wall_now()
 
         for edge in self._relations.all():
-            elapsed = edge.decay_elapsed(now_tick, now)
-
-            # Skip recently reinforced (or recently decayed) relations
-            if elapsed < DECAY_GRACE_TICKS:
-                continue
-
-            # More reinforced relations decay slower
-            half_life = RELATION_BASE_HALF_LIFE * (
-                1.0 + edge.reinforcement_count * 0.5
-            )
-            decay_factor = math.pow(0.5, elapsed / half_life)
-
-            # Relax toward the probability-anchored floor (explicit edges)
-            # or toward zero (auto-discovered edges).
-            floor = relation_floor(edge, now_tick=now_tick, now=now)
-            if edge.weight > floor:
-                edge.weight = max(0.0, floor + (edge.weight - floor) * decay_factor)
-            if edge.confidence > floor:
-                edge.confidence = max(
-                    0.0, floor + (edge.confidence - floor) * decay_factor
-                )
-            # ``probability`` (belief the typed relation is correct) is
-            # deliberately left alone: the passage of time is not evidence
-            # against a relation, only against its current salience.
-            edge.last_decayed_tick = now_tick
-            edge.last_decayed_at = now
-            self._relations.mark_dirty(edge.id)
-
-            if edge.weight < 0.02:
+            before = (edge.last_decayed_tick, edge.last_decayed_at)
+            if settle_relation(edge, now_tick, now):
                 weak_relations.append(edge.id)
+            if (edge.last_decayed_tick, edge.last_decayed_at) != before:
+                self._relations.mark_dirty(edge.id)
 
         return weak_relations
 

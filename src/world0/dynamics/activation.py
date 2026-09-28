@@ -54,6 +54,7 @@ from world0.dynamics.coefficients import (
     RELATION_TEMPORAL_HL,
     RELATION_TYPE_FACTOR,
 )
+from world0.dynamics.decay import settle_concept
 from world0.schemas.clock import CognitiveClock
 from world0.schemas.context import Perspective
 from world0.schemas.relation import RelationType
@@ -226,7 +227,9 @@ class ActivationEngine:
             if score > seed_score_max:
                 seed_score_max = score
             if record:
+                settle_concept(node, now_tick, now)
                 node.activate(source=source, task=task, tick=now_tick)
+        frontier_seeds = list(frontier)
 
         # Propagation floor: minimum signal that can still pass through
         prop_floor = seed_score_max * PROPAGATION_MIN_RATIO
@@ -364,6 +367,7 @@ class ActivationEngine:
                 if record:
                     neighbor = self._concepts.get(neighbor_id)
                     if neighbor is not None:
+                        settle_concept(neighbor, now_tick, now)
                         neighbor.activate(
                             source=source, task=task, tick=now_tick
                         )
@@ -372,13 +376,20 @@ class ActivationEngine:
 
         # Subtract inhibition from excitation; drop concepts driven to
         # zero or below so they vanish from the projection entirely.
+        # Seeds are the exception: what the Agent asked about is always
+        # returned (at a net score of at least 0), so the projection's
+        # seeds-first rule can hold for a faded or inhibited seed too
+        # (docs/paper, Proposition 7.1).
         # Iterate ``activations`` in insertion order (layer order) so
         # projection selection is deterministic across process runs.
+        seeds = set(frontier_seeds)
         net: dict[str, float] = {}
         for cid, excitation in activations.items():
             score = excitation - inhibitions.get(cid, 0.0)
             if score > cut:
                 net[cid] = score
+            elif cid in seeds:
+                net[cid] = max(0.0, score)
         return net
 
     @staticmethod

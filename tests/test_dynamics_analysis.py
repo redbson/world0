@@ -148,9 +148,10 @@ class TestDecayIdempotency:
         self._seed(world)
         node = world.concepts.resolve("alpha")
         before = node.confidence
+        stamped = node.last_decayed_tick
         world._decay.decay_concepts()  # same observation → skipped
         assert node.confidence == before
-        assert node.last_decayed_tick is None
+        assert node.last_decayed_tick == stamped  # reference point unchanged
         _advance(world, 1)
         world._decay.decay_concepts()  # one observation later → applied
         assert node.confidence < before

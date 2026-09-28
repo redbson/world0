@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from world0.dynamics.decay import settle_relation
 from world0.schemas.clock import CognitiveClock
 from world0.schemas.relation import (
     RelationEdge,
@@ -215,6 +216,9 @@ class RelationManager:
         edge = self._relations.get(relation_id)
         if not edge:
             return None
+        # Settle the decay owed since the last reinforcement first
+        # (docs/paper, Theorem 3.2).
+        settle_relation(edge, self._clock.tick)
         edge.reinforce(provenance=provenance, tick=self._clock.tick)
         self._dirty.add(edge.id)
         return edge

@@ -33,6 +33,7 @@ The current agent development priorities are tracked in [`TODO.md`](TODO.md).
 - [`docs/world0-color-field-dynamics.md`](docs/world0-color-field-dynamics.md) — dynamics-first design for community-born color fields / 基于动力学的群落生色与褪色设计
 - [`docs/extraction-model-prompt-eval.md`](docs/extraction-model-prompt-eval.md) — model × prompt extraction-quality evaluation (why gpt-5.4-nano is the default) / 模型×prompt 提取质量评测（为何默认 gpt-5.4-nano）
 - [`docs/world0-cognitive-dynamics-analysis.md`](docs/world0-cognitive-dynamics-analysis.md) — mathematical review of the decay / activation / projection dynamics, probe evidence, calibration and roadmap / 认知动力学的数学分析、探针证据、参数标定与路线
+- [`docs/paper/world0-formal.md`](docs/paper/world0-formal.md) — formal model of the current design with propositions, proofs and a numerical verifier / 当前设计的形式化：命题、证明与数值验证
 - [`DesignPhilosophy.md`](DesignPhilosophy.md) — design rationale and framing / 设计哲学与边界
 - [`TODO.md`](TODO.md) — current implementation priorities / 当前实现优先级
 
@@ -362,9 +363,9 @@ embryonic → developing → established → core
 | any → fading / 任意 → 衰退 | confidence decays below 0.05 / 置信度衰减至 0.05 以下 |
 | fading → developing / 衰退 → 发展中 | re-activated by an observation after recurring in >= 3 distinct windows; otherwise it re-enters as embryonic / 复现过 3 个以上窗口的概念被重新激活时复苏，否则回到萌芽 |
 
-Time in World 0 is **cognitive time**: the world clock advances once per ingested observation (`world.clock.tick`, exposed as `status().cognitive_tick`), and the calendar only adds a slow drift while the world is idle. Decay rates are maturity-dependent and measured in observations: an embryonic concept halves after 24 observations that do not mention it, a core concept after 2160. Half-lives stretch with accumulated evidence and confidence relaxes toward an evidence floor rather than toward zero, so a concept re-observed regularly can mature while a one-off mention still fades. Decay is idempotent in cognitive time — calling `reflect()` more often never accelerates forgetting. See [`docs/world0-cognitive-dynamics-analysis.md`](docs/world0-cognitive-dynamics-analysis.md).
+Time in World 0 is **cognitive time**: the world clock advances once per ingested observation (`world.clock.tick`, exposed as `status().cognitive_tick`), and the calendar only adds a slow drift while the world is idle. Decay rates are maturity-dependent and measured in observations: an embryonic concept halves after 24 observations that do not mention it, a core concept after 2160. Half-lives stretch with accumulated evidence and confidence relaxes toward an evidence floor rather than toward zero, so a concept re-observed regularly can mature while a one-off mention still fades. Forgetting depends only on cognitive time, not on how often `reflect()` runs: decay is idempotent, and the decay a concept owes is settled right before each use (proof in [`docs/paper/world0-formal.md`](docs/paper/world0-formal.md), Theorem 3.2). See [`docs/world0-cognitive-dynamics-analysis.md`](docs/world0-cognitive-dynamics-analysis.md).
 
-World 0 的时间是**认知时间**：每摄入一条观察，世界时钟前进一格（`world.clock.tick`，`status().cognitive_tick` 可见），日历只在世界闲置时贡献缓慢的漂移。衰减速率取决于成熟度，以观察次数计：萌芽概念在 24 次未提及它的观察后减半，核心概念为 2160 次。半衰期随累积证据拉长，置信度向"证据地板"而非 0 回归，因此定期复现的概念可以成熟，一次性提及仍会消失。衰减对认知时间幂等——更频繁地调用 `reflect()` 不会加速遗忘。详见 [`docs/world0-cognitive-dynamics-analysis.md`](docs/world0-cognitive-dynamics-analysis.md)。
+World 0 的时间是**认知时间**：每摄入一条观察，世界时钟前进一格（`world.clock.tick`，`status().cognitive_tick` 可见），日历只在世界闲置时贡献缓慢的漂移。衰减速率取决于成熟度，以观察次数计：萌芽概念在 24 次未提及它的观察后减半，核心概念为 2160 次。半衰期随累积证据拉长，置信度向"证据地板"而非 0 回归，因此定期复现的概念可以成熟，一次性提及仍会消失。遗忘只取决于认知时间，与 `reflect()` 的调用频率无关：衰减幂等，且概念欠下的衰减在每次使用前结算（证明见 [`docs/paper/world0-formal.md`](docs/paper/world0-formal.md) 定理 3.2）。详见 [`docs/world0-cognitive-dynamics-analysis.md`](docs/world0-cognitive-dynamics-analysis.md)。
 
 ## Relation Types / 关系类型
 

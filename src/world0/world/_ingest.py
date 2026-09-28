@@ -215,9 +215,13 @@ class IngestPipeline:
                     edge.confirm()
                     self._relations.mark_dirty(edge.id)
                 result.reinforced_relations.append(label)
-            self._weaken_opposing(edge, src, tgt, rel_type, observation, result)
+            self._weaken_opposing(
+                edge, src, tgt, rel_type, semantic_relation, observation, result
+            )
 
-    def _weaken_opposing(self, edge, src, tgt, rel_type, observation, result) -> None:
+    def _weaken_opposing(
+        self, edge, src, tgt, rel_type, semantic_relation, observation, result
+    ) -> None:
         """An explicit claim is evidence against the opposite claim.
 
         Stating "A conflicts with B" disconfirms an explicit "A enables B"
@@ -229,7 +233,7 @@ class IngestPipeline:
         for other in self._relations.find_any_between(src.id, tgt.id):
             if other.id == edge.id or not other.is_explicit:
                 continue
-            if not other.opposes(rel_type):
+            if not other.opposes(rel_type, semantic_relation):
                 continue
             self._relations.weaken(other.id, provenance=observation.task)
             other_src = src if other.source_id == src.id else tgt
