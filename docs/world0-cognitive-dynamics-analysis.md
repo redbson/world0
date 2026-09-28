@@ -443,6 +443,10 @@ $\gamma_{task} = 1 + 0.5\cdot\text{affinity}$，affinity 来自词级匹配（§
 | **第十三轮** | |
 | `dynamics/decay.py` | `PRUNE_MIN_IDLE_TICKS = 720`；`prune_concepts()` 增加闲置条件 |
 | `tests/test_roadmap_dynamics.py` | +5 个测试 |
+| **第十四轮** | |
+| `context/`（新包：`grounding.py`） | `name_coverage()`、`ground_task()`：任务点名的概念 1.0、其直接邻居 0.5、部分点名按覆盖率（≥ 0.5） |
+| `projection/engine.py` | 任务亲和度 = max(任务历史, 词汇锚定) |
+| `tests/test_task_grounding.py`（新） | 14 个测试；`tests/test_layer_boundaries.py` 把 `context` 列入概念核心 |
 
 所有字段均有默认值，旧的 JSON 存储可直接加载（`task_profile` 自动回填，tick 与
 recurrence 默认 0）。
@@ -842,6 +846,41 @@ embryonic 半衰期 24、`prune` 阈值 0.02：一次性概念 ~54 次观察后 
 里只以 `0.3 × salience下限 0.1` 的强度传播，极少进入投影。
 `TestPruneGrace`：gap 100/400/700 复苏同一节点、770 后删除、100 时已 FADING；
 两个假设"立即剪枝"的旧测试改为先闲置 800 tick。
+
+### 7.17 任务锚定：没见过的任务也能改变投影 ✅
+
+**探针**（两个簇共享种子 `deployment`：Ops = kubernetes / helm chart / container registry /
+rollout / load balancer，ML = pytorch / gpu cluster / training run / checkpoint / loss curve；
+每簇 12 次观察，`project(["deployment"], task=…, max_concepts=5)`，数字为种子之外的 Ops / ML 个数）：
+
+| task | 观察**不带** task 标签：修复前 | 修复后 | 观察带 `ops`/`ml` 标签：修复前 | 修复后 |
+|---|---|---|---|---|
+| （无） | 1 / 3 | 1 / 3 | 1 / 3 | 1 / 3 |
+| `kubernetes rollout` | **1 / 3** | 4 / 0 | **1 / 3** | 4 / 0 |
+| `pytorch training` | **1 / 3** | 0 / 4 | **1 / 3** | 0 / 4 |
+| `ops` | 1 / 3 | 1 / 3 | 4 / 0 | 4 / 0 |
+| `ml` | 1 / 3 | 1 / 3 | 0 / 4 | 0 / 4 |
+
+任务亲和度只来自 `task_profile`——概念**被标注过**的任务历史。于是：由不带 task 标签的
+观察构成的世界（常见：Agent 往往不标注任务）里，**任何**任务字符串都不改变投影；即使
+观察带标签，一个新任务——哪怕它直接点名了两个 Ops 概念——也毫无作用。这违反 AGENTS.md
+Rule 4（上下文改变相关性）：上下文只有在"恰好复述过去的标签"时才生效。
+
+**修复：** 新包 `world0.context`（AGENTS.md 建议的 `context/` 模块）。`name_coverage(task,
+names)` 以概念签名同样的词级粒度计算任务提到了概念名（或别名）的多大比例；无签名词的
+名称（CJK、极短标签）退化为整串包含。`ground_task()` 给投影候选打分：名称被完全提到的
+概念是**锚点**（1.0），部分提到且覆盖率 ≥ 0.5 的按覆盖率计，锚点的直接邻居继承 0.5。
+投影里的任务亲和度取 `max(任务历史, 词汇锚定)`，其余（折扣、§7.12 的任务冗余）不变。
+
+- 只点名种子本身（`task="deployment"`）→ 所有邻居同为 0.5，投影与无任务时相同；
+- 部分点名（`"helm"` → `helm chart` 0.5）只拉进该概念，不向邻居扩散；
+- 什么都没点名（`"ops"` 在无标签世界）→ 不变，这是正确的：没有可锚定的结构；
+- CJK：`"容器滚动发布"` 锚定 `容器`、`滚动发布`，投影落在同一簇；
+- 成本：2 000 概念时每次投影 +0.2 ms（锚定复用冗余项已建好的邻居表）。
+
+认知基准与全部既有测试不变（1 116 通过）。锚定只作用于投影阶段：激活的任务增益仍只看
+历史，被点名但在 `max_depth` 之外的概念不会被拉进候选——那是"点名即种子"的另一种语义，
+留给调用方显式传种子。`tests/test_task_grounding.py`（14 个）。
 
 ---
 

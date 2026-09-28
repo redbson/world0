@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Task grounding** (`world0.context`) — a task now changes the projection
+  through the concepts it *names*, not only through task labels recorded
+  on past observations.  `name_coverage()` measures word-level coverage of
+  a concept's name or aliases by the task (CJK names fall back to
+  containment); `ground_task()` gives named concepts affinity 1.0, their
+  direct neighbours 0.5 and partially named concepts their coverage
+  (≥ 0.5).  Projection uses `max(history, grounding)`.  Previously a world
+  built from unlabelled observations ignored every task string, and a new
+  task such as `"kubernetes rollout"` changed nothing (docs §7.17).
 - **Recurrence-based promotion** — `ConceptNode.recurrence_count` counts the
   distinct 24-tick windows in which a concept was activated (a burst counts
   once).  Lifecycle promotion accepts either the confidence gate or a

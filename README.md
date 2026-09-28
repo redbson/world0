@@ -493,7 +493,7 @@ Writes use a dirty-flag mechanism: in-memory mutations are batched and flushed a
 
 **Relations are first-class. / 关系是一等公民。** Not just `related_to` edges — relations are typed, weighted, reinforced, and decay independently. Relation type influences activation propagation strength. / 不只是 `related_to` 边——关系是有类型的、加权的、可强化的，且独立衰减。关系类型影响激活传播强度。
 
-**Context changes relevance. / 上下文改变相关性。** The same concept-world produces different projections under different task contexts. Task affinity boosts concepts and relations associated with the current task by 1.5x. / 同一个概念世界在不同任务上下文下产生不同的投影。任务亲和度将与当前任务相关的概念和关系提升 1.5 倍。
+**Context changes relevance. / 上下文改变相关性。** The same concept-world produces different projections under different task contexts. Task affinity boosts concepts and relations associated with the current task by 1.5x. A task also grounds on the concepts it names: `project(["deployment"], task="kubernetes rollout")` favours `kubernetes`, `rollout` and their neighbours even if no observation was ever labelled with that task (`world0.context`). / 同一个概念世界在不同任务上下文下产生不同的投影。任务亲和度将与当前任务相关的概念和关系提升 1.5 倍。任务还会锚定到它点名的概念：即使从没有观察被标注过该任务，`task="kubernetes rollout"` 也会偏向 `kubernetes`、`rollout` 及其邻居（`world0.context`）。
 
 **Projection is the output. / 投影是输出。** The system is only useful if it can turn a larger concept-world into a smaller, task-relevant view. Projection uses MMR selection to balance relevance against diversity. / 系统只有在能将更大的概念世界转化为更小的、与任务相关的视图时才有用。投影使用 MMR 选择来平衡相关性和多样性。
 

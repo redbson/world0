@@ -37,6 +37,7 @@ CORE_PACKAGES = {
     "projection",
     "perspectives",
     "communities",
+    "context",
     "store",
     "metrics",
 }

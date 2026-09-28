@@ -14,6 +14,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
+from world0.context import ground_task
 from world0.schemas.clock import CognitiveClock
 from world0.schemas.types import Projection
 
@@ -78,7 +79,8 @@ class ProjectionEngine:
         """Build a cognitive projection from activation scores.
 
         1. Filter by minimum activation (seeds are never filtered out)
-        2. Compute per-candidate task affinity
+        2. Compute per-candidate task affinity: the larger of the
+           concept's task history and the task's lexical grounding
         3. Seeds first: what the Agent asked about is always in its
            projection, ordered by score and capped by ``max_concepts``
         4. MMR greedy selection for the remaining slots: balance
@@ -107,9 +109,27 @@ class ProjectionEngine:
         if max_score == 0:
             max_score = 1.0
 
+        # Build neighbor sets for the redundancy term.  A coupling-weighted
+        # Jaccard was evaluated against the cognitive benchmark and did not
+        # improve precision/recall at any λ (it merely traded ML for Ops
+        # precision at λ=0.3 and lost at λ≥0.4), so the plain set overlap
+        # stays — see docs/world0-cognitive-dynamics-analysis.md §7.5.
+        neighbor_sets: dict[str, set[str]] = {}
+        for cid in candidates:
+            neighbor_sets[cid] = set(self._relations.neighbors(cid))
+
         # Pre-compute task affinity and temporal freshness for each
         # candidate.  Both are multiplied into the MMR relevance score.
         task_lower = task.strip().lower()
+        # Grounded affinity: the concepts the task names and their direct
+        # neighbours.  Without it a task never seen in an observation
+        # (or any task in a world built from unlabelled observations)
+        # changed nothing — docs §7.17.
+        grounded = (
+            ground_task(task_lower, candidates, self._concepts, neighbor_sets)
+            if task_lower
+            else {}
+        )
         task_affinity: dict[str, float] = {}
         # 1 − raw affinity: how far a candidate is from the task (0 when
         # no task is given).  Used as a redundancy floor below.
@@ -127,7 +147,9 @@ class ProjectionEngine:
                 task_affinity[cid] = 1.0
                 task_mismatch[cid] = 0.0
             elif node:
-                affinity = node.task_affinity(task_lower)
+                affinity = max(
+                    node.task_affinity(task_lower), grounded.get(cid, 0.0)
+                )
                 task_affinity[cid] = (
                     TASK_AFFINITY_DISCOUNT
                     + (1.0 - TASK_AFFINITY_DISCOUNT) * affinity
@@ -149,15 +171,6 @@ class ProjectionEngine:
                 )
             else:
                 temporal_freshness[cid] = 1.0
-
-        # Build neighbor sets for the redundancy term.  A coupling-weighted
-        # Jaccard was evaluated against the cognitive benchmark and did not
-        # improve precision/recall at any λ (it merely traded ML for Ops
-        # precision at λ=0.3 and lost at λ≥0.4), so the plain set overlap
-        # stays — see docs/world0-cognitive-dynamics-analysis.md §7.5.
-        neighbor_sets: dict[str, set[str]] = {}
-        for cid in candidates:
-            neighbor_sets[cid] = set(self._relations.neighbors(cid))
 
         # MMR greedy selection.  Candidates are visited in a stable order
         # (score desc, then id) so exact ties resolve identically in every
