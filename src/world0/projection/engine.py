@@ -15,6 +15,7 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
 from world0.context import ground_task
+from world0.projection.metacognition import assess
 from world0.schemas.clock import CognitiveClock
 from world0.schemas.types import Projection
 
@@ -271,4 +272,5 @@ class ProjectionEngine:
             relations=relations,
             activation_scores=selected_scores,
             task=task,
+            epistemic=assess(concepts, relations),
         )

@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Metacognitive monitoring in projections** (machine-consciousness track,
+  `docs/mc/`) — `Projection.epistemic` (`EpistemicStatus`) grades every
+  projected concept by its evidence (`tentative` / `moderate` /
+  `well_evidenced`) and reports opposing explicit claims about a pair
+  with their beliefs as `contested` (margin < 0.25) or `leaning`
+  (`world0.projection.metacognition.assess`).  The render shows the belief
+  of every explicit claim, marks co-occurrence edges as such, and adds an
+  `### Epistemic Status` section.  Projection selection is unchanged.
+- **`docs/mc/`** — machine-consciousness research records: indicator
+  properties from consciousness science (Butlin et al. 2023) mapped to
+  World 0 with probe evidence and a roadmap; functional properties only,
+  no claim of experience.
 - **Directed and contradictory relation claims** — directed relations are
   now matched in their stated orientation: `X depends_on Y` and
   `Y depends_on X` are two edges, and the reverse claim no longer confirms

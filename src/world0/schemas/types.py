@@ -88,6 +88,43 @@ class IngestResult(BaseModel):
     hebbian_relations: list[str] = Field(default_factory=list)
 
 
+class ContestedClaim(BaseModel):
+    """Opposing explicit claims about one concept pair in a projection.
+
+    ``claims`` lists ``(relation_id, semantic_relation, belief)`` for every
+    explicit claim about the pair; ``leading`` is the relation id of the
+    most believed one.  ``status`` is ``"contested"`` when the leading
+    belief exceeds the strongest opposing belief by less than the
+    contest margin, ``"leaning"`` otherwise.
+    """
+
+    source_id: str
+    target_id: str
+    claims: list[tuple[str, str, float]] = Field(default_factory=list)
+    leading: str = ""
+    margin: float = 0.0
+    status: str = "contested"
+
+
+class EpistemicStatus(BaseModel):
+    """Metacognitive annotation of a projection (analysis ``docs/mc``).
+
+    Distinguishes what the world knows well from what it has barely seen
+    or holds contradictory beliefs about — the "metacognitive monitoring"
+    indicator (HOT-2) of consciousness science, used here as a functional
+    signal for the Agent, not as a claim about experience.
+
+    ``reliability`` maps concept id → ``"well_evidenced"``,
+    ``"moderate"`` or ``"tentative"``.
+    """
+
+    reliability: dict[str, str] = Field(default_factory=dict)
+    contested: list[ContestedClaim] = Field(default_factory=list)
+
+    def tentative_ids(self) -> list[str]:
+        return [cid for cid, level in self.reliability.items() if level == "tentative"]
+
+
 class Projection(BaseModel):
     """A local cognitive view — the operational output of World 0.
 
@@ -98,6 +135,7 @@ class Projection(BaseModel):
     relations: list[RelationEdge] = Field(default_factory=list)
     activation_scores: dict[str, float] = Field(default_factory=dict)
     task: str = ""
+    epistemic: EpistemicStatus = Field(default_factory=EpistemicStatus)
 
     def top_concepts(self, n: int = 5) -> list[ConceptNode]:
         ranked = sorted(
@@ -169,11 +207,22 @@ class Projection(BaseModel):
                 tgt = concept_names.get(r.target_id, r.target_id)
                 lines.append(
                     f"- {src} → {r.semantic_relation} [{r.relation_type.value}] → {tgt} "
-                    f"(structural: {r.structural_strength:.2f}, "
+                    # Belief applies to claims; a co-occurrence edge
+                    # asserts nothing beyond "seen together".
+                    + (
+                        f"(belief: {r.probability:.2f}, "
+                        if r.is_explicit
+                        else "(co-occurrence, "
+                    )
+                    + f"structural: {r.structural_strength:.2f}, "
                     f"propagation: {r.propagation_strength:.2f}, "
                     f"reinforced {r.reinforcement_count}×)"
                 )
             lines.append("")
+
+        epistemic_lines = self._render_epistemic()
+        if epistemic_lines:
+            lines.extend(epistemic_lines)
 
         if self.task:
             lines.append(f"### Task Context")
@@ -181,6 +230,29 @@ class Projection(BaseModel):
             lines.append("")
 
         return "\n".join(lines)
+
+    def _render_epistemic(self) -> list[str]:
+        """What the Agent should hold loosely: contested and thin knowledge."""
+        names = {c.id: c.name for c in self.concepts}
+        rels = {r.id: r for r in self.relations}
+        out: list[str] = []
+        for claim in self.epistemic.contested:
+            parts = []
+            for rid, semantic, belief in claim.claims:
+                rel = rels.get(rid)
+                src = names.get(rel.source_id, "?") if rel else names.get(claim.source_id, "?")
+                tgt = names.get(rel.target_id, "?") if rel else names.get(claim.target_id, "?")
+                parts.append(f"{src} {semantic} {tgt} (belief {belief:.2f})")
+            if claim.status == "contested":
+                out.append(f"- Contested: {' vs '.join(parts)}")
+            else:
+                out.append(f"- Leaning: {' over '.join(parts)}")
+        tentative = [names[cid] for cid in self.epistemic.tentative_ids() if cid in names]
+        if tentative:
+            out.append(f"- Thin evidence (seen once or twice): {', '.join(tentative)}")
+        if not out:
+            return []
+        return ["### Epistemic Status", *out, ""]
 
     def _neighbor_names(self, concept_id: str) -> list[str]:
         names_map = {c.id: c.representation() for c in self.concepts}
