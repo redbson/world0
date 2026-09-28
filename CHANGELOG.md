@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Sustained focus and attention schema** (machine-consciousness track,
+  `docs/mc/03-workspace.md`) — `World(sustained_attention=True)` keeps a
+  limited-capacity `world0.context.Focus` across projections: selected
+  concepts that ignite (seeds, or relevance ≥ half the view's strongest
+  non-seed) enter at full strength, at most 7 are kept, strengths decay by
+  0.6 per later projection and the focus clears on a new explicit task.
+  The next view boosts candidates its own seeds reached that are in or
+  next to the focus (seeds pass no focus to their neighbours), so a
+  bridge concept follows the current line of attention while unrelated
+  views are untouched.  Every projection now carries
+  `Projection.attention` (`AttentionTrace`: seed / reached, via which
+  concept and relation, task-named, task history, sustained, in focus,
+  ignited), rendered as `### Why These Concepts`.  Off by default:
+  projections stay a pure function of the world.
 - **Metacognitive monitoring in projections** (machine-consciousness track,
   `docs/mc/`) — `Projection.epistemic` (`EpistemicStatus`) grades every
   projected concept by its evidence (`tentative` / `moderate` /

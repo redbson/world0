@@ -21,19 +21,22 @@
 |---|---|
 | [`01-indicator-mapping.md`](01-indicator-mapping.md) | 理论综述；14 个指标属性逐条映射到 World 0；基线探针证据；路线图 |
 | [`02-metacognition.md`](02-metacognition.md) | 第十六轮：元认知监控（HOT-2）——可靠度分级、争议主张、信念可见 |
+| [`03-workspace.md`](03-workspace.md) | 第十七轮：持续焦点（GWT-4 状态依赖注意、GWT-2 点燃）与注意图式（AST-1） |
 | [`probes/baseline_indicators.py`](probes/baseline_indicators.py) | 指标基线探针（每轮后重跑，记录状态变化） |
+| [`probes/workspace.py`](probes/workspace.py) | 第十七轮探针：焦点的转向、保持、释放、无固着与注意轨迹 |
 
 ## 轮次
 
 | 轮次 | 指标 | 状态 | 记录 |
 |---|---|---|---|
 | 16 | HOT-2 元认知监控 | ✅ 已实现 | `02-metacognition.md` |
-| 17 | GWT-4 状态依赖注意 + GWT-2 点燃 + AST-1 注意图式 | 计划中 | — |
+| 17 | GWT-4 状态依赖注意 + GWT-2 点燃 + AST-1 注意图式 | ✅ 已实现（`sustained_attention` 可选开启） | `03-workspace.md` |
 | 18 | PP-1 预测误差 | 计划中 | — |
 
 ## 复现
 
 ```bash
 python docs/mc/probes/baseline_indicators.py        # 指标基线
-python -m pytest -q tests/test_metacognition.py     # 第十六轮行为测试
+python docs/mc/probes/workspace.py                  # 第十七轮探针
+python -m pytest -q tests/test_metacognition.py tests/test_workspace.py
 ```

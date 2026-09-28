@@ -16,6 +16,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
+    from world0.context.focus import Focus
     from world0.schemas.community import Community
     from world0.schemas.concept import ConceptNode, Maturity
     from world0.schemas.context import Perspective
@@ -335,6 +336,7 @@ class Projector(Protocol):
         min_activation: float = ...,
         task: str = ...,
         seed_ids: list[str] | None = ...,
+        focus: Focus | None = ...,
     ) -> Projection: ...
 
 

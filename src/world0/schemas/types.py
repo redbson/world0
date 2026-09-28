@@ -125,6 +125,32 @@ class EpistemicStatus(BaseModel):
         return [cid for cid, level in self.reliability.items() if level == "tentative"]
 
 
+class AttentionTrace(BaseModel):
+    """Why one concept is in a projection — the view's attention schema.
+
+    Attention schema theory (indicator AST-1) holds that a system keeps a
+    simplified model of what it attends to and why; this is that model
+    for one projection (``docs/mc/03-workspace.md``).
+
+    ``kind`` is ``"seed"`` for a concept the Agent asked about and
+    ``"reached"`` for one activation reached; ``via`` / ``relation`` name
+    the strongest activated neighbour and the relation it came through.
+    The flags record which context sources raised its relevance
+    (``sustained``: the focus raised it, ``in_focus``: it was itself held
+    in the focus rather than next to something held), and ``ignited``
+    whether it entered the focus after this view.
+    """
+
+    kind: str = "reached"
+    via: str = ""
+    relation: str = ""
+    task_named: bool = False
+    task_history: bool = False
+    sustained: bool = False
+    in_focus: bool = False
+    ignited: bool = False
+
+
 class Projection(BaseModel):
     """A local cognitive view — the operational output of World 0.
 
@@ -136,6 +162,11 @@ class Projection(BaseModel):
     activation_scores: dict[str, float] = Field(default_factory=dict)
     task: str = ""
     epistemic: EpistemicStatus = Field(default_factory=EpistemicStatus)
+    attention: dict[str, AttentionTrace] = Field(default_factory=dict)
+
+    def ignited_ids(self) -> list[str]:
+        """Concepts that crossed the ignition threshold in this view."""
+        return [cid for cid, trace in self.attention.items() if trace.ignited]
 
     def top_concepts(self, n: int = 5) -> list[ConceptNode]:
         ranked = sorted(
@@ -224,12 +255,41 @@ class Projection(BaseModel):
         if epistemic_lines:
             lines.extend(epistemic_lines)
 
+        attention_lines = self._render_attention()
+        if attention_lines:
+            lines.extend(attention_lines)
+
         if self.task:
             lines.append(f"### Task Context")
             lines.append(f"Concepts activated for: {self.task}")
             lines.append("")
 
         return "\n".join(lines)
+
+    def _render_attention(self) -> list[str]:
+        """One line per reached concept: where its activation came from."""
+        names = {c.id: c.name for c in self.concepts}
+        out: list[str] = []
+        for c in self.concepts:
+            trace = self.attention.get(c.id)
+            if trace is None or trace.kind == "seed":
+                continue
+            reasons = []
+            if trace.via in names:
+                reasons.append(f"via {trace.relation or 'relation'} from {names[trace.via]}")
+            if trace.task_named:
+                reasons.append("named by the task")
+            elif trace.task_history:
+                reasons.append("used in this task before")
+            if trace.in_focus:
+                reasons.append("still in focus")
+            elif trace.sustained:
+                reasons.append("next to the current focus")
+            if reasons:
+                out.append(f"- {c.name}: {'; '.join(reasons)}")
+        if not out:
+            return []
+        return ["### Why These Concepts", *out, ""]
 
     def _render_epistemic(self) -> list[str]:
         """What the Agent should hold loosely: contested and thin knowledge."""

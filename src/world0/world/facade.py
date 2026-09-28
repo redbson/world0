@@ -24,6 +24,7 @@ from world0.dynamics.decay import DecayEngine
 from world0.dynamics.hebbian import HebbianEngine
 from world0.dynamics.lifecycle import LifecycleEngine
 from world0.extraction.extractor import ConceptExtractor
+from world0.context import Focus
 from world0.perspectives import get_perspective
 from world0.prompts import PromptRegistry
 from world0.projection.engine import ProjectionEngine
@@ -86,7 +87,14 @@ class World:
         prompt_registry: PromptRegistry | None = None,
         auto_reflect_every: int | None = None,
         backend: str = "auto",
+        sustained_attention: bool = False,
     ) -> None:
+        # ``sustained_attention``: keep a limited-capacity focus across
+        # projections so the current line of attention biases the next
+        # view (global-workspace style, docs/mc/03-workspace.md).  Off by
+        # default: a projection is then a pure function of the world.
+        self.sustained_attention = sustained_attention
+        self.focus = Focus()
         # ``backend``: "json" (one file per record under ``store_path``),
         # "sqlite" (a single database file at ``store_path``), or "auto"
         # (sqlite when ``store_path`` ends in .sqlite/.sqlite3/.db, else json).
@@ -353,12 +361,20 @@ class World:
             perspective=perspective,
         )
 
-        return self._projection.project(
+        focus = None
+        if self.sustained_attention:
+            self.focus.release_if_task_changed(effective_task)
+            focus = self.focus
+        projection = self._projection.project(
             activations,
             max_concepts=max_concepts,
             task=effective_task,
             seed_ids=seed_ids,
+            focus=focus,
         )
+        if self.sustained_attention:
+            self.focus.update(projection.ignited_ids(), effective_task)
+        return projection
 
     def reflect(self, *, light: bool = False) -> ReflectResult:
         """Cognitive consolidation — run after a task is complete.

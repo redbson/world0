@@ -14,10 +14,10 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
-from world0.context import ground_task
+from world0.context import IGNITION_THRESHOLD, Focus, ground_task
 from world0.projection.metacognition import assess
 from world0.schemas.clock import CognitiveClock
-from world0.schemas.types import Projection
+from world0.schemas.types import AttentionTrace, Projection
 
 if TYPE_CHECKING:
     from world0.core import ConceptStore, RelationStore
@@ -44,6 +44,10 @@ TEMPORAL_WEIGHT: float = 0.3
 # Half-life used for temporal relevance in projection, in ticks
 # (observations) of cognitive time.
 PROJECTION_TEMPORAL_HL: float = 168.0
+
+# Relevance multiplier for a candidate fully in the sustained focus:
+# ``relevance × (1 + FOCUS_GAIN × focus_affinity)`` (docs/mc/03-workspace.md).
+FOCUS_GAIN: float = 0.5
 
 # Candidate cut as a fraction of the strongest activation.  Applied as
 # ``min(min_activation, RELATIVE_MIN_ACTIVATION × peak)`` so it only ever
@@ -76,8 +80,12 @@ class ProjectionEngine:
         min_activation: float = 0.01,
         task: str = "",
         seed_ids: list[str] | None = None,
+        focus: Focus | None = None,
     ) -> Projection:
         """Build a cognitive projection from activation scores.
+
+        ``focus`` (optional) is the sustained workspace: candidates it
+        holds, or that neighbour what it holds, get a relevance bonus.
 
         1. Filter by minimum activation (seeds are never filtered out)
         2. Compute per-candidate task affinity: the larger of the
@@ -131,6 +139,12 @@ class ProjectionEngine:
             if task_lower
             else {}
         )
+        focus_affinity = (
+            focus.affinity(candidates, neighbor_sets, exclude=seed_set)
+            if focus is not None
+            else {}
+        )
+        history_affinity: dict[str, float] = {}
         task_affinity: dict[str, float] = {}
         # 1 − raw affinity: how far a candidate is from the task (0 when
         # no task is given).  Used as a redundancy floor below.
@@ -148,9 +162,8 @@ class ProjectionEngine:
                 task_affinity[cid] = 1.0
                 task_mismatch[cid] = 0.0
             elif node:
-                affinity = max(
-                    node.task_affinity(task_lower), grounded.get(cid, 0.0)
-                )
+                history_affinity[cid] = node.task_affinity(task_lower)
+                affinity = max(history_affinity[cid], grounded.get(cid, 0.0))
                 task_affinity[cid] = (
                     TASK_AFFINITY_DISCOUNT
                     + (1.0 - TASK_AFFINITY_DISCOUNT) * affinity
@@ -173,6 +186,21 @@ class ProjectionEngine:
             else:
                 temporal_freshness[cid] = 1.0
 
+        # Relevance incorporates task affinity, temporal freshness and the
+        # sustained focus so that concepts matching the current task,
+        # recently active concepts and concepts continuing the current
+        # line of attention are preferred during selection, not just
+        # ranked higher.
+        relevance: dict[str, float] = {
+            cid: (
+                candidates[cid] / max_score
+                * task_affinity[cid]
+                * temporal_freshness[cid]
+                * (1.0 + FOCUS_GAIN * focus_affinity.get(cid, 0.0))
+            )
+            for cid in candidates
+        }
+
         # MMR greedy selection.  Candidates are visited in a stable order
         # (score desc, then id) so exact ties resolve identically in every
         # process — a projection must never depend on PYTHONHASHSEED.
@@ -193,16 +221,6 @@ class ProjectionEngine:
             min_mismatch = min(task_mismatch[cid] for cid in remaining)
 
             for cid in remaining:
-                # Relevance incorporates task affinity and temporal
-                # freshness so that concepts matching the current task
-                # and recently active concepts are preferred during
-                # selection, not just ranked higher.
-                relevance = (
-                    candidates[cid] / max_score
-                    * task_affinity[cid]
-                    * temporal_freshness[cid]
-                )
-
                 # Redundancy: max Jaccard similarity to any already-selected
                 if selected:
                     neighbors_c = neighbor_sets.get(cid, set())
@@ -231,7 +249,7 @@ class ProjectionEngine:
                 else:
                     redundancy = 0.0
 
-                mmr = (1 - MMR_LAMBDA) * relevance - MMR_LAMBDA * redundancy
+                mmr = (1 - MMR_LAMBDA) * relevance[cid] - MMR_LAMBDA * redundancy
 
                 if mmr > best_mmr:
                     best_mmr = mmr
@@ -273,4 +291,58 @@ class ProjectionEngine:
             activation_scores=selected_scores,
             task=task,
             epistemic=assess(concepts, relations),
+            attention=self._attention(
+                selected,
+                seed_set,
+                candidates,
+                relevance,
+                grounded,
+                history_affinity,
+                focus_affinity,
+                set(focus.items()) if focus is not None else set(),
+            ),
         )
+
+    def _attention(
+        self,
+        selected: list[str],
+        seed_set: set[str],
+        candidates: dict[str, float],
+        relevance: dict[str, float],
+        grounded: dict[str, float],
+        history_affinity: dict[str, float],
+        focus_affinity: dict[str, float],
+        focus_members: set[str],
+    ) -> dict[str, AttentionTrace]:
+        """The attention schema of this view (docs/mc/03-workspace.md).
+
+        Ignition is all-or-none: seeds always ignite; another selected
+        concept ignites when its relevance reaches ``IGNITION_THRESHOLD``
+        of the strongest non-seed relevance in the view.
+        """
+        non_seed = [relevance[cid] for cid in selected if cid not in seed_set]
+        ignition_level = IGNITION_THRESHOLD * max(non_seed, default=0.0)
+        traces: dict[str, AttentionTrace] = {}
+        for cid in selected:
+            if cid in seed_set:
+                traces[cid] = AttentionTrace(kind="seed", ignited=True)
+                continue
+            via, via_relation, best = "", "", 0.0
+            for rel in self._relations.for_concept(cid):
+                other = rel.other_end(cid)
+                if other is None or other not in candidates:
+                    continue
+                contribution = candidates[other] * rel.weight
+                if contribution > best or (contribution == best and other < via):
+                    via, via_relation, best = other, rel.semantic_relation, contribution
+            traces[cid] = AttentionTrace(
+                kind="reached",
+                via=via,
+                relation=via_relation,
+                task_named=grounded.get(cid, 0.0) > 0.0,
+                task_history=history_affinity.get(cid, 0.0) > 0.0,
+                sustained=focus_affinity.get(cid, 0.0) > 0.0,
+                in_focus=cid in focus_members,
+                ignited=relevance[cid] >= ignition_level > 0.0,
+            )
+        return traces

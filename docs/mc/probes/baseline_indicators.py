@@ -18,8 +18,8 @@ OPS = ["deployment", "kubernetes", "helm chart", "container registry", "rollout"
 ML = ["deployment", "pytorch", "gpu cluster", "training run", "checkpoint", "loss curve"]
 
 
-def build() -> World:
-    w = World(store_path=tempfile.mkdtemp() + "/w")
+def build(sustained: bool = False) -> World:
+    w = World(store_path=tempfile.mkdtemp() + "/w", sustained_attention=sustained)
     for _ in range(12):
         w.ingest(Observation(concepts=OPS, relations=[("deployment", "kubernetes", "depends_on")], source="s"))
         w.ingest(Observation(concepts=ML, relations=[("deployment", "pytorch", "depends_on")], source="s"))
@@ -40,12 +40,15 @@ def main() -> None:
     w = build()
 
     print("GWT-4 state-dependent attention — does the previous focus change the next view?")
-    fresh = names(w.project(["deployment"], max_concepts=5))
-    w.project(["kubernetes", "rollout"], max_concepts=5)
-    w.project(["kubernetes", "helm chart"], max_concepts=5)
-    after = names(w.project(["deployment"], max_concepts=5))
-    print("  fresh               :", fresh)
-    print("  after ops focus     :", after, "(identical)" if fresh == after else "(changed)")
+    for sustained in (False, True):
+        ws = w if not sustained else build(sustained=True)
+        fresh = names(ws.project(["deployment"], max_concepts=5))
+        ws.project(["kubernetes", "rollout"], max_concepts=5)
+        ws.project(["kubernetes", "helm chart"], max_concepts=5)
+        after = names(ws.project(["deployment"], max_concepts=5))
+        print(f"  sustained_attention={sustained}")
+        print("    fresh             :", fresh)
+        print("    after ops focus   :", after, "(identical)" if fresh == after else "(changed)")
 
     print("\nGWT-2 limited capacity / ignition — activation profile of one projection")
     p = w.project(["deployment"], max_concepts=15)
@@ -66,6 +69,9 @@ def main() -> None:
 
     print("\nAST-1 attention schema — does the view record why each concept is in focus?")
     print("  Projection fields:", list(type(p).model_fields))
+    traces = getattr(p, "attention", {})
+    for cid, trace in list(traces.items())[:4]:
+        print(f"    {by_id.get(cid, cid)}: kind={trace.kind} via={by_id.get(trace.via, trace.via)} {trace.relation}")
 
     print("\nPP-1 prediction error — ingest 'pytorch' without its usual companions")
     res = w.ingest(Observation(concepts=["pytorch", "kubernetes"], source="s"))
