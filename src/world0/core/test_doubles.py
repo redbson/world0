@@ -616,6 +616,11 @@ class FakeHebbianLearner:
     def revalidate(self) -> list[str]:
         return []
 
+    def prediction_error(self, concept_ids: list[str]):
+        from world0.schemas.types import PredictionError
+
+        return PredictionError()
+
     def learn(
         self, concept_ids: list[str], *, provenance: str = ""
     ) -> list[str]:

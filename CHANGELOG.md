@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Prediction error on ingest** (machine-consciousness track,
+  `docs/mc/04-prediction.md`) — every observation is scored against
+  learned co-occurrence before it is learned: `IngestResult.prediction`
+  (`PredictionError`) lists strong companions that failed to appear and
+  well-known concepts meeting for the first time.  Both errors are
+  relative to the model's own expectation (absences beyond `Σ p(1−p)`,
+  new pairs weighted by `1 − exp(−n_a·n_b/N)`), so a loose cluster's
+  ordinary variability is not surprise: structured world 0.11 vs random
+  0.26, and a concept drift raises the error from ≈0.01 to 0.51 before it
+  settles.  `HebbianEngine` keeps co-occurrence counts for linked pairs
+  (persisted with the learning state) to support the predictions.
 - **Sustained focus and attention schema** (machine-consciousness track,
   `docs/mc/03-workspace.md`) — `World(sustained_attention=True)` keeps a
   limited-capacity `world0.context.Focus` across projections: selected

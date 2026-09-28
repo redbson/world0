@@ -76,6 +76,29 @@ class Observation(BaseModel):
     )
 
 
+class PredictionError(BaseModel):
+    """How far an observation departed from what the world expected.
+
+    Predictive processing (indicator PP-1, ``docs/mc/04-prediction.md``):
+    learned co-occurrence is a prediction about what appears together, and
+    each observation is scored against it *before* it is learned.
+
+    - ``missing``: ``(predictor, expected, P(expected | predictor))`` for
+      strong companions that did not appear;
+    - ``novel_pairs``: two well-known concepts appearing together for the
+      first time;
+    - ``missing_ratio``: predicted companion mass that failed to appear;
+    - ``novelty``: share of well-known pairs never seen together before;
+    - ``surprise``: the larger of the two, in ``[0, 1]``.
+    """
+
+    missing: list[tuple[str, str, float]] = Field(default_factory=list)
+    novel_pairs: list[tuple[str, str]] = Field(default_factory=list)
+    missing_ratio: float = 0.0
+    novelty: float = 0.0
+    surprise: float = 0.0
+
+
 class IngestResult(BaseModel):
     """Result of ingesting an observation."""
 
@@ -86,6 +109,7 @@ class IngestResult(BaseModel):
     reinforced_relations: list[str] = Field(default_factory=list)
     weakened_relations: list[str] = Field(default_factory=list)
     hebbian_relations: list[str] = Field(default_factory=list)
+    prediction: PredictionError = Field(default_factory=PredictionError)
 
 
 class ContestedClaim(BaseModel):

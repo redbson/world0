@@ -15,7 +15,7 @@ from world0.schemas.relation import (
     normalize_semantic_relation,
     semantic_relation_spec,
 )
-from world0.schemas.types import ConceptCandidate, IngestResult, Observation
+from world0.schemas.types import ConceptCandidate, IngestResult, Observation, PredictionError
 
 if TYPE_CHECKING:
     from world0.core import (
@@ -56,6 +56,9 @@ class IngestPipeline:
 
         self._step_concepts(observation, result, resolved_ids, local_refs)
         self._step_relations(observation, result, local_refs)
+        # Prediction before learning: the observation is scored against
+        # what co-occurrence predicted, then learned (docs/mc/04).
+        result.prediction = self._prediction_error(resolved_ids)
         self._step_hebbian(observation, resolved_ids, result)
         self._step_descriptions(observation, local_refs)
         self._step_disconfirmation(observation, result, local_refs)
@@ -260,6 +263,19 @@ class IngestPipeline:
             rel_type = normalize_semantic_relation(prior.relation_type)
             result[(prior.source, prior.target, rel_type)] = prior
         return result
+
+    def _prediction_error(self, resolved_ids: list[str]) -> PredictionError:
+        """Prediction error of this observation, with concept names."""
+        raw = self._hebbian.prediction_error(resolved_ids)
+
+        def name(cid: str) -> str:
+            node = self._concepts.get(cid)
+            return node.name if node else cid
+
+        return raw.model_copy(update={
+            "missing": [(name(a), name(b), p) for a, b, p in raw.missing],
+            "novel_pairs": [(name(a), name(b)) for a, b in raw.novel_pairs],
+        })
 
     def _step_hebbian(
         self,

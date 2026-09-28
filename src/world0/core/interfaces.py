@@ -22,7 +22,7 @@ if TYPE_CHECKING:
     from world0.schemas.context import Perspective
     from world0.schemas.relation import RelationEdge, RelationType
     from world0.schemas.source import SourceRecord
-    from world0.schemas.types import Observation, Projection
+    from world0.schemas.types import Observation, PredictionError, Projection
 
 
 # ── Persistence ───────────────────────────────────────────────────────
@@ -267,6 +267,11 @@ class HebbianLearner(Protocol):
     def revalidate(self) -> list[str]:
         """Remove auto-discovered edges that no longer pass the
         association gate; returns their ids."""
+        ...
+
+    def prediction_error(self, concept_ids: list[str]) -> PredictionError:
+        """Score an observation against learned co-occurrence (before
+        learning it)."""
         ...
 
 

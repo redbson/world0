@@ -76,6 +76,11 @@ def main() -> None:
     print("\nPP-1 prediction error — ingest 'pytorch' without its usual companions")
     res = w.ingest(Observation(concepts=["pytorch", "kubernetes"], source="s"))
     print("  IngestResult fields:", list(type(res).model_fields))
+    pe = getattr(res, "prediction", None)
+    if pe is not None:
+        print(f"  surprise={pe.surprise:.2f} missing_ratio={pe.missing_ratio:.2f} novelty={pe.novelty:.2f}")
+        print("  expected but absent:", sorted({m[1] for m in pe.missing}))
+        print("  novel pairs:", pe.novel_pairs)
 
 
 if __name__ == "__main__":

@@ -29,10 +29,12 @@ silently reset co-occurrence learning.
 
 from __future__ import annotations
 
+import math
 from itertools import combinations
 from typing import TYPE_CHECKING
 
 from world0.schemas.relation import RelationType
+from world0.schemas.types import PredictionError
 
 if TYPE_CHECKING:
     from world0.core import RelationStore
@@ -71,6 +73,14 @@ MAX_PENDING_PAIRS: int = 50_000
 
 _SNAPSHOT_SEPARATOR = "|"
 
+# ── Prediction (docs/mc/04-prediction.md) ─────────────────────────────
+# A concept predicts a linked companion b once it has been mentioned at
+# least PREDICTION_MIN_SUPPORT times and P(b | a) = co-occurrences /
+# mentions(a) reaches PREDICTION_MIN_PROBABILITY.  Two concepts that each
+# have that support and were never seen together form a novel pair.
+PREDICTION_MIN_SUPPORT: int = 5
+PREDICTION_MIN_PROBABILITY: float = 0.5
+
 
 def _pair_key(id_a: str, id_b: str) -> str:
     """Canonical, order-independent key for a concept pair."""
@@ -96,6 +106,10 @@ class HebbianEngine:
         # counters so the association gate survives restarts.
         self._observations: int = 0
         self._mentions: dict[str, int] = {}
+        # Co-occurrence counts of pairs that *do* have a relation (the
+        # pending counter is dropped when a pair is linked).  Bounded by
+        # the number of related pairs; the basis for predictions.
+        self._linked: dict[str, int] = {}
 
     def learn(
         self,
@@ -127,11 +141,14 @@ class HebbianEngine:
 
         for id_a, id_b in pairs:
             existing = self._relations.find_any_between(id_a, id_b)
+            key = _pair_key(id_a, id_b)
             if existing:
                 for rel in existing:
                     self._relations.reinforce(rel.id, provenance=provenance)
+                self._linked[key] = (
+                    self._linked.get(key, 0) + 1 + self._cooccurrence.pop(key, 0)
+                )
             else:
-                key = _pair_key(id_a, id_b)
                 count = self._cooccurrence.get(key, 0) + 1
                 if (
                     count >= COOCCURRENCE_THRESHOLD
@@ -147,8 +164,10 @@ class HebbianEngine:
                     )
                     if is_new:
                         new_relation_ids.append(edge.id)
-                    # Clear counter once relation is created
+                    # Move the counter to the linked statistics once the
+                    # relation exists.
                     self._cooccurrence.pop(key, None)
+                    self._linked[key] = count
                 else:
                     self._cooccurrence[key] = count
 
@@ -161,6 +180,79 @@ class HebbianEngine:
             self._mentions.get(id_a, 0) + self._mentions.get(id_b, 0) - cooccurrences
         )
         return cooccurrences / max(either, cooccurrences, 1)
+
+    def cooccurrences(self, id_a: str, id_b: str) -> int:
+        """Observations in which both concepts appeared (linked or not)."""
+        key = _pair_key(id_a, id_b)
+        return self._linked.get(key, 0) + self._cooccurrence.get(key, 0)
+
+    def prediction_error(self, concept_ids: list[str]) -> PredictionError:
+        """Score an observation against learned co-occurrence.
+
+        Call *before* ``learn()`` for the same observation: a prediction
+        must not see the evidence it is judged on.  Both errors are
+        measured *relative to what the model itself expects*, so the
+        ordinary variability of a loose cluster is not surprise:
+
+        - **missing**: each predicted companion ``b`` of ``a`` appears with
+          probability ``p = P(b | a)``; its absence costs ``p``.  The
+          model already expects a missed mass of ``Σ p(1 − p)``, so the
+          error is ``(missed − expected) / (Σ p − expected)``, clipped to
+          ``[0, 1]`` — absent 0.6-companions are routine, an absent
+          1.0-companion is not;
+        - **novelty**: a pair of well-known concepts never seen together
+          counts by ``1 − exp(−λ)``, ``λ = n_a · n_b / N`` — the chance
+          they would already have met if mentions were independent.  Two
+          concepts that each fill half the history and never met are
+          surprising together; two that each appear rarely are not.
+        """
+        observed = list(dict.fromkeys(concept_ids))
+        present = set(observed)
+        error = PredictionError()
+        predicted_mass = 0.0
+        expected_missed = 0.0
+        missed_mass = 0.0
+        for cid in observed:
+            support = self._mentions.get(cid, 0)
+            if support < PREDICTION_MIN_SUPPORT:
+                continue
+            for rel in self._relations.for_concept(cid):
+                other = rel.other_end(cid)
+                if other is None or other == cid:
+                    continue
+                p = min(1.0, self._linked.get(_pair_key(cid, other), 0) / support)
+                if p < PREDICTION_MIN_PROBABILITY:
+                    continue
+                predicted_mass += p
+                expected_missed += p * (1.0 - p)
+                if other not in present:
+                    missed_mass += p
+                    entry = (cid, other, round(p, 4))
+                    if entry not in error.missing:
+                        error.missing.append(entry)
+        # Relation-index order depends on load order; sort so the report
+        # is identical across processes.
+        error.missing.sort(key=lambda m: (-m[2], m[0], m[1]))
+        span = predicted_mass - expected_missed
+        if span > 1e-9:
+            error.missing_ratio = round(
+                min(1.0, max(0.0, (missed_mass - expected_missed) / span)), 4
+            )
+        known = [
+            cid for cid in observed
+            if self._mentions.get(cid, 0) >= PREDICTION_MIN_SUPPORT
+        ]
+        known_pairs = list(combinations(known, 2))
+        weight = 0.0
+        n_obs = max(1, self._observations)
+        for id_a, id_b in known_pairs:
+            if self.cooccurrences(id_a, id_b) == 0:
+                lam = self._mentions[id_a] * self._mentions[id_b] / n_obs
+                weight += 1.0 - math.exp(-lam)
+                error.novel_pairs.append((id_a, id_b))
+        error.novelty = round(weight / len(known_pairs), 4) if known_pairs else 0.0
+        error.surprise = max(error.missing_ratio, error.novelty)
+        return error
 
     def association(self, id_a: str, id_b: str) -> float:
         """Current association of a still-pending pair (0.0 if none)."""
@@ -218,6 +310,8 @@ class HebbianEngine:
         ]
         for key in stale:
             del self._cooccurrence[key]
+        for key in [k for k in self._linked if concept_id in k.split(_SNAPSHOT_SEPARATOR)]:
+            del self._linked[key]
         self._mentions.pop(concept_id, None)
         return len(stale)
 
@@ -249,6 +343,12 @@ class HebbianEngine:
             if self._association(edge.source_id, edge.target_id, cooccurrences) < cutoff:
                 if self._relations.remove(edge.id):
                     removed.append(edge.id)
+                    # Back to the pending counter: the pair is unlinked
+                    # again but its co-occurrence history is real.
+                    key = _pair_key(edge.source_id, edge.target_id)
+                    count = self._linked.pop(key, 0)
+                    if count:
+                        self._cooccurrence[key] = count
         return removed
 
     # ── persistence of association statistics ────────────────────────
@@ -258,6 +358,7 @@ class HebbianEngine:
         return {
             "observations": self._observations,
             "mentions": dict(self._mentions),
+            "linked": dict(self._linked),
         }
 
     def restore_stats(self, snapshot: dict | None) -> None:
@@ -270,8 +371,18 @@ class HebbianEngine:
         """
         self._observations = 0
         self._mentions.clear()
+        self._linked.clear()
         if not snapshot or not isinstance(snapshot, dict):
             return
+        linked = snapshot.get("linked") or {}
+        if isinstance(linked, dict):
+            for key, count in linked.items():
+                try:
+                    value = int(count)
+                except (TypeError, ValueError):
+                    continue
+                if value > 0:
+                    self._linked[str(key)] = value
         try:
             self._observations = max(0, int(snapshot.get("observations", 0)))
         except (TypeError, ValueError):
