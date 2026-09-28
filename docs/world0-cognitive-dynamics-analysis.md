@@ -447,6 +447,11 @@ $\gamma_{task} = 1 + 0.5\cdot\text{affinity}$，affinity 来自词级匹配（§
 | `context/`（新包：`grounding.py`） | `name_coverage()`、`ground_task()`：任务点名的概念 1.0、其直接邻居 0.5、部分点名按覆盖率（≥ 0.5） |
 | `projection/engine.py` | 任务亲和度 = max(任务历史, 词汇锚定) |
 | `tests/test_task_grounding.py`（新） | 14 个测试；`tests/test_layer_boundaries.py` 把 `context` 列入概念核心 |
+| **第十五轮** | |
+| `schemas/relation.py` | `SYMMETRIC_SEMANTIC_RELATIONS`；`is_directed` 同时看轴向与语义；`RelationEdge.connects(directed=)`、`opposes()` |
+| `relations/manager.py`、`core/interfaces.py`、`core/test_doubles.py` | `find_between(..., directed=)`；`discover()` 按陈述方向匹配有向关系 |
+| `world/_ingest.py` | 显式主张削弱同一对概念上相反轴向的显式主张（`weakened_relations` 中报告）；`contradicted_relations` 按方向匹配 |
+| `tests/test_relation_claims.py`（新） | 11 个测试 |
 
 所有字段均有默认值，旧的 JSON 存储可直接加载（`task_profile` 自动回填，tick 与
 recurrence 默认 0）。
@@ -881,6 +886,42 @@ names)` 以概念签名同样的词级粒度计算任务提到了概念名（或
 认知基准与全部既有测试不变（1 116 通过）。锚定只作用于投影阶段：激活的任务增益仍只看
 历史，被点名但在 `max_depth` 之外的概念不会被拉进候选——那是"点名即种子"的另一种语义，
 留给调用方显式传种子。`tests/test_task_grounding.py`（14 个）。
+
+### 7.18 关系主张：方向与矛盾 ✅
+
+**探针**（显式关系，每行为同一对概念）：
+
+| 场景 | 修复前 | 修复后 |
+|---|---|---|
+| `X depends_on Y` ×10，再 `Y depends_on X` ×1 | 只有一条边 X→Y，**反向主张被当成对 X→Y 的确认** | 两条边：X→Y p=0.81 不变，Y→X p=0.70 |
+| `A enables B` ×10，再 `A conflict B` ×10 | enables p=0.85 **不变**，conflict p=0.43——两个相反主张同时"可信" | enables p=0.45，conflict p=0.43：相互竞争 |
+| `A conflict B`，再 `B conflict A` | 同一条边（碰巧对：查找本来就不看方向） | 同一条边（对称语义，按设计） |
+
+`find_between` 只看"两端是否是这两个概念"，所以 `discover()` 把反向的有向主张合并进
+已有的边并 `confirm()`——依赖方向正是 `dependency_map` / `impact_map` 视角（§7.4）读取的
+信息。相反轴向的显式主张各建一条边、互不影响，只有 Agent 显式传 `contradicted_relations`
+时旧主张才被削弱；从 LLM 抽取的观察里，这个字段几乎总是空的。
+
+**修复：**
+
+- 有向关系按陈述方向匹配：`RelationEdge.connects(a, b, directed=True)`，`find_between(...,
+  directed=)`，`discover()` 与 `contradicted_relations` 都用它。平行关系和有向轴上的
+  **对称语义**（`SYMMETRIC_SEMANTIC_RELATIONS`：conflict、disjointness、complement、
+  incompatible_ontology、co_creation、mutual_reinforcement、future_coupling）两个方向都
+  匹配；`is_directed` 同样把它们视为无向，于是方向视角也不再缩放 `conflict` 这类边。
+- 显式主张是对相反主张的反证：负轴主张对同一对概念上显式的正轴 / 平行主张调用
+  `weaken()`，反之亦然，并在 `IngestResult.weakened_relations` 中报告。共现（Hebbian）
+  边与 `generic_relation` 不断言任何东西，不受影响；同轴主张（enables 与 dependence）
+  互相兼容，也不受影响。
+
+**未改（记录）：** 显式关系的初始 `probability` 取语义规格的 `propagation_strength`
+（`tests/test_relation_axes_deep.py` 明确断言这一点），所以只说一次的负向主张信念很低
+（conflict 0.10、disjointness 0.05），关系地板（§7.14）也随之很低——负向知识比正向知识
+忘得快。传播强度（激活流多少）与信念（主张是否为真）是两个量；是否把初值改成与类型无关的
+先验，涉及已有契约，留作后续决定。同轴改标签（dependence ×10 后说一次 inclusion，边的标签
+直接被覆盖）同样保留。
+
+全部既有测试不变（1 141 通过）。`tests/test_relation_claims.py`（11 个）。
 
 ---
 

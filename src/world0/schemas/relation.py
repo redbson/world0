@@ -180,6 +180,20 @@ SEMANTIC_RELATION_SPECS: dict[str, SemanticRelationSpec] = {
 }
 
 
+# Semantic relations on a directed axis whose meaning is nevertheless
+# symmetric: "A conflicts with B" says the same as "B conflicts with A".
+# They are matched in either orientation and are not scaled by
+# direction-conditioned perspectives (docs §7.18).
+SYMMETRIC_SEMANTIC_RELATIONS: frozenset[str] = frozenset({
+    "co_creation",
+    "mutual_reinforcement",
+    "future_coupling",
+    "conflict",
+    "disjointness",
+    "complement",
+    "incompatible_ontology",
+})
+
 _SEMANTIC_RELATION_ALIASES: dict[str, str] = {
     # Canonical names
     **{name: name for name in SEMANTIC_RELATION_SPECS},
@@ -406,6 +420,29 @@ class RelationEdge(BaseModel):
     def involves(self, concept_id: str) -> bool:
         return self.source_id == concept_id or self.target_id == concept_id
 
+    def connects(self, id_a: str, id_b: str, *, directed: bool = False) -> bool:
+        """Whether this edge links ``id_a`` and ``id_b``.
+
+        With ``directed=True`` a directed (positive / negative) edge must
+        run ``id_a → id_b``; a parallel edge has no meaningful orientation
+        and matches either way.
+        """
+        if directed and self.is_directed:
+            return self.source_id == id_a and self.target_id == id_b
+        return {self.source_id, self.target_id} == {id_a, id_b}
+
+    def opposes(self, other_axis: RelationType) -> bool:
+        """Whether a claim on ``other_axis`` contradicts this edge's claim.
+
+        A negative claim (conflict, exclusion, …) about a pair contradicts
+        a positive or parallel one and vice versa.  ``generic_relation``
+        asserts nothing beyond "related", so it is never contradicted.
+        """
+        if self.semantic_relation == "generic_relation":
+            return False
+        mine_negative = self.relation_type == RelationType.NEGATIVE
+        return mine_negative != (other_axis == RelationType.NEGATIVE)
+
     def decay_reference_time(self) -> datetime:
         """Wall-clock instant from which the next decay interval is measured."""
         if self.last_decayed_at and self.last_decayed_at > self.last_reinforced:
@@ -471,8 +508,13 @@ class RelationEdge(BaseModel):
         ``A excludes B``); parallel relations (equivalence, overlap,
         Hebbian co-occurrence) are symmetric and their stored orientation
         is arbitrary, so direction-conditioned propagation ignores them.
+        So are the symmetric semantics on a directed axis (``conflict``,
+        ``mutual_reinforcement``, … — ``SYMMETRIC_SEMANTIC_RELATIONS``).
         """
-        return self.relation_type != RelationType.PARALLEL
+        return (
+            self.relation_type != RelationType.PARALLEL
+            and self.semantic_relation not in SYMMETRIC_SEMANTIC_RELATIONS
+        )
 
     def reinforce(self, provenance: str = "", *, tick: int | None = None) -> None:
         """Strengthen this relation through repeated observation.

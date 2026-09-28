@@ -86,7 +86,12 @@ class RelationManager:
         semantic_spec = semantic_relation_spec(semantic_relation or relation_type.value)
         relation_type = semantic_spec.axis
 
-        existing = self.find_between(source_id, target_id, relation_type)
+        # Directed relations are matched in their stated orientation:
+        # "B depends on A" is a different claim from "A depends on B" and
+        # must not confirm it (docs §7.18).
+        existing = self.find_between(
+            source_id, target_id, relation_type, directed=True
+        )
         if existing:
             if semantic_relation:
                 existing.semantic_relation = semantic_spec.name
@@ -186,10 +191,16 @@ class RelationManager:
         id_a: str,
         id_b: str,
         relation_type: RelationType | None = None,
+        *,
+        directed: bool = False,
     ) -> RelationEdge | None:
-        """Find a specific relation between two concepts."""
+        """Find a specific relation between two concepts.
+
+        ``directed=True`` matches a directed edge only in the
+        ``id_a → id_b`` orientation (see ``RelationEdge.connects``).
+        """
         for rel in self.for_concept(id_a):
-            if not rel.involves(id_b):
+            if not rel.connects(id_a, id_b, directed=directed):
                 continue
             if relation_type is None or rel.relation_type == relation_type:
                 return rel

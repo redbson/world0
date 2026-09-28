@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Directed and contradictory relation claims** — directed relations are
+  now matched in their stated orientation: `X depends_on Y` and
+  `Y depends_on X` are two edges, and the reverse claim no longer confirms
+  the forward one.  Symmetric semantics on a directed axis (`conflict`,
+  `disjointness`, `complement`, `incompatible_ontology`, `co_creation`,
+  `mutual_reinforcement`, `future_coupling`) match either orientation and
+  are not scaled by direction-conditioned perspectives.  An explicit claim
+  on the negative axis disconfirms an explicit positive / parallel claim
+  about the same pair and vice versa (reported in
+  `IngestResult.weakened_relations`), so contradictory beliefs compete
+  instead of both staying confident.  `RelationEdge.connects()`,
+  `RelationEdge.opposes()`, `find_between(..., directed=)` (docs §7.18).
 - **Task grounding** (`world0.context`) — a task now changes the projection
   through the concepts it *names*, not only through task labels recorded
   on past observations.  `name_coverage()` measures word-level coverage of

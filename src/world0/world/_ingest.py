@@ -212,6 +212,28 @@ class IngestPipeline:
                     edge.confirm()
                     self._relations.mark_dirty(edge.id)
                 result.reinforced_relations.append(label)
+            self._weaken_opposing(edge, src, tgt, rel_type, observation, result)
+
+    def _weaken_opposing(self, edge, src, tgt, rel_type, observation, result) -> None:
+        """An explicit claim is evidence against the opposite claim.
+
+        Stating "A conflicts with B" disconfirms an explicit "A enables B"
+        (and vice versa) the same way ``contradicted_relations`` would,
+        so contradictory beliefs about a pair compete instead of both
+        staying confident (docs §7.18).  Co-occurrence edges and
+        ``generic_relation`` claims are never weakened this way.
+        """
+        for other in self._relations.find_any_between(src.id, tgt.id):
+            if other.id == edge.id or not other.is_explicit:
+                continue
+            if not other.opposes(rel_type):
+                continue
+            self._relations.weaken(other.id, provenance=observation.task)
+            other_src = src if other.source_id == src.id else tgt
+            other_tgt = tgt if other_src is src else src
+            result.weakened_relations.append(
+                f"{other_src.name} → {other.semantic_relation} → {other_tgt.name}"
+            )
 
     @staticmethod
     def _relation_metadata_by_key(
@@ -302,7 +324,9 @@ class IngestPipeline:
                 continue
             semantic_relation = normalize_semantic_relation(relation_name)
             rel_type = semantic_relation_spec(semantic_relation).axis
-            existing = self._relations.find_between(src.id, tgt.id, rel_type)
+            existing = self._relations.find_between(
+                src.id, tgt.id, rel_type, directed=True
+            )
             if existing is None:
                 # Contradiction without an existing edge weakens both
                 # endpoint concepts instead — there is nothing else to

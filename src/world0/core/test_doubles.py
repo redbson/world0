@@ -442,9 +442,11 @@ class FakeRelationStore:
         id_a: str,
         id_b: str,
         relation_type: RelationType | None = None,
+        *,
+        directed: bool = False,
     ) -> RelationEdge | None:
         for e in self._edges.values():
-            if {e.source_id, e.target_id} == {id_a, id_b}:
+            if e.connects(id_a, id_b, directed=directed):
                 if relation_type is None or e.relation_type == relation_type:
                     return e
         return None
@@ -475,7 +477,9 @@ class FakeRelationStore:
         prior_strength: float = 1.0,
         evidence_strength: float = 2.0,
     ) -> tuple[RelationEdge, bool]:
-        existing = self.find_between(source_id, target_id, relation_type)
+        existing = self.find_between(
+            source_id, target_id, relation_type, directed=True
+        )
         if existing:
             if probability is not None or prior_probability is not None:
                 existing.update_probability(
