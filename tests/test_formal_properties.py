@@ -19,7 +19,6 @@ from world0.context.focus import FOCUS_CAPACITY, Focus
 from world0.dynamics.activation import ActivationEngine, _accumulate
 from world0.dynamics.decay import (
     FADING_THRESHOLD,
-    concept_half_life,
     evidence_floor,
     settle_concept,
 )
@@ -134,21 +133,24 @@ class TestFoundGaps:
 
 
 class TestConceptDynamics:
-    def test_decay_split_matches_closed_form(self):
-        """Prop 3.1: split − whole = r2 (1 − r1)(f1 − f2)."""
+    def test_decay_split_is_exact(self):
+        """Prop 3.1: settlement is the exact flow of ``c' = -λ (c − f(t))⁺``
+        with a moving floor, hence a semigroup — splitting an interval leaves
+        the same confidence.  (The earlier scheme froze the floor at the
+        interval end and left the era correction r2 (1 − r1)(f1 − f2) ≈ 0.008
+        for 2000 + 3000 ticks; that residual is what made the maturity
+        trajectory depend on the reflect cadence up to a 0.01 bound.)"""
         node_a = _node(40, maturity=Maturity.DEVELOPING, confidence=0.9)
         node_b = _node(40, maturity=Maturity.DEVELOPING, confidence=0.9)
         h1, h2 = 2000, 3000
         settle_concept(node_a, h1, NOW)
         settle_concept(node_a, h1 + h2, NOW)
         settle_concept(node_b, h1 + h2, NOW)
-        H = concept_half_life(node_a)
-        f0 = evidence_floor(_node(40), now_tick=0, now=NOW)
-        f1, f2 = f0 * 2 ** (-h1 / 4380), f0 * 2 ** (-(h1 + h2) / 4380)
-        r1, r2 = 2 ** (-h1 / H), 2 ** (-h2 / H)
-        assert node_a.confidence - node_b.confidence == pytest.approx(
-            r2 * (1 - r1) * (f1 - f2), abs=1e-9
-        )
+        assert node_a.confidence == pytest.approx(node_b.confidence, abs=1e-12)
+        # ... and the floor still moves: the result sits above the floor at the end
+        assert node_b.confidence > evidence_floor(
+            _node(40), now_tick=0, now=NOW
+        ) * 2 ** (-(h1 + h2) / 4380)
 
     def test_settle_is_idempotent_at_one_instant(self):
         node = _node(5, maturity=Maturity.DEVELOPING, confidence=0.8)

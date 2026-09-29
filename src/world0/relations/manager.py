@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 from world0.dynamics.decay import settle_relation
 from world0.schemas.clock import CognitiveClock
 from world0.schemas.relation import (
@@ -27,6 +29,20 @@ class RelationManager:
         self._relations: dict[str, RelationEdge] = {}
         self._by_concept: dict[str, list[str]] = {}  # concept_id → [relation_ids]
         self._dirty: set[str] = set()  # relation ids with unsaved changes
+        # Connection-event hook wired by the owning ``World``.
+        self._on_connection: Callable[..., None] | None = None
+
+    def connect_lifecycle(
+        self, *, on_connection: Callable[..., None] | None = None
+    ) -> None:
+        """Wire the event-time lifecycle.
+
+        ``on_connection(source_id, target_id)`` runs after a relation is
+        created or reinforced, so a concept's promotion to CORE is judged
+        at the moment its connections change instead of whenever a reflect
+        happens to count them (``LifecycleEngine.on_connection``).
+        """
+        self._on_connection = on_connection
 
     def load(self) -> None:
         """Load all relations from persistent store."""
@@ -153,6 +169,8 @@ class RelationManager:
         self._relations[edge.id] = edge
         self._index(edge)
         self._dirty.add(edge.id)
+        if self._on_connection is not None:
+            self._on_connection(source_id, target_id)
         return edge, True
 
     @staticmethod
@@ -230,6 +248,8 @@ class RelationManager:
         settle_relation(edge, self._clock.tick)
         edge.reinforce(provenance=provenance, tick=self._clock.tick)
         self._dirty.add(edge.id)
+        if self._on_connection is not None:
+            self._on_connection(edge.source_id, edge.target_id)
         return edge
 
     def weaken(self, relation_id: str, provenance: str = "") -> RelationEdge | None:

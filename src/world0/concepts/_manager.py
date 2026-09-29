@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING
 from world0.concepts._consolidation import SignatureMatcher
 from world0.concepts._identity_ops import merge_concepts, split_concept
 from world0.concepts._indexes import NameIndex, TokenIndex
-from world0.dynamics.decay import settle_concept
+from world0.dynamics.decay import FADING_THRESHOLD, settle_concept
 from world0.schemas.clock import CognitiveClock
 from world0.schemas.concept import (
     ConceptNode,
@@ -35,6 +35,8 @@ _SALIENCE_KINDS: frozenset[str] = frozenset({
 })
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from world0.core import RelationStore, StorageBackend
 
 
@@ -67,6 +69,20 @@ class ConceptManager:
         self._signature_cache: dict[
             str, tuple[tuple, set[str], set[str], str]
         ] = {}
+        # Event hook wired by the owning ``World`` (see ``connect_lifecycle``).
+        self._on_activation: Callable[[ConceptNode], None] | None = None
+
+    def connect_lifecycle(
+        self, *, on_activation: Callable[[ConceptNode], None] | None = None
+    ) -> None:
+        """Wire the event-time lifecycle.
+
+        ``on_activation(node)`` runs after every activation so maturity
+        promotions are applied at the event rather than whenever a reflect
+        happens to run.  Without the hook the manager behaves as a plain
+        store (maturity then changes only at reflect).
+        """
+        self._on_activation = on_activation
 
     # ── persistence ───────────────────────────────────────────────────
 
@@ -443,6 +459,8 @@ class ConceptManager:
         settle_concept(node, self._clock.tick)
         node.activate(source=source, task=task, tick=self._clock.tick)
         self._dirty.add(node.id)
+        if self._on_activation is not None:
+            self._on_activation(node)
         return node
 
     def weaken(
@@ -452,7 +470,16 @@ class ConceptManager:
         node = self._concepts.get(concept_id)
         if not node:
             return None
+        # Like an activation, a disconfirmation moves the belief by an
+        # amount that is only meaningful against the *settled* confidence,
+        # and lowers the evidence floor the next settlement relaxes toward:
+        # settle the decay owed first (else the penalty itself would be
+        # decayed for the whole gap, and by how much would depend on when a
+        # reflect ran), then judge the FADING boundary at the event.
+        settle_concept(node, self._clock.tick)
         node.weaken(source=source, task=task)
+        if node.confidence < FADING_THRESHOLD and node.maturity != Maturity.FADING:
+            node.maturity = Maturity.FADING
         self._dirty.add(node.id)
         return node
 
@@ -522,7 +549,10 @@ class ConceptManager:
         node = self._concepts.get(concept_id)
         if not node:
             return None
+        settle_concept(node, self._clock.tick)
         node.confidence = min(1.0, max(0.01, node.confidence + delta))
+        if node.confidence < FADING_THRESHOLD and node.maturity != Maturity.FADING:
+            node.maturity = Maturity.FADING
         self._dirty.add(concept_id)
         return node
 

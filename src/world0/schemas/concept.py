@@ -125,6 +125,21 @@ REVIVAL_RECURRENCE: int = 3
 SALIENCE_EVIDENCE_SHARE: float = 0.7
 SALIENCE_ERA_HL: float = 4380.0
 
+# ── Recurrence chain ─────────────────────────────────────────────────
+# ``recurrence_count`` counts the windows of the *current chain*: an idle
+# gap of at least RECURRENCE_CHAIN_GAP ticks (half an era) ends it, and the
+# activation that follows opens a new one (count 1).  Spaced use is only
+# evidence of durability while it is actually spaced use — a record that
+# has sat unused for half an era is stale, and because the *evidence*
+# gates of the lifecycle are time-independent (dynamics/lifecycle.py) this
+# is what makes a concept that has faded away re-earn ESTABLISHED after it
+# is revived instead of regaining it on a single mention.  The smallest
+# idle time in which a concept eligible for ESTABLISHED (n ≥ 10) can have
+# faded is E·log2(f(10, 0, 0) / 0.05) ≈ 2 970 ticks, longer than the gap,
+# so every revival from an era-scale fade starts a new chain, while a
+# cadence T < RECURRENCE_CHAIN_GAP (≈ 2 190) never breaks its own chain.
+RECURRENCE_CHAIN_GAP: float = SALIENCE_ERA_HL / 2.0
+
 
 def normalize_task_label(task: str) -> str:
     """Canonical form of a task label used as a ``task_profile`` key."""
@@ -341,7 +356,9 @@ class ConceptNode(BaseModel):
         now = datetime.now(timezone.utc)
         self.activation_count += 1
         self.last_activated = now
+        chain_broken = False
         if tick is not None:
+            chain_broken = int(tick) - self.last_activated_tick >= RECURRENCE_CHAIN_GAP
             self.last_activated_tick = int(tick)
             window = int(tick) // RECURRENCE_WINDOW
             if window != self.last_recurrence_window:
@@ -369,6 +386,10 @@ class ConceptNode(BaseModel):
                 if self.recurrence_count >= REVIVAL_RECURRENCE
                 else Maturity.EMBRYONIC
             )
+        if chain_broken:
+            # Judged after the revival above: the chain that justified the
+            # landing rung is spent, this activation starts the next one.
+            self.recurrence_count = 1
 
     def record_task(self, task: str, count: int = 1) -> None:
         """Count one (or ``count``) activation(s) under ``task``."""

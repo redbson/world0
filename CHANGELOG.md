@@ -291,6 +291,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   projection unchanged.  `RelationEdge.is_directed` exposes the rule.
 
 ### Fixed
+- **Maturity no longer depends on how often `reflect` runs** (`docs/paper/world0-formal.md`
+  §3.5, F6, Theorem 3.7).  Promotion gates now contain only quantities that
+  become true at events (confirmations, disconfirmations, spaced recurrence,
+  live connections) and are evaluated at those events (activation, relation
+  create/reinforce); `reflect` only catches up out-of-band edits.  Settling is
+  the exact solution of the moving-floor relaxation, so it is an exact
+  semigroup and the fading crossing is exact.  A concept used every 720 ticks
+  now reaches ESTABLISHED at its 12th use (it needed 324 uses / 232,561
+  observations), and the same stream ends in the same (confidence, maturity,
+  existence) under any reflect schedule (spread ≤ 2e-9; before: core /
+  established / developing / embryonic).  Projection ties are broken on
+  scores quantised to 1e-6 (recency, name, id) so equal concepts no longer
+  depend on wall-clock noise.  Still schedule-dependent: re-mentioning a
+  concept that is already prune-eligible (documented in §13).
 - **A stated negative claim carries a belief, not an inhibition gain**
   (paper §4.2 note, analysis doc §7.21).  `RelationManager.discover` seeded an
   explicit edge's `probability` from `propagation_strength`, which on the

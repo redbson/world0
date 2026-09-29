@@ -131,7 +131,18 @@ class World:
         )
         self._hebbian = HebbianEngine(self.relations)
         self._decay = DecayEngine(self.concepts, self.relations, clock=self._clock)
-        self._lifecycle = LifecycleEngine(self.concepts, self.relations)
+        self._lifecycle = LifecycleEngine(
+            self.concepts, self.relations, clock=self._clock
+        )
+        # Event-time lifecycle: maturity promotions are applied at the
+        # activation / connection that earns them, so the maturity (and
+        # half-life) trajectory of a concept is a function of the
+        # observation stream and not of when reflect() happened to run
+        # (docs/paper, Theorem 3.7).
+        self.concepts.connect_lifecycle(on_activation=self._lifecycle.on_activation)
+        self.relations.connect_lifecycle(
+            on_connection=self._lifecycle.on_connection
+        )
         self._projection = ProjectionEngine(
             self.concepts, self.relations, clock=self._clock
         )

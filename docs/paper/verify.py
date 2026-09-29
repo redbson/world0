@@ -31,7 +31,14 @@ from world0.dynamics.decay import (
     FADING_THRESHOLD,
     RELATION_FLOOR_SHARE,
     DecayEngine,
+    concept_half_life,
     evidence_floor,
+    relax_confidence,
+    settle_concept,
+)
+from world0.dynamics.lifecycle import (
+    SPACED_ESTABLISHED_BALANCE,
+    SPACED_ESTABLISHED_EVIDENCE,
 )
 from world0.dynamics.hebbian import HEBBIAN_MIN_ASSOCIATION
 from world0.projection.metacognition import TENTATIVE_EVIDENCE, WELL_EVIDENCED
@@ -86,7 +93,7 @@ def check_gain() -> None:
 
 
 def check_idempotency() -> None:
-    section("§3.2 decay: semigroup property and the era correction r2(1-r1)(f1-f2)")
+    section("§3.2 decay: exact semigroup (Prop 3.1) — the era correction of the frozen-floor scheme is gone")
     for n, h1, h2 in [(0, 30, 50), (40, 300, 500), (40, 2000, 3000), (8, 100, 50)]:
         results = []
         for split in (False, True):
@@ -106,17 +113,42 @@ def check_idempotency() -> None:
                 w.clock.advance(h1 + h2)
             dec.decay_concepts()
             results.append(node.confidence)
-        # closed form of the discrepancy
+        diff = results[1] - results[0]
+        assert abs(diff) < 1e-9, (n, diff)
+        # what the previous scheme (floor frozen at the interval end) would have left
         node = _node(max(1, n), maturity=Maturity.DEVELOPING)
-        from world0.dynamics.decay import concept_half_life
         H = concept_half_life(node)
         r1, r2 = 2 ** (-h1 / H), 2 ** (-h2 / H)
         f = evidence_floor(node, now_tick=0, now=FIXED_NOW)
         f1, f2 = f * 2 ** (-h1 / E), f * 2 ** (-(h1 + h2) / E)
-        predicted = r2 * (1 - r1) * (f1 - f2)
-        diff = results[1] - results[0]
-        assert abs(diff - predicted) < 2e-4, (n, diff, predicted)
-        ok(f"n={n:<3} Δ1={h1:<5} Δ2={h2:<5} split−whole = {diff:.6f}  predicted {predicted:.6f}")
+        old_gap = r2 * (1 - r1) * (f1 - f2)
+        ok(f"n={n:<3} Δ1={h1:<5} Δ2={h2:<5} split−whole = {diff:+.2e}", f"(frozen-floor scheme: {old_gap:.6f})")
+    rng = random.Random(3)
+    worst = 0.0
+    for _ in range(20_000):
+        c, f = rng.uniform(0.01, 1), rng.uniform(0, 0.35)
+        H = rng.choice([24, 168, 720, 2160, 8760, 4380.0000001])
+        t1, t2 = rng.uniform(0, 3000), rng.uniform(0, 3000)
+        whole = relax_confidence(c, f, H, t1 + t2)
+        split = relax_confidence(relax_confidence(c, f, H, t1), f * 2 ** (-t1 / E), H, t2)
+        worst = max(worst, abs(whole - split))
+    assert worst < 1e-9
+    ok("relax_confidence, 20 000 random (c, f, H, t1, t2) incl. c < f and H ≈ E", f"max |whole − split| = {worst:.1e}")
+
+
+def check_fading_boundary() -> None:
+    section("§3.2 the FADING boundary is exact: a settle inside the crossing gap changes nothing")
+    for n, c0, maturity in [(4, 0.5, Maturity.DEVELOPING), (6, 0.9, Maturity.ESTABLISHED), (5, 0.3, Maturity.CORE)]:
+        outs = []
+        for cuts in ([], [200], [200, 900], [1, 2, 3, 500, 1500]):
+            node = _node(n, maturity=maturity, confidence=c0)
+            node.last_activated = FIXED_NOW
+            for cut in cuts + [2500]:
+                settle_concept(node, cut, FIXED_NOW)
+            outs.append((node.maturity, node.confidence))
+        confs = [c for _, c in outs]
+        assert max(confs) - min(confs) < 1e-9 and len({m for m, _ in outs}) == 1, outs
+        ok(f"n={n} {maturity.value:<11} c0={c0}", f"→ {outs[0][0].value} {confs[0]:.6f} for 4 different settle schedules")
 
 
 def check_schedule_independence() -> None:
@@ -141,6 +173,76 @@ def check_schedule_independence() -> None:
         assert max(cs) - min(cs) < 0.01 and max(ws) - min(ws) < 0.01, res
         ok(f"use every {T:<4}", "reflect every 1 / 50 / 1000 / never → confidence "
            + " / ".join(f"{c:.3f}" for c in cs) + ", weight " + " / ".join(f"{x:.3f}" for x in ws))
+
+
+def _stream(kind: str):
+    """Observation streams (tick → Observation) for the maturity theorem."""
+    def use(weaken=False, extra=()):
+        return Observation(
+            concepts=["c", "anchor", *extra],
+            relations=[("c", "anchor", "depends_on")] + [("c", e, "supports") for e in extra],
+            weakened=["c"] if weaken else [],
+            task="routine",
+            source="s",
+        )
+    if kind.startswith("cad"):
+        T = int(kind[3:])
+        return {k * T: use() for k in range(1, 31)}, 31 * T
+    if kind == "burst":
+        return {t: use() for t in range(1, 31)}, 5030
+    if kind == "one-shot":
+        return {1: use()}, 5000
+    if kind == "disconf":
+        return {k * 24: use(weaken=(k % 3 == 0)) for k in range(1, 31)}, 31 * 24
+    if kind == "late-links":
+        ev = {k * 24: use() for k in range(1, 41)}
+        t0 = 40 * 24
+        for i in range(5):
+            ev[t0 + 300 + i] = Observation(
+                concepts=[f"p{i}"], relations=[("c", f"p{i}", "supports")], source="s"
+            )
+        for k in range(1, 6):
+            ev[t0 + 720 * k] = use()
+        return ev, t0 + 720 * 6
+    raise KeyError(kind)
+
+
+def _drive(events, horizon: int, every: int | None):
+    w = World(store_path=tempfile.mkdtemp())
+    ticks = sorted(events)
+    i = 0
+    while w.clock.tick < horizon:
+        now = w.clock.tick
+        nxt_event = ticks[i] if i < len(ticks) else None
+        nxt_reflect = (now // every + 1) * every if every else None
+        stop = min(x for x in (nxt_event, nxt_reflect, horizon) if x is not None)
+        if nxt_event == stop:
+            w.clock.advance(stop - 1 - now)
+            w.ingest(events[stop])
+            i += 1
+        else:
+            w.clock.advance(stop - now)
+        if every and stop % every == 0 and stop < horizon:
+            w.reflect(light=True)
+    w.reflect()
+    node = w.concepts.resolve("c")
+    return None if node is None else (node.maturity.value, node.confidence)
+
+
+def check_maturity_schedule_independence() -> None:
+    section("§3.5 Theorem 3.7: (confidence, maturity, existence) do not depend on the reflect cadence")
+    for kind in ("cad24", "cad72", "cad168", "cad720", "burst", "one-shot", "disconf", "late-links"):
+        events, horizon = _stream(kind)
+        cadences = (1, 50, 1000, None) if kind not in ("cad720", "late-links") else (50, 1000, None)
+        res = [_drive(events, horizon, r) for r in cadences]
+        if res[0] is None:
+            assert all(r is None for r in res), res
+            ok(f"{kind:<10}", "concept pruned under every cadence")
+            continue
+        assert len({m for m, _ in res}) == 1, (kind, res)
+        spread = max(c for _, c in res) - min(c for _, c in res)
+        assert spread < 1e-6, (kind, res)
+        ok(f"{kind:<10}", f"{res[0][0]:<11} confidence spread over reflect every {cadences}: {spread:.1e}")
 
 
 def check_noise_threshold() -> None:
@@ -180,20 +282,33 @@ def check_one_off() -> None:
 
 
 def check_recurrence_bound() -> None:
-    section("§3.4 cadence bound for the recurrence path to ESTABLISHED")
-    t_star = E * math.log2(0.35 / 0.30)
-    ok("T* = E·log2(0.35/0.30)", f"{t_star:.0f} observations")
-    for T in (168, 720):
+    section("§3.3 Prop 3.5: sparse cadences reach ESTABLISHED after n* uses (was 324 at T=720)")
+    def e(n: int, d: int = 0) -> float:
+        return (n + 1) / (n + d + 2) * n / (n + 10)
+    n_star = next(n for n in range(10, 200) if e(n) >= SPACED_ESTABLISHED_EVIDENCE)
+    ok("n* = min { n ≥ 10 : e(n, 0) ≥ 0.5 }  (WELL_EVIDENCED)", f"{n_star} uses; balance(n*) = {(n_star + 1) / (n_star + 2):.3f} ≥ {SPACED_ESTABLISHED_BALANCE}")
+    assert n_star == 12
+    ok("chain gap E/2 (a cadence T below it never breaks its own recurrence chain)", f"{E / 2:.0f} observations")
+    for T in (24, 72, 168, 720):
         w = World(store_path=tempfile.mkdtemp(), auto_reflect_every=None)
-        w.ingest(Observation(concepts=["c"]))
-        for _ in range(400):
-            w.clock.advance(T - 1)
+        uses = 0
+        while uses < 400:
             w.ingest(Observation(concepts=["c"]))
-            w.reflect(light=True)
-            if w.concepts.resolve("c").maturity == Maturity.ESTABLISHED:
+            uses += 1
+            node = w.concepts.resolve("c")
+            if node.maturity == Maturity.ESTABLISHED:
                 break
+            w.clock.advance(T - 1)
         node = w.concepts.resolve("c")
-        ok(f"cadence T={T}", f"maturity {node.maturity.value}, confidence {node.confidence:.3f}, recurrences {node.recurrence_count}")
+        assert node.maturity == Maturity.ESTABLISHED and uses == n_star, (T, uses)
+        ok(f"cadence T={T}", f"ESTABLISHED at use {uses} (tick {w.clock.tick}, confidence {node.confidence:.3f}, recurrences {node.recurrence_count})")
+    # smallest cadence for which the chain breaks: the recurrence path closes
+    w = World(store_path=tempfile.mkdtemp())
+    for _ in range(40):
+        w.ingest(Observation(concepts=["c"]))
+        w.clock.advance(int(E / 2))
+    node = w.concepts.resolve("c")
+    ok(f"cadence T={int(E / 2)} (= E/2, chain breaks at every use)", f"maturity {node.maturity.value}, recurrences {node.recurrence_count}")
 
 
 def check_evidence_thresholds() -> None:
@@ -519,7 +634,9 @@ def main() -> None:
     check_clock()
     check_gain()
     check_idempotency()
+    check_fading_boundary()
     check_schedule_independence()
+    check_maturity_schedule_independence()
     check_noise_threshold()
     check_one_off()
     check_recurrence_bound()

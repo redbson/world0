@@ -46,6 +46,17 @@ Three guarantees this engine makes (analysis and probe evidence in
    Together with guarantee 1, forgetting then depends only on cognitive
    time, never on the reflect cadence (docs/paper, Theorem 3.2).
 
+5. **Exact FADING boundary.**  Entering FADING switches the half-life,
+   so *when* a concept is judged to have crossed ``FADING_THRESHOLD``
+   used to depend on when settlement happened to run (a reflect in the
+   middle of a gap changed the decay rate for the rest of it).  A settle
+   now splits the interval at the analytically solved crossing instant:
+   before it the maturity's half-life applies, after it the FADING one.
+   The crossing time is a function of the state at the start of the gap
+   only, so any subdivision of the gap gives the same result (up to the
+   era correction of Proposition 3.1).  Disconfirmation (``weaken``)
+   settles first and is judged at the event for the same reason.
+
 Optimization: items touched less than one tick ago are skipped entirely,
 avoiding unnecessary floating-point work.
 """
@@ -150,6 +161,9 @@ PRUNE_MIN_IDLE_TICKS: float = 720.0
 # still has a floor under the threshold and is not protected.
 RELATION_FLOOR_SHARE: float = 0.1
 
+# Weight below which a relation is considered gone (pruned at reflect).
+RELATION_PRUNE_THRESHOLD: float = 0.02
+
 
 def concept_half_life(node: ConceptNode) -> float:
     """Effective half-life in ticks: maturity base × evidence scale."""
@@ -205,16 +219,59 @@ def evidence_floor(
     return floor
 
 
+_LN2 = math.log(2.0)
+
+
+def relax_confidence(
+    confidence: float, floor: float, half_life: float, dt: float
+) -> float:
+    """Exact solution of ``c' = -λ · max(0, c − f(t))`` with ``f(t) = floor · 2^(-t/E)``.
+
+    ``λ = ln 2 / half_life`` and ``E`` is the era half-life of the evidence
+    floor, so the floor keeps *moving* while confidence relaxes toward it.
+    The flow of an ODE is a semigroup, which is why settling in any number
+    of pieces gives the same confidence (docs/paper, Proposition 3.1):
+
+    * ``c ≤ f``: nothing to forget; confidence stays put until the floor,
+      still falling, meets it (at ``t_x = E · log2(f / c)``);
+    * ``c > f``: ``c(t) = A e^(-μt) + (c − A) e^(-λt)`` with
+      ``A = λ f / (λ − μ)`` (``μ = ln 2 / E``); ``c ≥ f(t)`` throughout.
+    """
+    lam = _LN2 / half_life
+    mu = _LN2 / EVIDENCE_FLOOR_ERA_HL if EVIDENCE_FLOOR_ERA_HL > 0 else 0.0
+    if confidence <= floor:
+        if floor <= 0.0 or mu <= 0.0 or confidence <= 0.0:
+            return confidence
+        meet = math.log(floor / confidence) / mu
+        if meet >= dt:
+            return confidence
+        floor, dt = confidence, dt - meet
+    if floor <= 0.0:
+        return confidence * math.exp(-lam * dt)
+    if abs(lam - mu) < 1e-9 * max(lam, mu):
+        return max(0.0, math.exp(-lam * dt) * (confidence + lam * floor * dt))
+    amp = lam * floor / (lam - mu)
+    return max(0.0, amp * math.exp(-mu * dt) + (confidence - amp) * math.exp(-lam * dt))
+
+
 def settle_concept(
     node: ConceptNode, now_tick: int, now: datetime | None = None
 ) -> bool:
     """Apply the decay a concept owes up to ``now_tick``.
 
-    Relaxes confidence toward the evidence floor over the cognitive time
-    since decay was last applied (or since the last activation, whichever
-    is later) and moves the reference point to now.  Idempotent: calling
-    it again at the same instant changes nothing.  Returns True when the
-    concept has just crossed into FADING.
+    Relaxes confidence toward the (moving) evidence floor over the
+    cognitive time since decay was last applied (or since the last
+    activation, whichever is later) and moves the reference point to now.
+    Idempotent — calling it again at the same instant changes nothing —
+    and an exact semigroup: settling ``[t0, t1]`` in any number of pieces
+    gives the same confidence.  Returns True when the concept has just
+    crossed into FADING.
+
+    The FADING boundary is exact too.  Confidence only falls between
+    events, so the interval is split at the instant it crosses
+    ``FADING_THRESHOLD`` (found by bisection on the monotone solution): the
+    maturity's half-life governs up to it, the FADING half-life after.
+    Whether or when settlement runs therefore cannot change the outcome.
     """
     if node.maturity == Maturity.FADING and node.confidence <= 0.0:
         return False
@@ -225,16 +282,93 @@ def settle_concept(
     # reference point on the next call.
     if elapsed < DECAY_GRACE_TICKS:
         return False
-    decay_factor = math.pow(0.5, elapsed / concept_half_life(node))
-    floor = evidence_floor(node, now_tick=now_tick, now=now)
-    if node.confidence > floor:
-        node.confidence = max(0.0, floor + (node.confidence - floor) * decay_factor)
+    entered_fading = False
+    if node.confidence < FADING_THRESHOLD and node.maturity != Maturity.FADING:
+        node.maturity = Maturity.FADING
+        entered_fading = True
+    floor = evidence_floor(
+        node,
+        now_tick=node.decay_reference_tick(),
+        now=node.decay_reference_time(),
+    )
+    confidence = node.confidence
+    end = relax_confidence(confidence, floor, concept_half_life(node), elapsed)
+    if node.maturity != Maturity.FADING and confidence >= FADING_THRESHOLD > end:
+        # Crossing inside the interval: bisect for t* with c(t*) = θ.
+        lo, hi = 0.0, elapsed
+        for _ in range(60):
+            mid = 0.5 * (lo + hi)
+            if relax_confidence(confidence, floor, concept_half_life(node), mid) >= FADING_THRESHOLD:
+                lo = mid
+            else:
+                hi = mid
+        node.maturity = Maturity.FADING
+        entered_fading = True
+        era = EVIDENCE_FLOOR_ERA_HL
+        floor_at_cross = floor * math.pow(0.5, hi / era) if era > 0 else floor
+        end = relax_confidence(
+            FADING_THRESHOLD, floor_at_cross, concept_half_life(node), elapsed - hi
+        )
+    node.confidence = end
     node.last_decayed_tick = now_tick
     node.last_decayed_at = now
     if node.confidence < FADING_THRESHOLD and node.maturity != Maturity.FADING:
         node.maturity = Maturity.FADING
-        return True
-    return False
+        entered_fading = True
+    return entered_fading
+
+
+def concept_prunable(
+    node: ConceptNode,
+    now_tick: int,
+    now: datetime | None = None,
+    threshold: float = 0.02,
+) -> bool:
+    """Whether a (settled) concept is past recovery: FADING, below
+    ``threshold`` and idle for ``PRUNE_MIN_IDLE_TICKS``.
+
+    A pure predicate of the settled state: whether the physical deletion
+    happened at a reflect or is applied lazily at the next mention, the
+    concept is dead from the first instant this holds.
+    """
+    return (
+        node.maturity == Maturity.FADING
+        and node.confidence < threshold
+        and node.elapsed_since_activation(now_tick, now) >= PRUNE_MIN_IDLE_TICKS
+    )
+
+
+def _relaxed_relation(
+    edge: RelationEdge, now_tick: int, now: datetime
+) -> tuple[float, float] | None:
+    """(weight, confidence) after settling to ``now_tick``; None inside the grace."""
+    elapsed = edge.decay_elapsed(now_tick, now)
+    if elapsed < DECAY_GRACE_TICKS:
+        return None
+    # More reinforced relations decay slower
+    half_life = RELATION_BASE_HALF_LIFE * (1.0 + edge.reinforcement_count * 0.5)
+    decay_factor = math.pow(0.5, elapsed / half_life)
+    # Relax toward the probability-anchored floor (explicit edges) or
+    # toward zero (auto-discovered edges).
+    floor = relation_floor(edge, now_tick=now_tick, now=now)
+    weight, confidence = edge.weight, edge.confidence
+    if weight > floor:
+        weight = max(0.0, floor + (weight - floor) * decay_factor)
+    if confidence > floor:
+        confidence = max(0.0, floor + (confidence - floor) * decay_factor)
+    return weight, confidence
+
+
+def projected_relation_weight(
+    edge: RelationEdge, now_tick: int, now: datetime | None = None
+) -> float:
+    """The weight ``settle_relation`` would leave, without mutating the edge.
+
+    Lets a reader ask "is this connection alive?" without depending on
+    whether a reflect has physically settled or pruned it yet.
+    """
+    relaxed = _relaxed_relation(edge, now_tick, now or wall_now())
+    return edge.weight if relaxed is None else relaxed[0]
 
 
 def settle_relation(
@@ -249,25 +383,16 @@ def settle_relation(
     threshold.
     """
     now = now or wall_now()
-    elapsed = edge.decay_elapsed(now_tick, now)
-    if elapsed < DECAY_GRACE_TICKS:
+    relaxed = _relaxed_relation(edge, now_tick, now)
+    if relaxed is None:
         return False
-    # More reinforced relations decay slower
-    half_life = RELATION_BASE_HALF_LIFE * (1.0 + edge.reinforcement_count * 0.5)
-    decay_factor = math.pow(0.5, elapsed / half_life)
-    # Relax toward the probability-anchored floor (explicit edges) or
-    # toward zero (auto-discovered edges).
-    floor = relation_floor(edge, now_tick=now_tick, now=now)
-    if edge.weight > floor:
-        edge.weight = max(0.0, floor + (edge.weight - floor) * decay_factor)
-    if edge.confidence > floor:
-        edge.confidence = max(0.0, floor + (edge.confidence - floor) * decay_factor)
+    edge.weight, edge.confidence = relaxed
     # ``probability`` (belief the typed relation is correct) is
     # deliberately left alone: the passage of time is not evidence
     # against a relation, only against its current salience.
     edge.last_decayed_tick = now_tick
     edge.last_decayed_at = now
-    return edge.weight < 0.02
+    return edge.weight < RELATION_PRUNE_THRESHOLD
 
 
 class DecayEngine:
@@ -335,9 +460,7 @@ class DecayEngine:
         to_prune = [
             n.id
             for n in self._concepts.all()
-            if n.maturity == Maturity.FADING
-            and n.confidence < threshold
-            and n.elapsed_since_activation(now_tick, now) >= PRUNE_MIN_IDLE_TICKS
+            if concept_prunable(n, now_tick, now, threshold)
         ]
         for cid in to_prune:
             self._relations.remove_for_concept(cid)

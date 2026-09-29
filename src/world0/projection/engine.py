@@ -54,6 +54,17 @@ FOCUS_GAIN: float = 0.5
 # *loosens* the absolute floor (for weak seeds), never tightens it.
 RELATIVE_MIN_ACTIVATION: float = 0.02
 
+# Scores are compared at 1e-6.  Two concepts with identical evidence differ
+# by ~1e-11 of wall-clock drift noise (a few microseconds between two
+# activations of one observation), and ordering them by that noise made a
+# projection depend on scheduling jitter — and on how much of the jitter a
+# maturity-dependent half-life forgets.  Below the quantum they are tied
+# and resolved by recency (the concept activated last first — the order the
+# noise used to impose, now decided by the timestamps themselves), then
+# name, then id.  (A quantum five orders of magnitude coarser than the
+# noise keeps a tie group from straddling a rounding boundary in practice.)
+SCORE_DIGITS: int = 6
+
 
 class ProjectionEngine:
     """Generates a Projection from activation scores.
@@ -71,6 +82,12 @@ class ProjectionEngine:
         self._concepts = concepts
         self._relations = relations
         self._clock = clock or CognitiveClock()
+
+    def _tiebreak(self, concept_id: str) -> tuple[float, str, str]:
+        node = self._concepts.get(concept_id)
+        if node is None:
+            return (0.0, "", concept_id)
+        return (-node.last_activated.timestamp(), node.normalized_name(), concept_id)
 
     def project(
         self,
@@ -105,7 +122,7 @@ class ProjectionEngine:
         cut = min(min_activation, RELATIVE_MIN_ACTIVATION * peak)
         seed_set = set(seed_ids or ())
         candidates = {
-            cid: score
+            cid: round(score, SCORE_DIGITS)
             for cid, score in activations.items()
             if score >= cut or cid in seed_set
         }
@@ -192,11 +209,12 @@ class ProjectionEngine:
         # line of attention are preferred during selection, not just
         # ranked higher.
         relevance: dict[str, float] = {
-            cid: (
+            cid: round(
                 candidates[cid] / max_score
                 * task_affinity[cid]
                 * temporal_freshness[cid]
-                * (1.0 + FOCUS_GAIN * focus_affinity.get(cid, 0.0))
+                * (1.0 + FOCUS_GAIN * focus_affinity.get(cid, 0.0)),
+                SCORE_DIGITS,
             )
             for cid in candidates
         }
@@ -204,7 +222,7 @@ class ProjectionEngine:
         # MMR greedy selection.  Candidates are visited in a stable order
         # (score desc, then id) so exact ties resolve identically in every
         # process — a projection must never depend on PYTHONHASHSEED.
-        remaining = sorted(candidates, key=lambda cid: (-candidates[cid], cid))
+        remaining = sorted(candidates, key=lambda cid: (-candidates[cid], *self._tiebreak(cid)))
         # Seeds first.  The seeds are the Agent's explicit focus; MMR must
         # never trade one away for a "more diverse" or better-matching
         # neighbour (it did: a cross-domain second seed under a task, or
