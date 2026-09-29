@@ -154,3 +154,15 @@ def test_report_core_tables_include_the_tuned_world0_system():
 
     assert {"world0", "world0_compact", "world0_tuned", "fact_task", "full_context"} <= report.MAIN
     assert not {"full_32k", "full_64k"} & report.MAIN
+
+
+def test_task_filters_are_not_disabled_by_shared_task_words():
+    """Every '<domain> work' label shares 'work'; the task-using baselines must
+    still tell the domains apart (the same matcher World 0 uses)."""
+    from benchmarks.longrun.systems import TASK_MATCH, TaskMatcher
+
+    m = TaskMatcher()
+    for d in ("alpha", "beta", "gamma", "delta"):
+        m.observe(f"{d} work")
+    assert m.match("alpha work", "alpha work") == 1.0
+    assert m.match("alpha work", "beta work") < TASK_MATCH

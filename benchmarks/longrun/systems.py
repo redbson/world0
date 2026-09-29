@@ -78,6 +78,35 @@ def task_overlap(query_task: str, label: str) -> float:
     return len(q & set(_tokens(label))) / len(q) if q else 0.0
 
 
+# A task-tagged claim belongs to the query's task when the labels share at
+# least this much of the query's *distinctive* task words.  Every system
+# that uses task labels gets the same matcher World 0 uses
+# (``TaskVocabulary``): with plain word overlap every benchmark task ("<domain>
+# work") matched every other at 0.5 through the word "work", which silently
+# disabled the task filters of fact_task / state_doc as well as World 0's.
+TASK_MATCH = 0.5
+
+
+class TaskMatcher:
+    """Distinctiveness-weighted task matching over the labels a system has seen."""
+
+    def __init__(self) -> None:
+        from world0.schemas.concept import TaskVocabulary
+
+        self.vocabulary = TaskVocabulary()
+        self._seen: set[str] = set()
+
+    def observe(self, label: str) -> None:
+        if label and label not in self._seen:
+            self._seen.add(label)
+            self.vocabulary.add(label)
+
+    def match(self, query_task: str, label: str) -> float:
+        from world0.schemas.concept import task_match_score
+
+        return task_match_score(query_task, label, self.vocabulary)
+
+
 class System:
     name = "base"
     unbounded = False
@@ -306,8 +335,10 @@ class SummaryTask(System):
     def __init__(self) -> None:
         self.count: dict[str, dict[Claim, int]] = defaultdict(lambda: defaultdict(int))
         self.last_task_step: dict[str, int] = {}
+        self.matcher = TaskMatcher()
 
     def observe(self, ev):
+        self.matcher.observe(ev.task)
         self.last_task_step[ev.task] = ev.step
         for c in ev.claims:
             self.count[ev.task][c] += 1
@@ -316,7 +347,7 @@ class SummaryTask(System):
                 self.count[t].pop(c, None)
 
     def query(self, q, linked, budget):
-        tasks = sorted(self.count, key=lambda t: (-task_overlap(q.task_text, t), -self.last_task_step[t]))
+        tasks = sorted(self.count, key=lambda t: (-self.matcher.match(q.task_text, t), -self.last_task_step[t]))
         lines: list[tuple[str, Claim | None]] = []
         for t in tasks:
             lines.append((f"[{t}]", None))
@@ -347,9 +378,11 @@ class FactStore(System):
         self.tasks: dict[Claim, Counter] = defaultdict(Counter)
         self.adj: dict[str, set[Claim]] = defaultdict(set)
         self.recent: list[Claim] = []
+        self.matcher = TaskMatcher()
 
     def observe(self, ev):
         x = ev.extracted
+        self.matcher.observe(ev.task)
         for c in x.claims:
             self.count[c] += 1
             self.last[c] = ev.step
@@ -372,15 +405,15 @@ class FactStore(System):
     def _task_match(self, c: Claim, q: Query) -> float:
         if not (self.use_task and q.task_text):
             return 0.0
-        return max((task_overlap(q.task_text, t) for t in self.tasks.get(c, ())), default=0.0)
+        return max((self.matcher.match(q.task_text, t) for t in self.tasks.get(c, ())), default=0.0)
 
     def _select(self, linked: list[str], q: Query) -> list[Claim]:
         seen = self._walk(linked, self.min_count)
         if not seen and self.min_count > 1:
             seen = self._walk(linked, 1)
         tm = {c: self._task_match(c, q) for c in seen}
-        if self.use_task and any(v > 0 for v in tm.values()):
-            seen = {c: h for c, h in seen.items() if tm[c] > 0}
+        if self.use_task and any(v >= TASK_MATCH for v in tm.values()):
+            seen = {c: h for c, h in seen.items() if tm[c] >= TASK_MATCH}
         return sorted(seen, key=lambda c: (seen[c], -tm[c], -self.count[c], -self.last[c], c))
 
     def _walk(self, linked: list[str], min_count: int) -> dict[Claim, int]:
