@@ -1,0 +1,19 @@
+{
+ "study": "window_limit",
+ "jobs": 4,
+ "seeds": 4,
+ "budgets": [
+  150,
+  300,
+  600,
+  1200,
+  2400,
+  4800
+ ],
+ "commit": "ba75cde",
+ "dirty_src_or_benchmarks": true,
+ "seconds": 135.3,
+ "python": "3.11.15",
+ "cpus": 4,
+ "workers": 4
+}

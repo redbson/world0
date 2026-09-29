@@ -39,6 +39,8 @@ def studies(seeds: int) -> dict[str, list[dict]]:
         "taskmode": [j for m in ("none", "wrong") for j in jobs(CORE, list(range(min(seeds, 6))), horizon=1000, task_mode=m)],
         "chatter": [j for n in (0.0, 0.5, 0.75) for j in jobs(CORE, list(range(min(seeds, 6))), horizon=1000, noise_rate=n)],
         "verbosity": [j for v in (0, 120, 400) for j in jobs(CORE, list(range(min(seeds, 6))), horizon=1000, verbosity=v)],
+        "window_limit": jobs(["full_32k", "full_64k", "full_context", "rag", "fact_task", "world0_tuned"],
+                             list(range(min(seeds, 4))), horizon=6000, query_every=40),
         "ablation": jobs(ABLATION, list(range(min(seeds, 6))), horizon=1000),
         "tune": jobs(TUNE, list(DEV_SEEDS), horizon=1000),
         "smoke": [dict(horizon=200, seed=0, systems=CORE)],

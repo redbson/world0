@@ -23,7 +23,7 @@ T975 = {1: 12.71, 2: 4.30, 3: 3.18, 4: 2.78, 5: 2.57, 6: 2.45, 7: 2.36, 8: 2.31,
         10: 2.23, 11: 2.20, 12: 2.18, 13: 2.16, 14: 2.14, 15: 2.13, 19: 2.09, 29: 2.05}
 KINDS = ["focus", "chain", "bridge", "stale", "detail"]
 IN_SCOPE = ["focus", "chain", "bridge", "stale"]
-ORDER = ["none", "window", "full_context", "rag", "rag_recency", "summary_buffer", "summary_task",
+ORDER = ["none", "window", "full_32k", "full_64k", "full_context", "rag", "rag_recency", "summary_buffer", "summary_task",
          "factstore", "fact_task", "fact_task_s2", "kg_static", "kg_temporal", "state_doc",
          "world0", "world0_compact", "world0_tuned", "world0_tuned_s2",
          "world0_reflect", "world0_focus", "world0_notask", "world0_depth1", "world0_depth3"]
@@ -68,7 +68,7 @@ def qrows(rows, **eq):
 
 
 def bud(system: str, b: int) -> int:
-    return 0 if system == "full_context" else b
+    return 0 if system.startswith("full_") else b
 
 
 def per_seed(rows, metric, kinds=IN_SCOPE) -> dict[int, float]:
@@ -260,6 +260,23 @@ def main(path: str) -> None:
         for s in systems_in(st, set(ORDER[:17])):
             body.append([name(s)] + [utility_cell([r for r in st if r[param] == v], s, 1200) for v in vals])
         out.append(table(["system"] + [f"{param}={v}" for v in vals], body))
+
+    wl = [r for r in rows if r.get("study") == "window_limit"]
+    if wl:
+        out.append("\n## When the history is longer than the window (H=6000, ideal reader over what fits)\n")
+        body = []
+        for s in systems_in(wl):
+            cells = [name(s)]
+            for k in KINDS:
+                sel = qrows(wl, system=s, budget=bud(s, 1200), kind=k)
+                cells.append(fmt(*ci(list(per_seed(sel, "headline", [k]).values()))))
+            cells.append(utility_cell(wl, s, 1200))
+            cells.append(f"{tokens_used(wl, s, 1200):.0f}")
+            body.append(cells)
+        out.append(table(["system"] + KINDS + ["utility", "tokens used"], body))
+        r0 = [r for r in wl if r["type"] == "resource"]
+        if r0:
+            out.append(f"\nFull stream: {statistics.mean(r['stream_tokens'] for r in r0):.0f} tokens.")
 
     ab = [r for r in rows if r.get("study") == "ablation"]
     if ab:

@@ -155,6 +155,18 @@ class FullContext(Window):
         return _from_events(self._last(self.cap))
 
 
+class FullContext32k(FullContext):
+    """Everything a 32k-token window holds."""
+
+    name = "full_32k"
+    cap = 32_000
+
+
+class FullContext64k(FullContext):
+    name = "full_64k"
+    cap = 64_000
+
+
 # ── retrieval over past events (BM25) ────────────────────────────────────
 class _BM25:
     def __init__(self, k1: float = 1.5, b: float = 0.75) -> None:
@@ -640,7 +652,7 @@ class World0Custom(World0Compact):
 
 ALL_SYSTEMS: dict[str, type[System]] = {
     cls.name: cls for cls in (
-        NoMemory, Window, FullContext, RAG, RAGRecency, SummaryBuffer, SummaryTask,
+        NoMemory, Window, FullContext, FullContext32k, FullContext64k, RAG, RAGRecency, SummaryBuffer, SummaryTask,
         FactStore, FactTask, FactTaskS2, KGStatic, KGTemporal, StateDoc,
         World0, World0Compact, World0Tuned, World0TunedS2, World0Reflect, World0Focus, World0NoTask,
         World0Depth1, World0Depth3,
