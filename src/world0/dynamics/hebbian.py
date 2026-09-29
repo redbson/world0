@@ -143,7 +143,12 @@ class HebbianEngine:
             # An edge that is already dead is absent, not revivable
             # (RelationManager.reap_dead_between).
             self._relations.reap_dead_between(id_a, id_b)
-            existing = self._relations.find_any_between(id_a, id_b)
+            # Withdrawn claims are history: co-occurrence neither reinforces
+            # them nor counts them as a link (the pair learns as if unlinked).
+            existing = [
+                rel for rel in self._relations.find_any_between(id_a, id_b)
+                if not rel.is_retracted
+            ]
             key = _pair_key(id_a, id_b)
             if existing:
                 for rel in existing:

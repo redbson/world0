@@ -271,7 +271,9 @@ class Projection(BaseModel):
         if self.relations:
             lines.append("### Key Relations")
             concept_names = {c.id: c.representation() for c in self.concepts}
-            for r in sorted(self.relations, key=lambda x: x.weight, reverse=True)[:10]:
+            # The engine orders relations by settled weight; keep its order
+            # (stored weights may be stale between reflects).
+            for r in self.relations[:10]:
                 src = concept_names.get(r.source_id, r.source_id)
                 tgt = concept_names.get(r.target_id, r.target_id)
                 lines.append(

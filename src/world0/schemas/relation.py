@@ -11,7 +11,7 @@ from enum import Enum
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from world0.schemas.clock import cognitive_elapsed, wall_now
-from world0.schemas.concept import TaskVocabulary, task_match_score
+from world0.schemas.concept import TaskVocabulary, normalize_task_label, task_match_score
 
 
 class RelationType(str, Enum):
@@ -399,6 +399,10 @@ def relation_axis_descriptions() -> dict[str, list[str]]:
     }
 
 
+# Most recent distinct tasks a claim is remembered to have been stated under.
+MAX_CLAIM_TASKS: int = 32
+
+
 class RelationEdge(BaseModel):
     """A relation is discovered through the Agent's work, not declared upfront.
 
@@ -448,6 +452,10 @@ class RelationEdge(BaseModel):
     )
     provenance: str = ""
     task_history: list[str] = Field(default_factory=list)
+    # Tasks under which the claim was *stated* (explicit statements only;
+    # ``task_history`` also collects co-occurrence provenance).  The context
+    # of a claim is decided by these (projection ``CONTEXT_MATCH``).
+    claim_tasks: list[str] = Field(default_factory=list)
 
     @field_validator("relation_type", mode="before")
     @classmethod
@@ -636,6 +644,21 @@ class RelationEdge(BaseModel):
     @property
     def is_retracted(self) -> bool:
         return self.retracted_tick is not None
+
+    def record_claim(self, task: str) -> None:
+        """Note that the claim was stated under ``task``."""
+        label = normalize_task_label(task)
+        if label and label not in self.claim_tasks:
+            self.claim_tasks.append(label)
+            if len(self.claim_tasks) > MAX_CLAIM_TASKS:
+                del self.claim_tasks[: len(self.claim_tasks) - MAX_CLAIM_TASKS]
+
+    def claim_affinity(self, task: str, vocabulary: TaskVocabulary | None = None) -> float | None:
+        """Best match of ``task`` against the tasks the claim was stated under;
+        None when the claim was never stated under a task (neutral)."""
+        if not self.claim_tasks:
+            return None
+        return max(task_match_score(task, label, vocabulary) for label in self.claim_tasks)
 
     def other_end(self, concept_id: str) -> str | None:
         if self.source_id == concept_id:

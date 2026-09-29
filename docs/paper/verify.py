@@ -35,8 +35,11 @@ from world0.dynamics.decay import (
     concept_half_life,
     evidence_floor,
     relax_confidence,
+    concept_expired,
+    projected_relation_weight,
     settle_concept,
     settle_relation,
+    settled_confidence,
 )
 from world0.dynamics.lifecycle import (
     ACTIVATION_REDUCTION_STEP,
@@ -599,7 +602,8 @@ def check_seed_dominance_and_horizon() -> None:
         eng = ActivationEngine(w.concepts, w.relations, clock=w.clock)
         depth = rng.choice([1, 2, 3])
         act = eng.activate(seeds, max_depth=depth, decay=0.6, record=False)
-        S = max(w.concepts.get(s).confidence for s in seeds)
+        now = datetime.now(timezone.utc)
+        S = max(settled_confidence(w.concepts.get(s), w.clock.tick, now) for s in seeds)
         assert all(v <= S + 1e-9 for k, v in act.items() if k not in seeds)
         assert all(s in act for s in seeds)
         # horizon: every concept within `depth` non-negative hops is reached
@@ -608,10 +612,10 @@ def check_seed_dominance_and_horizon() -> None:
             nxt = set()
             for cid in frontier:
                 for rel in w.relations.for_concept(cid):
-                    if rel.relation_type.value == "negative":
+                    if rel.relation_type.value == "negative" or not _live(rel, w, now):
                         continue
                     o = rel.other_end(cid)
-                    if o not in seen:
+                    if o not in seen and not concept_expired(w.concepts.get(o), w.clock.tick, now):
                         nxt.add(o)
             seen |= nxt
             frontier = nxt
@@ -621,7 +625,11 @@ def check_seed_dominance_and_horizon() -> None:
         }
         missing = [c for c in seen if c not in act and c not in inhibited]
         assert not missing, missing
-    ok("30 random worlds: no non-seed above S, every seed returned, full horizon reached")
+    ok("30 random worlds: no non-seed above S, every seed returned, full live horizon reached")
+
+
+def _live(rel, w, now) -> bool:
+    return not rel.is_retracted and projected_relation_weight(rel, w.clock.tick, now) >= 0.02
 
 
 # ── §7 projection ─────────────────────────────────────────────────────
@@ -836,11 +844,15 @@ def check_task_vocabulary() -> None:
     vocab = TaskVocabulary()
     for label in labels:
         vocab.add(label)
-    assert vocab.weight("work") == 0.0
+    from world0.schemas.concept import TASK_WORD_FLOOR
+
+    assert abs(vocab.weight("work") - TASK_WORD_FLOOR) < 1e-12
     plain = task_match_score("domain1 work", "domain2 work")
     weighted = task_match_score("domain1 work", "domain2 work", vocab)
-    assert plain == 0.5 and weighted == 0.0
-    ok("'domain1 work' vs 'domain2 work'", f"unweighted {plain:.2f} → weighted {weighted:.2f}")
+    assert plain == 0.5 and weighted < 0.01
+    ok("'domain1 work' vs 'domain2 work'", f"unweighted {plain:.2f} → weighted {weighted:.4f}")
+    assert task_match_score("work", "domain1 work", vocab) == 1.0
+    ok("a query of common words still matches by them", "'work' vs 'domain1 work' = 1.0")
     w = World(store_path=tempfile.mkdtemp())
     for i in range(20):
         w.ingest(Observation(concepts=[f"x{i % 6}", f"y{i % 4}"], task=labels[i % 5]))

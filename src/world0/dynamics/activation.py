@@ -55,6 +55,8 @@ from world0.dynamics.coefficients import (
     RELATION_TYPE_FACTOR,
 )
 from world0.dynamics.decay import (
+    RELATION_PRUNE_THRESHOLD,
+    concept_expired,
     projected_relation_weight,
     settle_concept,
     settled_confidence,
@@ -219,6 +221,21 @@ class ActivationEngine:
         activations: dict[str, float] = {}
         depth_of: dict[str, int] = {}
         inhibitions: dict[str, float] = {}
+        # Settled reads, once per concept per pass (docs/paper Corollary 3.2').
+        settled: dict[str, float] = {}
+        expired: dict[str, bool] = {}
+
+        def settled_of(node) -> float:
+            value = settled.get(node.id)
+            if value is None:
+                value = settled[node.id] = settled_confidence(node, now_tick, now)
+            return value
+
+        def is_expired(node) -> bool:
+            value = expired.get(node.id)
+            if value is None:
+                value = expired[node.id] = concept_expired(node, now_tick, now)
+            return value
 
         # Seed concepts activate at their own confidence level
         seed_score_max = 0.0
@@ -229,7 +246,7 @@ class ActivationEngine:
                 continue
             # Settled, not stored: what a view shows must not depend on
             # when a reflect last settled the record (docs/paper §3.5).
-            score = settled_confidence(node, now_tick, now)
+            score = settled_of(node)
             # Boost seeds that have task affinity
             if task_lower:
                 score = min(
@@ -287,8 +304,13 @@ class ActivationEngine:
                         continue
 
                     neighbor = self._concepts.get(neighbor_id)
-                    if neighbor is None:
+                    # A dead neighbour is absent whether or not a reflect has
+                    # deleted it yet.
+                    if neighbor is None or is_expired(neighbor):
                         continue
+                    settled_weight = projected_relation_weight(rel, now_tick, now)
+                    if settled_weight < RELATION_PRUNE_THRESHOLD:
+                        continue  # dead edge: gone, pruned or not
 
                     default_type_factor = RELATION_TYPE_FACTOR.get(
                         rel.relation_type, 0.5
@@ -307,7 +329,7 @@ class ActivationEngine:
                     else:
                         direction_factor = 1.0
                     edge_strength = (
-                        projected_relation_weight(rel, now_tick, now)
+                        settled_weight
                         * type_factor
                         * direction_factor
                     )
@@ -318,7 +340,7 @@ class ActivationEngine:
                     # well-confirmed neighbor is not charged for its age
                     # here as well as in the salience term below.
                     neighbor_readiness = max(
-                        settled_confidence(neighbor, now_tick, now),
+                        settled_of(neighbor),
                         neighbor.evidence(),
                         PROPAGATION_FLOOR,
                     )

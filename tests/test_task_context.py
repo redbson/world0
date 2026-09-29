@@ -14,7 +14,7 @@ import pytest
 
 from world0 import Observation, World
 from world0.projection.engine import CONTEXT_MATCH
-from world0.schemas.concept import TaskVocabulary, task_match_score
+from world0.schemas.concept import TASK_WORD_FLOOR, TaskVocabulary, task_match_score
 
 
 def _vocab(*labels: str) -> TaskVocabulary:
@@ -25,34 +25,30 @@ def _vocab(*labels: str) -> TaskVocabulary:
 
 
 class TestTaskVocabulary:
-    def test_a_word_every_label_carries_weighs_nothing(self):
+    def test_a_word_every_label_carries_weighs_almost_nothing(self):
         v = _vocab("login bug fix", "payment bug fix", "refund bug fix")
-        assert v.weight("bug") == 0.0
-        assert v.weight("login") == pytest.approx(math.log(4 / 2))
-        assert v.weight("unseen") == pytest.approx(math.log(4))
+        assert v.weight("bug") == pytest.approx(TASK_WORD_FLOOR)
+        assert v.weight("login") == pytest.approx(math.log(4 / 2) + TASK_WORD_FLOOR)
+        assert v.weight("unseen") == pytest.approx(math.log(4) + TASK_WORD_FLOOR)
 
     def test_shared_boilerplate_no_longer_matches_another_task(self):
         v = _vocab("login bug fix", "payment bug fix", "refund bug fix")
         assert task_match_score("login bug fix", "payment bug fix") == pytest.approx(2 / 3)
-        assert task_match_score("login bug fix", "payment bug fix", v) == 0.0
+        assert task_match_score("login bug fix", "payment bug fix", v) < 0.05
         assert task_match_score("login bug fix", "login bug fix", v) == 1.0
         assert task_match_score("login", "login bug fix", v) == 1.0
 
-    def test_falls_back_to_word_counting_when_nothing_is_distinctive(self):
-        v = _vocab("ml training", "ml serving")
-        # "ml" is in every label: it alone says nothing about which one,
-        # so the unweighted share decides.
-        assert task_match_score("ml", "ml training", v) == 1.0
-        # "serving" is distinctive and absent from "ml training".
-        assert task_match_score("ml serving", "ml training", v) == 0.0
+    def test_a_query_of_common_words_still_matches_by_them(self):
+        v = _vocab("login bug fix", "payment bug fix")
+        assert task_match_score("bug fix", "payment bug fix", v) == 1.0
 
     def test_counts_are_per_label_holder(self):
         v = _vocab("a work", "a work", "b work")
         assert len(v) == 2
         v.discard("a work")
-        assert len(v) == 2 and v.weight("a") > 0
+        assert len(v) == 2 and v.weight("a") > TASK_WORD_FLOOR
         v.discard("a work")
-        assert len(v) == 1 and v.weight("work") == 0.0
+        assert len(v) == 1 and v.weight("work") == pytest.approx(TASK_WORD_FLOOR)
 
 
 class TestWorldVocabulary:
@@ -153,6 +149,37 @@ class TestContextSplit:
         p = w.project(["x"], task="zeta work", max_concepts=5)
         assert _claims(p, p.relations, about="x") >= {("x", "y"), ("x", "z")}
         assert p.other_contexts == []
+
+    def test_a_co_mention_does_not_move_an_untagged_claim(self, tmp_path):
+        """Context is decided by statements, not by co-occurrence provenance."""
+        w = World(store_path=tmp_path)
+        w.ingest(Observation(concepts=["api", "db"], relations=[("api", "db", "depends_on")]))
+        w.ingest(Observation(concepts=["api", "db"], task="search work"))
+        for _ in range(3):
+            w.ingest(Observation(concepts=["api", "q"], relations=[("api", "q", "depends_on")], task="billing work"))
+        p = w.project(["api"], task="billing work", max_concepts=6)
+        assert ("api", "db") in _claims(p, p.relations, about="api")
+
+    def test_a_withdrawn_claim_does_not_put_a_concept_in_context(self, tmp_path):
+        w = World(store_path=tmp_path)
+        for _ in range(3):
+            w.ingest(Observation(concepts=["pipe", "etl"], relations=[("pipe", "etl", "depends_on")], task="data work"))
+            w.ingest(Observation(concepts=["pipe", "opt"], relations=[("pipe", "opt", "depends_on")], task="train work"))
+        w.ingest(Observation(concepts=["pipe"], retracted_relations=[("pipe", "etl", "depends_on")], task="data work"))
+        p = w.project(["pipe"], task="data work", max_concepts=6)
+        assert p.other_contexts == []
+        assert ("pipe", "opt") in _claims(p, p.relations, about="pipe")
+
+    def test_a_contested_pair_stays_contested_across_contexts(self, tmp_path):
+        w = World(store_path=tmp_path)
+        for _ in range(3):
+            w.ingest(Observation(concepts=["cache", "db"], relations=[("cache", "db", "enables")], task="alpha work"))
+        for _ in range(4):
+            w.ingest(Observation(concepts=["cache", "db"], relations=[("cache", "db", "conflict")], task="beta work"))
+        free = w.project(["cache", "db"], max_concepts=4)
+        scoped = w.project(["cache", "db"], task="alpha work", max_concepts=4)
+        assert len(free.epistemic.contested) == 1
+        assert len(scoped.epistemic.contested) == 1
 
     def test_render_lists_the_other_contexts(self, tmp_path):
         w = _polysemous_world(tmp_path)

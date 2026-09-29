@@ -96,6 +96,62 @@ class TestRetraction:
         assert sum(e.is_retracted for e in w2.relations.all()) == 1
 
 
+class TestRetractionReview:
+    """Regressions for the independent review of the first version."""
+
+    def test_co_occurrence_neither_revives_nor_blocks_a_withdrawn_pair(self, tmp_path):
+        w = _revised_world(tmp_path)
+        edge = next(e for e in w.relations.all() if e.is_retracted)
+        count = edge.reinforcement_count
+        for _ in range(30):
+            w.ingest(Observation(concepts=["api", "db"]))
+        assert edge.reinforcement_count == count  # not reinforced by co-occurrence
+        api, db = w.concepts.resolve("api"), w.concepts.resolve("db")
+        live = [e for e in w.relations.find_any_between(api.id, db.id) if not e.is_retracted]
+        assert live and not live[0].is_explicit  # the pair is learned afresh
+        assert all(not e.is_retracted or e.probability_observation_count >= 0 for e in live)
+
+    def test_attention_never_names_a_withdrawn_claim(self, tmp_path):
+        w = World(store_path=tmp_path)
+        for _ in range(4):
+            w.ingest(Observation(
+                concepts=["api", "db", "cache"],
+                relations=[("api", "db", "depends_on"), ("api", "cache", "depends_on"), ("cache", "db", "depends_on")],
+            ))
+        w.ingest(Observation(concepts=["api"], retracted_relations=[("api", "db", "depends_on")]))
+        p = w.project(["api"], max_concepts=5)
+        db = w.concepts.resolve("db")
+        trace = p.attention.get(db.id)
+        assert trace is None or trace.via != w.concepts.resolve("api").id
+
+    def test_withdrawing_a_dead_claim_does_not_depend_on_reflect(self, tmp_path):
+        outcomes = []
+        for i, every in enumerate((None, 1)):
+            w = World(store_path=tmp_path / str(i))
+            w.ingest(Observation(concepts=["a", "b"]))
+            w.ingest(Observation(concepts=["a", "b"]))
+            w.ingest(Observation(concepts=["a", "b"]))
+            for _ in range(600):
+                w.clock.advance(1)
+                if every:
+                    w.reflect(light=True)
+            r = w.ingest(Observation(concepts=["a"], retracted_relations=[("a", "b", "related_to")]))
+            p = w.project(["a"], max_concepts=4)
+            outcomes.append((tuple(r.retracted_relations), len(p.retracted)))
+        assert outcomes[0] == outcomes[1] == ((), 0)
+
+    def test_merging_keeps_a_live_claim_over_a_withdrawn_twin(self, tmp_path):
+        w = World(store_path=tmp_path)
+        w.ingest(Observation(concepts=["auth svc", "db"], relations=[("auth svc", "db", "depends_on")]))
+        w.ingest(Observation(concepts=["auth svc"], retracted_relations=[("auth svc", "db", "depends_on")]))
+        for _ in range(3):
+            w.ingest(Observation(concepts=["auth service", "db"], relations=[("auth service", "db", "depends_on")]))
+        a, b = w.concepts.resolve("auth svc"), w.concepts.resolve("auth service")
+        w.concepts.merge(a.id, b.id, w.relations)
+        edges = [e for e in w.relations.for_concept(a.id) if e.is_explicit]
+        assert len(edges) == 1 and not edges[0].is_retracted
+
+
 class TestReadTimeSettlement:
     def test_settled_confidence_is_what_settle_would_leave(self, tmp_path):
         w = World(store_path=tmp_path)
@@ -124,6 +180,21 @@ class TestReadTimeSettlement:
         assert scores[0].keys() == scores[1].keys()
         for name in scores[0]:
             assert scores[0][name] == pytest.approx(scores[1][name], rel=1e-6)
+
+    def test_dead_edges_and_expired_concepts_are_absent_before_any_reflect(self, tmp_path):
+        views = []
+        for i, reflect in enumerate((False, True)):
+            w = World(store_path=tmp_path / str(i))
+            for _ in range(40):
+                w.ingest(Observation(concepts=["api"]))
+            w.ingest(Observation(concepts=["api", "old"]))
+            w.ingest(Observation(concepts=["api", "old"]))
+            w.ingest(Observation(concepts=["api", "old"]))
+            w.clock.advance(1500)
+            if reflect:
+                w.reflect(light=True)
+            views.append(sorted(c.name for c in w.project(["api"], max_concepts=5).concepts))
+        assert views[0] == views[1] == ["api"]
 
     def test_reading_does_not_mutate(self, tmp_path):
         w = World(store_path=tmp_path)

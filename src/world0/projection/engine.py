@@ -15,6 +15,11 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
 from world0.context import IGNITION_THRESHOLD, Focus, ground_task
+from world0.dynamics.decay import (
+    RELATION_PRUNE_THRESHOLD,
+    concept_expired,
+    projected_relation_weight,
+)
 from world0.projection.metacognition import assess
 from world0.schemas.clock import CognitiveClock
 from world0.schemas.types import AttentionTrace, Projection
@@ -134,6 +139,27 @@ class ProjectionEngine:
         peak = max(activations.values(), default=0.0)
         cut = min(min_activation, RELATIVE_MIN_ACTIVATION * peak)
         seed_set = set(seed_ids or ())
+        # One reference instant; liveness is read from settled state so the
+        # view does not depend on whether a reflect already pruned the dead
+        # (docs/paper Corollary 3.2').
+        now_tick = self._clock.tick
+        now = datetime.now(timezone.utc)
+        weights: dict[str, float] = {}
+
+        def live_weight(rel) -> float:
+            """Settled weight of a live relation, 0 for withdrawn / dead ones."""
+            if rel.id not in weights:
+                w = 0.0 if rel.is_retracted else projected_relation_weight(rel, now_tick, now)
+                weights[rel.id] = w if w >= RELATION_PRUNE_THRESHOLD else 0.0
+            return weights[rel.id]
+
+        activations = {
+            cid: score
+            for cid, score in activations.items()
+            if cid in seed_set
+            or (node := self._concepts.get(cid)) is None
+            or not concept_expired(node, now_tick, now)
+        }
         quantum = peak if peak > 0.0 else 1.0
         candidates = {
             cid: round(score / quantum, SCORE_DIGITS) * quantum
@@ -156,7 +182,11 @@ class ProjectionEngine:
         # stays — see docs/world0-cognitive-dynamics-analysis.md §7.5.
         neighbor_sets: dict[str, set[str]] = {}
         for cid in candidates:
-            neighbor_sets[cid] = set(self._relations.neighbors(cid))
+            neighbor_sets[cid] = {
+                other
+                for rel in self._relations.for_concept(cid)
+                if live_weight(rel) > 0.0 and (other := rel.other_end(cid)) is not None
+            }
 
         # Pre-compute task affinity and temporal freshness for each
         # candidate.  Both are multiplied into the MMR relevance score.
@@ -182,8 +212,6 @@ class ProjectionEngine:
         # no task is given).  Used as a redundancy floor below.
         task_mismatch: dict[str, float] = {}
         temporal_freshness: dict[str, float] = {}
-        now_tick = self._clock.tick
-        now = datetime.now(timezone.utc)
         for cid in candidates:
             node = self._concepts.get(cid)
 
@@ -314,11 +342,15 @@ class ProjectionEngine:
                     continue
                 if rel.is_retracted:
                     # Withdrawn claims are history, not part of the view;
-                    # those about a seed are reported so the Agent knows
-                    # what no longer holds.
-                    if rel.source_id in seed_set or rel.target_id in seed_set:
+                    # those about a seed are reported (until they are dead)
+                    # so the Agent knows what no longer holds.
+                    if (rel.source_id in seed_set or rel.target_id in seed_set) and (
+                        projected_relation_weight(rel, now_tick, now) >= RELATION_PRUNE_THRESHOLD
+                    ):
                         retracted.append(rel)
                         seen.add(rel.id)
+                    continue
+                if live_weight(rel) <= 0.0:
                     continue
                 if rel.source_id in selected_ids and rel.target_id in selected_ids:
                     relations.append(rel)
@@ -333,9 +365,9 @@ class ProjectionEngine:
                         outside_names[end] = node.name
         # Relation-index order depends on filesystem load order; sort so
         # the rendered projection is identical across processes.
-        relations.sort(key=lambda r: (-r.weight, r.id))
+        relations.sort(key=lambda r: (-live_weight(r), r.id))
         relations, other_contexts = self._split_by_context(
-            relations, selected, task_lower, vocabulary
+            relations, selected, task_lower, vocabulary, live_weight
         )
 
         return Projection(
@@ -346,7 +378,10 @@ class ProjectionEngine:
             outside_names=outside_names,
             activation_scores=selected_scores,
             task=task,
-            epistemic=assess(concepts, relations),
+            # Claims moved to other contexts still compete with the ones in
+            # view: a contested pair must not look settled because its
+            # leading claim was stated under another task.
+            epistemic=assess(concepts, relations + other_contexts),
             attention=self._attention(
                 selected,
                 seed_set,
@@ -356,26 +391,33 @@ class ProjectionEngine:
                 history_affinity,
                 focus_affinity,
                 set(focus.items()) if focus is not None else set(),
+                live_weight,
             ),
         )
 
-    def _split_by_context(self, relations, selected, task_lower, vocabulary):
+    def _split_by_context(self, relations, selected, task_lower, vocabulary, live_weight):
         """(in-context relations, relations that describe a concept elsewhere).
 
-        See ``CONTEXT_MATCH``.  Without a task, or for relations never
-        observed under any task, nothing moves.
+        See ``CONTEXT_MATCH``.  A claim's context is the tasks it was
+        *stated* under (``RelationEdge.claim_tasks``); co-occurrence edges and
+        claims stated without a task are neutral.  Only live claims count as
+        evidence that a concept has claims in the current context.
         """
         if not task_lower or not relations:
             return relations, []
 
         def context_of(rel) -> bool | None:
-            if not rel.task_history:
+            if not rel.is_explicit:
                 return None
-            return rel.task_affinity(task_lower, vocabulary) >= CONTEXT_MATCH
+            affinity = rel.claim_affinity(task_lower, vocabulary)
+            return None if affinity is None else affinity >= CONTEXT_MATCH
 
         in_context: set[str] = set()
         for cid in selected:
-            if any(context_of(rel) for rel in self._relations.for_concept(cid)):
+            if any(
+                live_weight(rel) > 0.0 and context_of(rel)
+                for rel in self._relations.for_concept(cid)
+            ):
                 in_context.add(cid)
         if not in_context:
             return relations, []
@@ -399,6 +441,7 @@ class ProjectionEngine:
         history_affinity: dict[str, float],
         focus_affinity: dict[str, float],
         focus_members: set[str],
+        live_weight=None,
     ) -> dict[str, AttentionTrace]:
         """The attention schema of this view (docs/mc/03-workspace.md).
 
@@ -418,7 +461,10 @@ class ProjectionEngine:
                 other = rel.other_end(cid)
                 if other is None or other not in candidates:
                     continue
-                contribution = candidates[other] * rel.weight
+                weight = live_weight(rel) if live_weight is not None else rel.weight
+                if weight <= 0.0:
+                    continue
+                contribution = candidates[other] * weight
                 if contribution > best or (contribution == best and other < via):
                     via, via_relation, best = other, rel.semantic_relation, contribution
             traces[cid] = AttentionTrace(

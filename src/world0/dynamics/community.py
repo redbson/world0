@@ -126,7 +126,7 @@ class CommunityDetector:
         now = datetime.now(timezone.utc)
         for edge in self._relations.all():
             type_factor = RELATION_TYPE_FACTOR.get(edge.relation_type, 0.5)
-            if type_factor <= 0 or edge.weight <= 0:
+            if type_factor <= 0 or edge.weight <= 0 or edge.is_retracted:
                 continue
             src_node = self._concepts.get(edge.source_id)
             tgt_node = self._concepts.get(edge.target_id)

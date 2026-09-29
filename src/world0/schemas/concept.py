@@ -185,11 +185,13 @@ def task_match_score(
     if q_tokens and l_tokens:
         if vocabulary is not None:
             weights = {tok: vocabulary.weight(tok) for tok in q_tokens}
-            total = sum(weights.values())
-            if total > 0.0:
-                return sum(w for tok, w in weights.items() if tok in l_tokens) / total
+            return sum(w for tok, w in weights.items() if tok in l_tokens) / sum(weights.values())
         return len(q_tokens & l_tokens) / len(q_tokens)
     return 1.0 if q in lbl else 0.0
+
+
+# Weight of a task word every label carries (``TaskVocabulary.weight``).
+TASK_WORD_FLOOR: float = 0.01
 
 
 class TaskVocabulary:
@@ -198,9 +200,12 @@ class TaskVocabulary:
     A label counts while at least one concept carries it in its
     ``task_profile`` (``add`` / ``discard`` track how many do), so the
     vocabulary is a function of the stored profiles and is the same after
-    a restart.  ``weight(token) = ln((N + 1) / (df + 1))`` with ``N``
-    distinct labels and ``df`` of them containing the token: 0 for a word
-    every label carries, largest for a word no label carries.
+    a restart.  ``weight(token) = ln((N + 1) / (df + 1)) + TASK_WORD_FLOOR``
+    with ``N`` distinct labels and ``df`` of them containing the token:
+    ``TASK_WORD_FLOOR`` (0.01, negligible) for a word every label carries,
+    largest for a word no label carries.  The floor keeps every weight
+    positive, so a query made only of common words still matches by them
+    and the score is continuous in the query.
     """
 
     def __init__(self) -> None:
@@ -238,7 +243,7 @@ class TaskVocabulary:
 
     def weight(self, token: str) -> float:
         n = len(self._labels)
-        return math.log((n + 1) / (self._df.get(token, 0) + 1))
+        return math.log((n + 1) / (self._df.get(token, 0) + 1)) + TASK_WORD_FLOOR
 
 
 class Maturity(str, Enum):

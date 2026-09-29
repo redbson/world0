@@ -265,7 +265,7 @@ class IngestPipeline:
         ``generic_relation`` claims are never weakened this way.
         """
         for other in self._relations.find_any_between(src.id, tgt.id):
-            if other.id == edge.id or not other.is_explicit:
+            if other.id == edge.id or not other.is_explicit or other.is_retracted:
                 continue
             if not other.opposes(rel_type, semantic_relation):
                 continue
@@ -418,6 +418,9 @@ class IngestPipeline:
                 continue
             semantic_relation = normalize_semantic_relation(relation_name)
             rel_type = semantic_relation_spec(semantic_relation).axis
+            # A claim that is already dead is gone, whether or not a reflect
+            # removed it: withdrawing it changes nothing (Theorem 3.7).
+            self._relations.reap_dead_between(src.id, tgt.id)
             existing = self._relations.find_between(src.id, tgt.id, rel_type, directed=True)
             if existing is None or existing.is_retracted:
                 continue

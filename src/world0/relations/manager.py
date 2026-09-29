@@ -134,7 +134,15 @@ class RelationManager:
         existing = self.find_between(
             source_id, target_id, relation_type, directed=True
         )
+        if existing and existing.is_retracted and not is_explicit:
+            # Co-occurrence cannot restore a withdrawn claim; a withdrawn
+            # co-occurrence edge is replaced by a fresh one.
+            self.remove(existing.id)
+            existing = None
         if existing:
+            if is_explicit:
+                existing.record_claim(provenance)
+                self._dirty.add(existing.id)
             if existing.is_retracted and is_explicit:
                 # Restated: the claim holds again.  Its weight relaxed toward
                 # zero while withdrawn; settle that first.
@@ -204,6 +212,8 @@ class RelationManager:
             discovered_tick=self._clock.tick,
             last_reinforced_tick=self._clock.tick,
         )
+        if is_explicit:
+            edge.record_claim(provenance)
         self._relations[edge.id] = edge
         self._index(edge)
         self._dirty.add(edge.id)
@@ -420,6 +430,14 @@ class RelationManager:
                 for t in rel.task_history:
                     if t not in duplicate.task_history:
                         duplicate.task_history.append(t)
+                for t in rel.claim_tasks:
+                    duplicate.record_claim(t)
+                # The merged claim is withdrawn only if both were: a live
+                # statement under either name keeps it in the world.
+                if duplicate.is_retracted and rel.is_retracted:
+                    duplicate.retracted_tick = max(duplicate.retracted_tick, rel.retracted_tick)
+                else:
+                    duplicate.retracted_tick = None
                 self._dirty.add(duplicate.id)
 
                 self._relations.pop(rel.id, None)
