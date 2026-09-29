@@ -37,13 +37,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   window-limit and cost studies; per-seed paired tests with Holm correction;
   World 0's depth / reflect chosen on dev seeds only; a real-LLM-reader stage
   (one reader per query and condition) after an independent five-lens review
-  of the harness.  Findings (`docs/eval/01-report.md`): raw context is the most
-  accurate until the window or the per-query cost binds; a task-tagged fact
-  store reaches 0.82 in ~220 tokens and beats World 0 (0.59 in ~630 tokens,
-  0 / 10 seeds won) on this benchmark; World 0's retraction is soft (strict
-  stale ≈ 0) and its shipped `render()` is nearly unusable for a real reader
-  (compact render 0.80).  The benchmark does not exercise World 0's task
-  conditioning, forgetting, perspectives or identity handling.
+  of the harness.  Findings (`docs/eval/01-report.md`, fourth version):
+  raw context is the most reliable while it fits (real reader 1.00) and
+  degrades with the window once the history does not (32k/64k/128k:
+  0.67/0.77/0.81); with every task-using system on the same
+  distinctiveness-weighted task matcher, per-task summaries (0.96),
+  World 0 tuned (0.95, ~590 tokens), a state document (0.94) and a
+  task-tagged fact store (0.93, ~190 tokens) are statistically tied and
+  beat raw context, RAG (0.74) and a temporal graph (0.82).  They differ in
+  what breaks them: summaries / state documents need the right task label
+  (0.55 / 0.41 without one), World 0 is the most robust to missing or wrong
+  labels (0.84 / 0.81) and the most sensitive to extraction error (−39 % at
+  30 %); World 0 costs ~3× the fact store's tokens and ~500× its write
+  time.  The shipped `render()` remains a poor prompt format (0.57 vs 0.90
+  compact).  The real-LLM-reader stage predates the fixes below and is to
+  be re-run.
 - **Formal paper** (`docs/paper/world0-formal.md`) — the current design
   written as a mathematical model with propositions and proofs: the
   exact semigroup property of the moving-floor decay, reflect-cadence
