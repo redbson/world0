@@ -1,0 +1,19 @@
+{
+ "study": "main",
+ "jobs": 10,
+ "seeds": 10,
+ "budgets": [
+  150,
+  300,
+  600,
+  1200,
+  2400,
+  4800
+ ],
+ "commit": "4820025",
+ "dirty_src_or_benchmarks": true,
+ "seconds": 91.2,
+ "python": "3.11.15",
+ "cpus": 4,
+ "workers": 4
+}

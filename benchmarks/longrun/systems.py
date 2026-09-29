@@ -3,28 +3,34 @@
 Every system sees the same event stream through ``observe`` and, for a
 query, must return a ``Context`` that fits ``budget`` tokens.  The harness
 hands every system the same *linked entities* (the known concept names that
-occur in the query text), so nobody is disadvantaged by entity linking, and
-counts context size with ``tokens.est_tokens``.
+occur in the query text) and the query's task text, and counts context size
+with ``tokens.est_tokens``.
 
-What each system stores is what a real deployment of that strategy stores;
-the ``claims`` / ``tickets`` fields of a ``Context`` are what an ideal
-reader could extract from the text the system produced (the LLM-reader
-stage of the study checks that assumption with real readers).
+Two kinds of input, both explicit:
+
+* text systems (window, full context, RAG, summaries) read ``ev.text``; what
+  an *ideal reader* extracts from the text they return is scored;
+* structured systems (fact store, graphs, World 0) ingest ``ev.extracted``
+  - what an extractor produced, perfect when ``extract_p = 0`` - and are
+  scored on what their returned text says.
+
+Nothing here has an LLM in the loop; ``docs/eval`` says what that leaves out.
 """
 
 from __future__ import annotations
 
+import json
 import math
 import os
 import tempfile
-from collections import defaultdict
+from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 
+from benchmarks.longrun.parse import parse_compact, parse_shipped
 from benchmarks.longrun.tokens import est_tokens
 from benchmarks.longrun.worldgen import Claim, Event, Query
 
-SEM2REL = {"dependence": "depends_on", "inclusion": "contains",
-           "conflict": "conflict", "enables": "enables"}
+TUNED_PATH = os.path.join(os.path.dirname(__file__), "tuned.json")
 
 
 @dataclass
@@ -34,7 +40,6 @@ class Context:
     concepts: set[str] = field(default_factory=set)
     tickets: set[str] = field(default_factory=set)
     beliefs: dict[Claim, float] = field(default_factory=dict)  # only where shown
-    contested: set[frozenset[str]] = field(default_factory=set)
 
     @property
     def tokens(self) -> int:
@@ -62,10 +67,15 @@ def _from_events(events: list[Event]) -> Context:
 
 
 def _tokens(text: str) -> list[str]:
-    out = []
-    for w in text.lower().replace(",", " ").replace(".", " ").replace(":", " ").replace("(", " ").replace(")", " ").replace("[", " ").replace("]", " ").split():
-        out.append(w)
-    return out
+    for ch in ",.:()[];":
+        text = text.replace(ch, " ")
+    return text.lower().split()
+
+
+def task_overlap(query_task: str, label: str) -> float:
+    """Share of the query's task words that the label contains."""
+    q = set(_tokens(query_task))
+    return len(q & set(_tokens(label))) / len(q) if q else 0.0
 
 
 class System:
@@ -85,6 +95,22 @@ class System:
         pass
 
 
+def _fill(lines: list[tuple[str, Claim | None]], budget: int, header: str = "") -> Context:
+    ctx, room = Context(), budget - (est_tokens(header) + 1 if header else 0)
+    out = []
+    for line, claim in lines:
+        w = est_tokens(line) + 1
+        if w > room:
+            continue
+        out.append(line)
+        room -= w
+        if claim is not None:
+            ctx.claims.add(claim)
+            ctx.concepts |= {claim.src, claim.tgt}
+    ctx.text = (header + "\n" if header else "") + "\n".join(out)
+    return ctx
+
+
 # ── no memory ────────────────────────────────────────────────────────────
 class NoMemory(System):
     name = "none"
@@ -93,7 +119,7 @@ class NoMemory(System):
     def query(self, q, linked, budget): return Context()
 
 
-# ── direct context: the last events that fit, or everything ─────────────
+# ── direct context: the last events that fit, or (up to a cap) everything ─
 class Window(System):
     name = "window"
 
@@ -102,25 +128,31 @@ class Window(System):
 
     def observe(self, ev): self.events.append(ev)
 
-    def query(self, q, linked, budget):
+    def _last(self, budget: int) -> list[Event]:
         chosen, used = [], 0
         for ev in reversed(self.events):
             if used + ev.tokens + 1 > budget:
                 break
             chosen.append(ev)
             used += ev.tokens + 1
-        return _from_events(chosen)
+        return chosen
+
+    def query(self, q, linked, budget):
+        return _from_events(self._last(budget))
 
     def stats(self):
         return {"items": len(self.events), "bytes": sum(len(e.text) for e in self.events)}
 
 
 class FullContext(Window):
+    """Everything the model's window (128k tokens) can hold, newest last."""
+
     name = "full_context"
     unbounded = True
+    cap = 128_000
 
     def query(self, q, linked, budget):
-        return _from_events(self.events)
+        return _from_events(self._last(self.cap))
 
 
 # ── retrieval over past events (BM25) ────────────────────────────────────
@@ -190,7 +222,7 @@ class RAG(System):
 
 
 class RAGRecency(RAG):
-    """Generative-Agents style retrieval: relevance + recency + importance."""
+    """Generative-Agents recipe (relevance + recency + importance), not plain RAG."""
 
     name = "rag_recency"
 
@@ -213,14 +245,9 @@ class RAGRecency(RAG):
         return sorted(tot, key=lambda d: (-tot[d], -d))
 
 
-# ── summary buffer: recent window + frequency digest of older claims ─────
+# ── summaries (extractive: an ideal summariser over the text) ────────────
 class SummaryBuffer(System):
-    """ConversationSummaryBuffer with an extractive (frequency) summary.
-
-    The summary is query-independent, as a rolling summary is; it keeps the
-    most frequently stated claims, honours retractions, and gets the half of
-    the budget that the recent-events window does not use.
-    """
+    """ConversationSummaryBuffer: recent-events window + one flat frequency digest."""
 
     name = "summary_buffer"
 
@@ -239,25 +266,19 @@ class SummaryBuffer(System):
             self.last.pop(c, None)
 
     def query(self, q, linked, budget):
-        half = budget // 2
-        chosen, used = [], 0
+        half, chosen, used = budget // 2, [], 0
         for ev in reversed(self.events):
             if used + ev.tokens + 1 > half:
                 break
             chosen.append(ev)
             used += ev.tokens + 1
         ctx = _from_events(chosen)
-        lines, room = [], budget - used - 2
-        for c in sorted(self.count, key=lambda c: (-self.count[c], -self.last[c], c)):
-            line = f"{c.sentence()} (x{self.count[c]})"
-            w = est_tokens(line) + 1
-            if w > room:
-                break
-            lines.append(line)
-            room -= w
-            ctx.claims.add(c)
-            ctx.concepts |= {c.src, c.tgt}
-        ctx.text = "Summary of earlier work:\n" + "\n".join(lines) + "\n" + ctx.text
+        lines = [(f"{c.sentence()} (x{self.count[c]})", c)
+                 for c in sorted(self.count, key=lambda c: (-self.count[c], -self.last[c], c))]
+        digest = _fill(lines, budget - used - 2, "Summary of earlier work:")
+        ctx.claims |= digest.claims
+        ctx.concepts |= digest.concepts
+        ctx.text = digest.text + "\n" + ctx.text
         return ctx
 
     def stats(self):
@@ -265,12 +286,44 @@ class SummaryBuffer(System):
                 "bytes": sum(len(e.text) for e in self.events)}
 
 
-# ── fact store (Mem0-like) and knowledge graphs ──────────────────────────
+class SummaryTask(System):
+    """One digest per task thread, the query's task first (a per-thread rolling summary)."""
+
+    name = "summary_task"
+
+    def __init__(self) -> None:
+        self.count: dict[str, dict[Claim, int]] = defaultdict(lambda: defaultdict(int))
+        self.last_task_step: dict[str, int] = {}
+
+    def observe(self, ev):
+        self.last_task_step[ev.task] = ev.step
+        for c in ev.claims:
+            self.count[ev.task][c] += 1
+        for c in ev.retractions:
+            for t in self.count:
+                self.count[t].pop(c, None)
+
+    def query(self, q, linked, budget):
+        tasks = sorted(self.count, key=lambda t: (-task_overlap(q.task_text, t), -self.last_task_step[t]))
+        lines: list[tuple[str, Claim | None]] = []
+        for t in tasks:
+            lines.append((f"[{t}]", None))
+            lines += [(f"{c.sentence()} (x{n})", c) for c, n in
+                      sorted(self.count[t].items(), key=lambda kv: (-kv[1], kv[0]))]
+        return _fill(lines, budget)
+
+    def stats(self):
+        return {"items": sum(len(v) for v in self.count.values()), "bytes": sum(
+            len(c.sentence()) for v in self.count.values() for c in v)}
+
+
+# ── fact store and knowledge graphs (structured; ingest the extraction) ──
 class FactStore(System):
-    """Extracted facts as memory items; entity match; retractions delete."""
+    """Extracted facts as memory items (Mem0-like): entity match, one hop, no task."""
 
     name = "factstore"
     hops = 1
+    use_task = False
     honor_retractions = True
     keep_details = True
 
@@ -278,33 +331,39 @@ class FactStore(System):
         self.count: dict[Claim, int] = defaultdict(int)
         self.last: dict[Claim, int] = {}
         self.tickets: dict[Claim, list[str]] = defaultdict(list)
+        self.tasks: dict[Claim, Counter] = defaultdict(Counter)
         self.adj: dict[str, set[Claim]] = defaultdict(set)
         self.recent: list[Claim] = []
-        self.n_events = 0
 
     def observe(self, ev):
-        self.n_events += 1
-        for c in ev.claims:
+        x = ev.extracted
+        for c in x.claims:
             self.count[c] += 1
             self.last[c] = ev.step
             self.adj[c.src].add(c)
             self.adj[c.tgt].add(c)
             self.recent.append(c)
-            if ev.ticket and self.keep_details and c == ev.ticket_claim:
-                self.tickets[c].append(ev.ticket)
+            if self.use_task:
+                self.tasks[c][ev.task] += 1
+            if x.ticket and self.keep_details and c == x.ticket_claim:
+                self.tickets[c].append(x.ticket)
         if self.honor_retractions:
-            for c in ev.retractions:
+            for c in x.retractions:
                 self.count.pop(c, None)
                 self.last.pop(c, None)
                 self.tickets.pop(c, None)
+                self.tasks.pop(c, None)
                 self.adj[c.src].discard(c)
                 self.adj[c.tgt].discard(c)
 
-    def _select(self, linked: list[str]) -> list[tuple[int, Claim]]:
-        """(rank key, claim) pairs, best first."""
+    def _task_match(self, c: Claim, q: Query) -> float:
+        if not (self.use_task and q.task_text):
+            return 0.0
+        return max((task_overlap(q.task_text, t) for t in self.tasks.get(c, ())), default=0.0)
+
+    def _select(self, linked: list[str], q: Query) -> list[Claim]:
         seen: dict[Claim, int] = {}
-        frontier = set(linked)
-        visited = set(linked)
+        frontier, visited = set(linked), set(linked)
         for hop in range(1, self.hops + 1):
             nxt = set()
             for x in frontier:
@@ -314,61 +373,90 @@ class FactStore(System):
                         nxt |= {c.src, c.tgt}
             frontier = nxt - visited
             visited |= nxt
-        return sorted(((h, c) for c, h in seen.items()),
-                      key=lambda hc: (hc[0], -self.count[hc[1]], -self.last[hc[1]], hc[1]))
+        tm = {c: self._task_match(c, q) for c in seen}
+        if self.use_task and any(v > 0 for v in tm.values()):
+            seen = {c: h for c, h in seen.items() if tm[c] > 0}
+        return sorted(seen, key=lambda c: (seen[c], -tm[c], -self.count[c], -self.last[c], c))
 
     def _line(self, c: Claim) -> str:
         tk = f" (ticket {', '.join(self.tickets[c])})" if self.tickets.get(c) else ""
         return c.sentence() + tk
 
     def query(self, q, linked, budget):
-        ranked = [c for _, c in self._select(linked)]
+        ranked = self._select(linked, q)
         if not ranked:
             ranked = [c for c in reversed(self.recent) if c in self.count][:200]
-        ctx, room, lines = Context(), budget, []
-        for c in ranked:
-            line = self._line(c)
-            w = est_tokens(line) + 1
-            if w > room:
-                continue
-            lines.append(line)
-            room -= w
-            ctx.claims.add(c)
-            ctx.concepts |= {c.src, c.tgt}
+        lines = [(self._line(c), c) for c in ranked]
+        ctx = _fill(lines, budget)
+        for c in ctx.claims:
             ctx.tickets |= set(self.tickets.get(c, ()))
-        ctx.text = "\n".join(lines)
         return ctx
 
     def stats(self):
-        return {"items": len(self.count),
-                "bytes": sum(len(self._line(c)) for c in self.count)}
+        return {"items": len(self.count), "bytes": sum(len(self._line(c)) for c in self.count)}
+
+
+class FactTask(FactStore):
+    """The same fact store with per-fact task tags, two hops, task filter."""
+
+    name = "fact_task"
+    hops = 2
+    use_task = True
+
+
+class KGTemporal(FactStore):
+    """Graph with invalidation of retracted edges and provenance; two hops (Zep/GraphRAG-like)."""
+
+    name = "kg_temporal"
+    hops = 2
 
 
 class KGStatic(FactStore):
-    """Append-only graph, two-hop expansion (GraphRAG-style static graph)."""
+    """Append-only graph, two hops: retractions are never applied."""
 
     name = "kg_static"
     hops = 2
     honor_retractions = False
-    keep_details = False
 
 
-class KGTemporal(FactStore):
-    """Graph with invalidation of retracted edges, two-hop expansion."""
+class StateDoc(FactStore):
+    """The whole current state as one document, this task's facts first."""
 
-    name = "kg_temporal"
-    hops = 2
-    honor_retractions = True
-    keep_details = False
+    name = "state_doc"
+    use_task = True
+    hops = 0
+
+    def query(self, q, linked, budget):
+        order = sorted(self.count, key=lambda c: (-self._task_match(c, q), -self.count[c], -self.last[c], c))
+        ctx = _fill([(self._line(c), c) for c in order], budget)
+        for c in ctx.claims:
+            ctx.tickets |= set(self.tickets.get(c, ()))
+        return ctx
 
 
 # ── World 0 ─────────────────────────────────────────────────────────────
+SIZES = (80, 60, 50, 40, 30, 24, 18, 14, 11, 9, 7, 5, 4, 3, 2, 1)
+
+
+def _tuned() -> dict:
+    try:
+        with open(TUNED_PATH) as fh:
+            return json.load(fh)
+    except OSError:
+        return {}
+
+
 class World0(System):
+    """World 0 as its facade ships (depth 2, no reflect) with ``Projection.render()``."""
+
     name = "world0"
+    depth = 2
     reflect_every: int | None = None
     sustained = False
     use_task = True
-    depth = 3
+    ingest_task = True
+    compact = False
+    use_cache = True
 
     def __init__(self, shared: "World0 | None" = None) -> None:
         from world0 import World
@@ -377,66 +465,64 @@ class World0(System):
         self._cache: dict = {}
         self._cache_step = -1
         if shared is not None:
-            # Same hidden state, different query behaviour or rendering.
-            self.world, self.path, self.n = shared.world, shared.path, 0
+            self.world, self.path = shared.world, shared.path
             return
         self._dir = tempfile.mkdtemp(prefix="longrun_w0_")
         self.path = os.path.join(self._dir, "w.sqlite")
         self.world = World(store_path=self.path, auto_reflect_every=self.reflect_every,
                            sustained_attention=self.sustained)
-        self.n = 0
 
     def observe(self, ev):
         from world0 import Observation
 
         if self.shared is not None:
             return
-        self.n += 1
+        x = ev.extracted
         self.world.ingest(Observation(
-            concepts=list(ev.concepts),
-            relations=[(c.src, c.tgt, c.rel) for c in ev.claims],
-            contradicted_relations=[(c.src, c.tgt, c.rel) for c in ev.retractions],
-            task=ev.task, source=f"step{ev.step}",
+            concepts=list(x.concepts),
+            relations=[(c.src, c.tgt, c.rel) for c in x.claims],
+            contradicted_relations=[(c.src, c.tgt, c.rel) for c in x.retractions],
+            task=ev.task if self.ingest_task else "", source=f"step{ev.step}",
         ))
 
-    def _claims(self, proj) -> tuple[set[Claim], dict[Claim, float], set[frozenset[str]]]:
-        names = {c.id: c.name for c in proj.concepts}
-        claims, beliefs = set(), {}
-        for r in proj.relations:
-            rel = SEM2REL.get(r.semantic_relation)
-            if rel is None or not r.is_explicit:
-                continue
-            cl = Claim.make(names[r.source_id], rel, names[r.target_id])
-            claims.add(cl)
-            beliefs[cl] = max(beliefs.get(cl, 0.0), r.probability)
-        contested = {frozenset((c.source_id, c.target_id)) for c in proj.epistemic.contested}
-        return claims, beliefs, contested
-
     def _render(self, proj) -> str:
-        return proj.render()
+        if not self.compact:
+            return proj.render()
+        names = {c.id: c.name for c in proj.concepts}
+        lines, mentioned = [], set()
+        rels = [r for r in proj.relations if r.is_explicit and _REL.get(r.semantic_relation)]
+        for r in sorted(rels, key=lambda r: (-r.probability, r.id)):
+            cl = Claim.make(names[r.source_id], _REL[r.semantic_relation], names[r.target_id])
+            lines.append(f"{cl.sentence()} (belief {r.probability:.2f})")
+            mentioned |= {r.source_id, r.target_id}
+        rest = [c.name for c in proj.concepts if c.id not in mentioned]
+        if rest:
+            lines.append("Also relevant: " + ", ".join(rest) + ".")
+        return "\n".join(lines)
 
     def query(self, q, linked, budget):
         task = q.task_text if self.use_task else ""
-        if q.step != self._cache_step:
+        if q.step != self._cache_step or not self.use_cache:
             self._cache, self._cache_step = {}, q.step
         best = None
-        for n in (40, 30, 24, 18, 14, 11, 9, 7, 5, 4, 3, 2, 1):
+        for n in SIZES:
             key = (n, tuple(linked))
             if key not in self._cache:
                 proj = self.world.project(linked, task=task, max_concepts=n, max_depth=self.depth)
                 text = self._render(proj)
-                self._cache[key] = (proj, text, est_tokens(text))
-            proj, text, cost = self._cache[key]
+                self._cache[key] = (text, est_tokens(text))
+            text, cost = self._cache[key]
             if cost <= budget:
-                best = (proj, text)
+                best = text
                 break
         if best is None:
             return Context()
-        proj, text = best
-        claims, beliefs, contested = self._claims(proj)
-        return Context(text, claims, {c.name for c in proj.concepts}, set(), beliefs, contested)
+        claims, concepts, beliefs = (parse_compact if self.compact else parse_shipped)(best)
+        return Context(best, claims, concepts, set(), beliefs)
 
     def stats(self):
+        if self.shared is not None:
+            return {"shares": "world0"}
         import sqlite3
 
         try:
@@ -451,8 +537,7 @@ class World0(System):
                 size += os.path.getsize(self.path + suffix)
             except OSError:
                 pass
-        return {"items": len(self.world.concepts.all()) + len(self.world.relations.all()),
-                "bytes": size}
+        return {"items": len(self.world.concepts.all()) + len(self.world.relations.all()), "bytes": size}
 
     def close(self):
         if self.shared is not None:
@@ -463,57 +548,90 @@ class World0(System):
             pass
 
 
-class World0Compact(World0):
-    """The same projection, rendered compactly (typed relations with belief).
+_REL = {"dependence": "depends_on", "inclusion": "contains", "conflict": "conflict", "enables": "enables"}
 
-    ``Projection.render()`` spends most of its tokens on concept ids, maturity
-    and confidence annotations, co-occurrence edges and an attention section.
-    This renderer is what a prompt integration that only wants the typed
-    structure would write; it isolates how much of World 0's cost is the
-    render and how much is the projection.
+
+class World0Compact(World0):
+    """The same projection rendered compactly (typed claims with belief).
+
+    ``Projection.render()`` spends most tokens on concept ids, maturity and
+    confidence annotations, co-occurrence edges and an attention section and
+    prints at most ten relations; this renderer isolates how much of World 0's
+    cost is the render and how much the projection.
     """
 
     name = "world0_compact"
-
-    def _render(self, proj) -> str:
-        names = {c.id: c.name for c in proj.concepts}
-        lines, mentioned = [], set()
-        rels = [r for r in proj.relations
-                if r.is_explicit and SEM2REL.get(r.semantic_relation)]
-        for r in sorted(rels, key=lambda r: (-r.probability, r.id)):
-            cl = Claim.make(names[r.source_id], SEM2REL[r.semantic_relation], names[r.target_id])
-            lines.append(f"{cl.sentence()} (belief {r.probability:.2f})")
-            mentioned |= {r.source_id, r.target_id}
-        rest = [c.name for c in proj.concepts if c.id not in mentioned]
-        if rest:
-            lines.append("Also relevant: " + ", ".join(rest) + ".")
-        return "\n".join(lines)
+    compact = True
 
 
-class World0Reflect(World0):
+class World0Tuned(World0Compact):
+    """Compact render with depth / reflect chosen on dev seeds (tuned.json), never on test seeds."""
+
+    name = "world0_tuned"
+
+    def __init__(self, shared=None):
+        cfg = _tuned()
+        self.depth = int(cfg.get("depth", 2))
+        self.reflect_every = cfg.get("reflect_every")
+        if self.reflect_every:
+            shared = None  # own world: reflect changes the state
+        super().__init__(shared)
+
+
+class World0Reflect(World0Compact):
     name = "world0_reflect"
     reflect_every = 25
 
 
-class World0Focus(World0):
+class World0Focus(World0Compact):
     name = "world0_focus"
     sustained = True
 
 
-class World0NoTask(World0):
+class World0NoTask(World0Compact):
+    """No task label at ingest or at query."""
+
     name = "world0_notask"
     use_task = False
+    ingest_task = False
 
 
-class World0Shallow(World0):
+class World0Depth1(World0Compact):
     name = "world0_depth1"
     depth = 1
 
 
+class World0Depth3(World0Compact):
+    name = "world0_depth3"
+    depth = 3
+
+
+class World0Custom(World0Compact):
+    """Tuning harness: ``w0-d{depth}-r{reflect or 0}`` (compact render)."""
+
+    def __init__(self, depth: int, reflect: int, shared=None):
+        self.depth, self.reflect_every = depth, reflect or None
+        self.name = f"w0-d{depth}-r{reflect}"
+        super().__init__(shared if not reflect else None)
+
+
 ALL_SYSTEMS: dict[str, type[System]] = {
     cls.name: cls for cls in (
-        NoMemory, Window, FullContext, RAG, RAGRecency, SummaryBuffer,
-        FactStore, KGStatic, KGTemporal, World0, World0Compact, World0Reflect, World0Focus,
-        World0NoTask, World0Shallow,
+        NoMemory, Window, FullContext, RAG, RAGRecency, SummaryBuffer, SummaryTask,
+        FactStore, FactTask, KGStatic, KGTemporal, StateDoc,
+        World0, World0Compact, World0Tuned, World0Reflect, World0Focus, World0NoTask,
+        World0Depth1, World0Depth3,
     )
 }
+SHARES_WORLD0 = {"world0_compact", "world0_depth1", "world0_depth3", "world0_tuned"}
+
+
+def make_system(name: str, instances: dict[str, System]) -> System:
+    """Instantiate ``name``; variants that only differ at query time share the world0 state."""
+    if name.startswith("w0-d"):
+        d, r = name[4:].split("-r")
+        return World0Custom(int(d), int(r), shared=instances.get("world0") if int(r) == 0 else None)
+    cls = ALL_SYSTEMS[name]
+    if name in SHARES_WORLD0 and "world0" in instances:
+        return cls(shared=instances["world0"])
+    return cls()

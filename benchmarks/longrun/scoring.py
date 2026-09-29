@@ -1,4 +1,14 @@
-"""Score a returned ``Context`` against a query's hidden gold."""
+"""Score a returned ``Context`` against a query's hidden gold.
+
+Headline per kind (documented in docs/eval):
+
+* focus   - recall of the hop-ball gold (precision, F1 and radii 1 / 3 alongside);
+* chain   - F1 of the dependency closure an ideal reader derives from the shown claims;
+* bridge  - claim F1 (a wrong-sense claim is a precision loss);
+* stale   - strict: the current claim is shown and the retracted one is not
+            (the lenient belief-order credit is reported separately);
+* detail  - the ticket is in the shown text (episodic; out of scope for World 0).
+"""
 
 from __future__ import annotations
 
@@ -30,23 +40,22 @@ def closure(entry: str, claims: set[Claim]) -> set[str]:
     return seen
 
 
-def stale_category(q: Query, ctx: Context) -> tuple[str, bool]:
+def stale_category(q: Query, ctx: Context) -> tuple[str, bool, bool]:
+    """(category, strict correct, lenient correct)."""
     cur = ctx.claims & q.current_claims
     old = ctx.claims & q.stale_claims
     if cur and not old:
-        return "current_only", True
+        return "current_only", True, True
     if cur and old:
-        # Both are shown: the reader can only tell them apart if the context
-        # carries beliefs and the current claim's belief is the higher one.
         resolved = bool(ctx.beliefs) and max(ctx.beliefs.get(c, 0.0) for c in cur) > max(
             ctx.beliefs.get(c, 0.0) for c in old)
-        return "both_resolved" if resolved else "both", resolved
+        return ("both_resolved" if resolved else "both"), False, resolved
     if old:
-        return "stale_only", False
-    return "neither", False
+        return "stale_only", False, False
+    return "neither", False, False
 
 
-HEADLINE = {"focus": "claim_f1", "chain": "answer_f1", "bridge": "claim_f1",
+HEADLINE = {"focus": "claim_r", "chain": "answer_f1", "bridge": "claim_f1",
             "stale": "stale_correct", "detail": "detail_hit"}
 
 
@@ -58,15 +67,22 @@ def score(q: Query, ctx: Context) -> dict:
         "wrong_rate": len(ctx.claims & q.wrong_claims) / len(ctx.claims) if ctx.claims else 0.0,
         "shown_claims": len(ctx.claims),
         "tokens": est_tokens(ctx.text), "chars4": chars4(ctx.text),
-        "answer_f1": 0.0, "stale_cat": "", "stale_correct": 0.0, "detail_hit": 0.0,
+        "answer_f1": 0.0, "stale_cat": "", "stale_correct": 0.0, "stale_lenient": 0.0,
+        "stale_shown": 0.0, "detail_hit": 0.0, "ticket_precision": 0.0,
     }
+    if q.kind == "focus":
+        for radius, gold in q.gold_by_radius.items():
+            _, rr, ff = prf(ctx.claims, gold)
+            row[f"claim_r_r{radius}"], row[f"claim_f1_r{radius}"] = rr, ff
     if q.kind == "chain":
         _, _, row["answer_f1"] = prf(closure(q.entry[0], ctx.claims), q.gold_answer)
     if q.kind == "stale":
-        cat, ok = stale_category(q, ctx)
-        row["stale_cat"], row["stale_correct"] = cat, float(ok)
+        cat, strict, lenient = stale_category(q, ctx)
+        row["stale_cat"], row["stale_correct"], row["stale_lenient"] = cat, float(strict), float(lenient)
         row["stale_shown"] = float(bool(ctx.claims & q.stale_claims))
     if q.kind == "detail":
-        row["detail_hit"] = float(q.gold_ticket in ctx.tickets)
+        hit = q.gold_ticket in ctx.tickets
+        row["detail_hit"] = float(hit)
+        row["ticket_precision"] = (1.0 / len(ctx.tickets)) if hit else 0.0
     row["headline"] = row[HEADLINE[q.kind]]
     return row

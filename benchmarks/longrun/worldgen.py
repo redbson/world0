@@ -73,12 +73,26 @@ class GenConfig:
     detail_rate: float = 0.15
     focus_run_mean: int = 25
     dormant_domains: int = 2       # active only in the first 20 % of the stream
-    n_revisions: int | None = None  # default: max(2, horizon // 250)
-    query_every: int = 20
+    n_revisions: int | None = None  # default: max(4, horizon // 100)
+    query_every: int = 10
     warmup: int = 80
-    task_paraphrase: float = 0.0    # probability a query paraphrases the task label
+    task_mode: str = "exact"        # how the query names its task: exact | none | wrong
+    growth: bool = False            # domains appear over time instead of all existing from the start
+    extract_p: float = 0.0          # extractor error level (drop p, wrong p/2, spurious p, missed retraction p)
+    allow_pair_collision: bool = False  # two typed claims on one ordered pair (World 0 keys one edge per axis)
     popularity_skew: float = 0.8    # Zipf exponent over claims: rarely-stated claims exist
     verbosity: int = 30             # filler words per event (real transcripts are mostly not concepts)
+
+
+@dataclass
+class Extraction:
+    """What an extractor emitted for an event (structured systems ingest this)."""
+
+    concepts: list[str]
+    claims: list["Claim"]
+    retractions: list["Claim"]
+    ticket: str | None
+    ticket_claim: "Claim | None"
 
 
 @dataclass
@@ -93,6 +107,7 @@ class Event:
     ticket: str | None
     ticket_claim: Claim | None
     text: str
+    extracted: Extraction | None = None
 
     @property
     def tokens(self) -> int:
@@ -114,6 +129,7 @@ class Query:
     stale_claims: set[Claim] = field(default_factory=set)
     current_claims: set[Claim] = field(default_factory=set)  # stale: the revised truth
     gold_ticket: str | None = None
+    gold_by_radius: dict[int, set[Claim]] = field(default_factory=dict)   # focus: hop-ball gold at radius 1..3
     age: int = 0                    # steps since the gold information was last stated
     gap: int = 0                    # steps since the domain was last worked on
 
@@ -190,18 +206,22 @@ class HiddenWorld:
             for dep in layers[li + 1]:
                 if not any(cl.tgt == dep for cl in claims):
                     claims.add(Claim.make(rng.choice(layers[li]), "depends_on", dep))
+        def free(a: str, b: str) -> bool:
+            return cfg.allow_pair_collision or not any({cl.src, cl.tgt} == {a, b} for cl in claims)
+
         for top in layers[0]:
             for sub in rng.sample(layers[1], min(2, len(layers[1]))):
-                claims.add(Claim.make(top, "contains", sub))
+                if free(top, sub):
+                    claims.add(Claim.make(top, "contains", sub))
         for li in range(1, len(layers)):
             for _ in range(2):
                 a, b = rng.sample(layers[li], 2) if len(layers[li]) >= 2 else (None, None)
-                if a and not any({cl.src, cl.tgt} == {a, b} for cl in claims):
+                if a and free(a, b):
                     claims.add(Claim.make(a, "conflict", b))
         for _ in range(3):
             li = rng.randrange(len(layers) - 1)
             a, b = rng.choice(layers[li]), rng.choice(layers[li + 1])
-            if not any({cl.src, cl.tgt} == {a, b} for cl in claims):
+            if free(a, b):
                 claims.add(Claim.make(a, "enables", b))
         self.concepts[d] = [c for layer in layers for c in layer]
         for li, layer in enumerate(layers):
@@ -227,14 +247,28 @@ class Stream:
         self.revisions: list[tuple[int, str, Claim, Claim]] = []  # (step, domain, old, new)
         self.junk = 0
         self._ticket_ids: set[str] = set()
+        self._revised: set[tuple[str, str]] = set()
+        n = cfg.n_domains
+        self.birth = {d: (int(i * 0.6 * cfg.horizon / n) if cfg.growth else 0)
+                      for i, d in enumerate(self.world.domains)}
+        # Domains 1..k are popular early and then go quiet (dormant).
+        self.dormant = set(self.world.domains[1:1 + cfg.dormant_domains]) if cfg.dormant_domains else set()
+
+    def state_tokens(self) -> int:
+        """Tokens of the known current state (every told, still-true claim as a sentence)."""
+        return sum(est_tokens(c.sentence()) + 1 for d in self.world.domains for c in self.known(d))
 
     # ── naming ────────────────────────────────────────────────────────
     def task_label(self, d: str) -> str:
         return f"{d} work"
 
     def task_text(self, d: str) -> str:
-        if self.rng.random() < self.cfg.task_paraphrase:
-            return f"look into the {d} area"
+        mode = self.cfg.task_mode
+        if mode == "none":
+            return ""
+        if mode == "wrong":
+            others = [x for x in self.world.domains if x != d]
+            return self.task_label(self.rng.choice(others))
         return self.task_label(d)
 
     # ── knowledge state ───────────────────────────────────────────────
@@ -271,11 +305,10 @@ class Stream:
     # ── event generation ──────────────────────────────────────────────
     def _pick_domain(self, step: int) -> str:
         cfg = self.cfg
-        pool = list(self.world.domains)
-        dormant = set(pool[-cfg.dormant_domains:]) if cfg.dormant_domains else set()
+        pool = [d for d in self.world.domains if self.birth[d] <= step]
         if step > 0.2 * cfg.horizon:
-            pool = [d for d in pool if d not in dormant]
-        weights = [1.0 / (i + 1) ** 0.5 for i in range(len(pool))]
+            pool = [d for d in pool if d not in self.dormant] or pool
+        weights = [1.0 / (self.world.domains.index(d) + 1) ** 0.5 for d in pool]
         return self.rng.choices(pool, weights=weights)[0]
 
     def _filler(self) -> str:
@@ -340,11 +373,11 @@ class Stream:
 
     def events(self) -> Iterator[tuple[Event, list[Query]]]:
         cfg, rng = self.cfg, self.rng
-        n_rev = cfg.n_revisions if cfg.n_revisions is not None else max(2, cfg.horizon // 250)
+        n_rev = cfg.n_revisions if cfg.n_revisions is not None else max(4, cfg.horizon // 100)
         rev_steps = {int(cfg.horizon * (0.3 + 0.5 * (i + 0.5) / n_rev)) for i in range(n_rev)}
         d, remaining = self._pick_domain(0), 0
         for step in range(cfg.horizon):
-            if remaining <= 0 or (step > 0.2 * cfg.horizon and d in self.world.domains[-cfg.dormant_domains:] and cfg.dormant_domains):
+            if remaining <= 0 or (step > 0.2 * cfg.horizon and d in self.dormant):
                 d = self._pick_domain(step)
                 remaining = max(3, int(rng.expovariate(1.0 / cfg.focus_run_mean)))
             remaining -= 1
@@ -367,6 +400,7 @@ class Stream:
                 self.stated_at.setdefault(c, []).append(step)
             if ev.ticket and ev.ticket_claim:
                 self.tickets.setdefault(ev.ticket_claim, []).append((step, ev.ticket))
+            ev.extracted = self._extract(ev)
             qs: list[Query] = []
             if step >= cfg.warmup and (step + 1) % cfg.query_every == 0:
                 q = self._query(step)
@@ -374,10 +408,40 @@ class Stream:
                     qs.append(q)
             yield ev, qs
 
+    def _extract(self, ev: Event) -> Extraction:
+        """The extractor's view of the event; error rate ``extract_p`` (own rng stream)."""
+        p = self.cfg.extract_p
+        if p <= 0 or ev.kind != "task":
+            return Extraction(list(ev.concepts), list(ev.claims), list(ev.retractions), ev.ticket, ev.ticket_claim)
+        rng = random.Random(self.cfg.seed * 1_000_003 + ev.step)
+        rels = ["depends_on", "contains", "conflict", "enables"]
+        claims: list[Claim] = []
+        for c in ev.claims:
+            r = rng.random()
+            if r < p:
+                continue
+            if r < p + p / 2:
+                claims.append(Claim.make(c.src, rng.choice([x for x in rels if x != c.rel]), c.tgt))
+            else:
+                claims.append(c)
+        if rng.random() < p and ev.domain:
+            a, b = rng.sample(self.world.concepts[ev.domain], 2)
+            claims.append(Claim.make(a, rng.choice(rels), b))
+        retractions = [c for c in ev.retractions if rng.random() >= p]
+        concepts = list(ev.concepts)
+        for c in claims:
+            for x in (c.src, c.tgt):
+                if x not in concepts:
+                    concepts.append(x)
+        keep = ev.ticket_claim in claims
+        return Extraction(concepts, claims, retractions, ev.ticket if keep else None,
+                          ev.ticket_claim if keep else None)
+
     def _revision_candidate(self, d: str) -> tuple[Claim, Claim] | None:
         rng = self.rng
         cands = [c for c in sorted(self.world.truth[d])
                  if c.rel == "depends_on" and c in self.stated_at
+                 and (d, c.src) not in self._revised
                  and self.world.layer_of[(d, c.src)] < self.cfg.layers - 2]
         if not cands:
             return None
@@ -388,6 +452,7 @@ class Stream:
                 if self.world.layer_of[(d, x)] == li and x not in current]
         if not pool:
             return None
+        self._revised.add((d, old.src))
         return old, Claim.make(old.src, "depends_on", rng.choice(pool))
 
     # ── queries ───────────────────────────────────────────────────────
@@ -412,7 +477,7 @@ class Stream:
     def _base(self, step: int, kind: str, d: str, entry: list[str], question: str) -> Query:
         tt = self.task_text(d)
         return Query(step=step, kind=kind, domain=d, task_text=tt,
-                     text=f"{tt}: {question}", entry=entry,
+                     text=f"{tt}: {question}" if tt else question, entry=entry,
                      gap=step - self.last_active.get(d, -1))
 
     def _other(self, d: str) -> set[Claim]:
@@ -431,7 +496,8 @@ class Stream:
         entry = self.rng.sample(ends, 2)
         q = self._base(step, "focus", d, entry,
                        f"investigate {entry[0]} and {entry[1]}; what else is involved?")
-        q.gold_claims = self._neighborhood(entry, known)
+        q.gold_by_radius = {r: self._neighborhood(entry, known, hops=r) for r in (1, 2, 3)}
+        q.gold_claims = q.gold_by_radius[2]
         q.gold_concepts = {x for c in q.gold_claims for x in (c.src, c.tgt)} | set(entry)
         q.wrong_claims = self._other(d)
         q.age = self._age(q.gold_claims, step)
