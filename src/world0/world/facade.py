@@ -139,10 +139,13 @@ class World:
         # half-life) trajectory of a concept is a function of the
         # observation stream and not of when reflect() happened to run
         # (docs/paper, Theorem 3.7).
-        self.concepts.connect_lifecycle(on_activation=self._lifecycle.on_activation)
-        self.relations.connect_lifecycle(
-            on_connection=self._lifecycle.on_connection
-        )
+        # The hooks call through ``self._lifecycle`` at event time, so an
+        # engine swapped in after construction (the documented override
+        # point) keeps sole authority over maturity; a policy without the
+        # event hooks is simply evaluated at reflect.
+        self.concepts.connect_lifecycle(on_activation=self._on_activation)
+        self._activation.connect_lifecycle(on_activation=self._on_activation)
+        self.relations.connect_lifecycle(on_connection=self._on_connection)
         self._projection = ProjectionEngine(
             self.concepts, self.relations, clock=self._clock
         )
@@ -193,6 +196,7 @@ class World:
             relations=self.relations,
             hebbian=self._hebbian,
             color=self._color_diffusion,
+            clock=self._clock,
         )
         self._reflect_pipeline = ReflectPipeline(
             decay=self._decay,
@@ -223,6 +227,16 @@ class World:
     def clock(self) -> CognitiveClock:
         """The world's cognitive clock (one tick per observation)."""
         return self._clock
+
+    def _on_activation(self, node) -> None:
+        hook = getattr(self._lifecycle, "on_activation", None)
+        if hook is not None:
+            hook(node)
+
+    def _on_connection(self, *concept_ids: str) -> None:
+        hook = getattr(self._lifecycle, "on_connection", None)
+        if hook is not None:
+            hook(*concept_ids)
 
     def ingest(self, observation: Observation) -> IngestResult:
         """Agent submits observations. World 0 updates itself."""

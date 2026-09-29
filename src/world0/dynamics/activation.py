@@ -145,6 +145,16 @@ class ActivationEngine:
         self._concepts = concepts
         self._relations = relations
         self._clock = clock or CognitiveClock()
+        self._on_activation = None
+
+    def connect_lifecycle(self, *, on_activation=None) -> None:
+        """Event-time lifecycle hook for the ``record=True`` path.
+
+        Same contract as ``ConceptManager.connect_lifecycle``: a concept
+        activated by spreading activation is judged for promotion at that
+        event, not at the next reflect.
+        """
+        self._on_activation = on_activation
 
     def activate(
         self,
@@ -229,6 +239,8 @@ class ActivationEngine:
             if record:
                 settle_concept(node, now_tick, now)
                 node.activate(source=source, task=task, tick=now_tick)
+                if self._on_activation is not None:
+                    self._on_activation(node)
         frontier_seeds = list(frontier)
 
         # Propagation floor: minimum signal that can still pass through
@@ -371,6 +383,8 @@ class ActivationEngine:
                         neighbor.activate(
                             source=source, task=task, tick=now_tick
                         )
+                        if self._on_activation is not None:
+                            self._on_activation(neighbor)
 
             frontier = list(layer.keys())
 

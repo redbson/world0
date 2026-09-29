@@ -129,6 +129,10 @@ def split_concept(
         domain=domain or source.domain,
         origin=source.origin,
         confidence=min(0.3, source.confidence),
+        # Born now: a node stamped with tick 0 looks idle since the start of
+        # time and is pruned by the next reflect.
+        created_tick=manager._clock.tick,  # type: ignore[attr-defined]
+        last_activated_tick=manager._clock.tick,  # type: ignore[attr-defined]
     )
     manager._concepts[new_node.id] = new_node  # type: ignore[attr-defined]
     manager._identity_index[new_node.ensure_identity_key()] = new_node.id  # type: ignore[attr-defined]
@@ -177,6 +181,9 @@ def _merge_evidence(keeper: ConceptNode, absorbed: ConceptNode) -> None:
     )
     keeper.last_recurrence_window = max(
         keeper.last_recurrence_window, absorbed.last_recurrence_window
+    )
+    keeper.last_recurrence_tick = max(
+        keeper.last_recurrence_tick, absorbed.last_recurrence_tick
     )
     if absorbed.last_decayed_tick is not None and (
         keeper.last_decayed_tick is None

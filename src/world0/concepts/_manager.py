@@ -554,6 +554,9 @@ class ConceptManager:
         if node.confidence < FADING_THRESHOLD and node.maturity != Maturity.FADING:
             node.maturity = Maturity.FADING
         self._dirty.add(concept_id)
+        # A rise in confidence can satisfy a dense gate: judge it at the event.
+        if delta > 0 and self._on_activation is not None:
+            self._on_activation(node)
         return node
 
     def remove(self, concept_id: str) -> bool:

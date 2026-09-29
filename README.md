@@ -337,9 +337,9 @@ print(f"Promoted: {len(result.promoted_concepts)}")
 print(f"Pruned:   {len(result.pruned_concepts)}")
 ```
 
-Call after a task is complete. Decays unused concepts, promotes frequently activated ones through maturity stages, and prunes noise (a faded concept is deleted only after 720 further idle observations, so a slow re-mention revives the same node). `reflect(light=True)` skips the community / colour-field passes; `World(store_path, auto_reflect_every=50)` runs that light consolidation automatically every 50 observations so the world keeps evolving without explicit calls.
+Call after a task is complete. Decays unused concepts, promotes frequently activated ones through maturity stages, and prunes noise (a faded concept is deleted only after 720 further idle observations, so a re-mention within that grace revives the same node; past it the concept is dead and a mention starts a fresh one, whether or not `reflect()` ran in between). `reflect(light=True)` skips the community / colour-field passes; `World(store_path, auto_reflect_every=50)` runs that light consolidation automatically every 50 observations so the world keeps evolving without explicit calls.
 
-在任务完成后调用。衰减未使用的概念，将频繁激活的概念通过成熟度阶段晋升，修剪噪声。`reflect(light=True)` 跳过群落/色场步骤；`World(store_path, auto_reflect_every=50)` 每 50 次观察自动执行一次轻量巩固，世界无需显式调用也会持续演化。
+在任务完成后调用。衰减未使用的概念，修剪噪声（褪色的概念在再闲置 720 次观察后才被删除；宽限期内的再次提及复苏同一个节点，超过之后概念已死，再提及就新建——无论其间是否调用过 `reflect()`）。成熟度晋升发生在激活 / 连接事件本身，`reflect()` 只对经由其他途径变更的记录做追赶。`reflect(light=True)` 跳过群落/色场步骤；`World(store_path, auto_reflect_every=50)` 每 50 次观察自动执行一次轻量巩固，世界无需显式调用也会持续演化。
 
 ## Concept Lifecycle / 概念生命周期
 
@@ -357,9 +357,9 @@ embryonic → developing → established → core
 
 | Transition / 转换 | Requirements / 条件 |
 |------------|-------------|
-| embryonic → developing / 萌芽 → 发展中 | activation_count >= 3, confidence >= 0.3 — or recurrence >= 3 distinct windows, confidence >= 0.15 / 或在 3 个不同窗口复现 |
-| developing → established / 发展中 → 已建立 | activation_count >= 10, confidence >= 0.6 — or recurrence >= 10 distinct windows, confidence >= 0.3 / 或在 10 个不同窗口复现 |
-| established → core / 已建立 → 核心 | activation_count >= 30, connections >= 5 |
+| embryonic → developing / 萌芽 → 发展中 | activation_count >= 3, confidence >= 0.3 — or spaced recurrence ρ >= 3 (uses >= 24 observations apart) and evidence e(n, d) >= 0.15 / 或间隔复现 ρ >= 3 且证据 >= 0.15 |
+| developing → established / 发展中 → 已建立 | activation_count >= 10, ρ >= 3, confidence >= 0.6 — or ρ >= 10, evidence e(n, d) >= 0.5 ("well evidenced") and confirmations at least ~4× disconfirmations (12 uses at any cadence up to 720 observations) / 或 ρ >= 10、证据 >= 0.5 且确认约为否证的 4 倍以上（节律不超过 720 时第 12 次使用即达成） |
+| established → core / 已建立 → 核心 | activation_count >= 30 and live connections >= max(2, 5 − ⌊(n − 30)/20⌋) — an edge counts while its settled weight is >= 0.02 and its other end is not dead / 存活连接：结算后权重 >= 0.02 且另一端未死 |
 | any → fading / 任意 → 衰退 | confidence decays below 0.05 / 置信度衰减至 0.05 以下 |
 | fading → developing / 衰退 → 发展中 | re-activated by an observation after recurring in >= 3 distinct windows; otherwise it re-enters as embryonic / 复现过 3 个以上窗口的概念被重新激活时复苏，否则回到萌芽 |
 
@@ -506,7 +506,7 @@ Writes use a dirty-flag mechanism: in-memory mutations are batched and flushed a
 
 ```bash
 pip install -e ".[dev]"
-pytest                        # 554 tests (546 passing, 8 skipped without an LLM key), ~15s / 554 个测试（546 通过，8 个在无 LLM key 时跳过），约 15 秒
+pytest                        # 1 413 tests (1 403 passing, 10 skipped without an LLM key or browser), ~40s / 1 413 个测试（1 403 通过，10 个在无 LLM key 或浏览器时跳过），约 40 秒
 pytest tests/test_benchmark.py -v   # cognitive quality benchmarks / 认知质量基准
 pytest tests/test_benchmark_e2e.py -v -s   # end-to-end scenario / 端到端场景
 ANTHROPIC_API_KEY=sk-... pytest tests/test_extraction_quality_llm.py -v   # real-LLM extraction quality / 真实 LLM 提取质量
@@ -519,9 +519,9 @@ ANTHROPIC_API_KEY=sk-... pytest tests/test_extraction_quality_llm.py -v   # real
 | `test_benchmark.py` | 43 | Activation precision, projection relevance, confidence dynamics, decay curves, Hebbian convergence, cross-domain separation, scale behavior, lifecycle thresholds, persistence fidelity, projection stability, task sensitivity, relation type differentiation, alias management / 激活精度、投影相关性、置信度动态、衰减曲线、Hebbian 收敛、跨域分离、规模行为、生命周期阈值、持久化保真、投影稳定性、任务敏感性、关系类型区分、别名管理 |
 | `test_benchmark_e2e.py` | 24 | Multi-session Agent scenario: knowledge accumulation, cross-session coherence, projection focus, reflect consolidation, render quality, full lifecycle simulation, quantitative report / 多会话 Agent 场景：知识积累、跨会话一致性、投影聚焦、反思巩固、渲染质量、全生命周期模拟、量化报告 |
 | `test_extraction_quality_llm.py` | 8 | Real-LLM extraction quality: synonym/acronym dedup, generic-noise filtering, relation direction, domain-sense split, contradiction handling, Chinese language preservation, cross-text identity (skipped without an LLM key) / 真实 LLM 提取质量：同义词/缩写去重、泛词噪声过滤、关系方向、领域义项拆分、矛盾处理、中文保持、跨文本身份（无 LLM key 时跳过） |
-| Other tests / 其他测试 | ~479 | Unit/integration tests for concepts, relations, dynamics (incl. color-field & communities), spaces, sources, metrics, projection, extraction, agents (PKM/CLI/web/external), LLM providers, persistence / 概念、关系、动力学（含色场与群落）、空间、来源、指标、投影、提取、Agent（PKM/CLI/web/外部）、LLM 提供者、持久化的单元与集成测试 |
+| Other tests / 其他测试 | ~1 337 | Unit/integration tests for concepts, relations, dynamics (incl. color-field & communities), spaces, sources, metrics, projection, extraction, agents (PKM/CLI/web/external), LLM providers, persistence / 概念、关系、动力学（含色场与群落）、空间、来源、指标、投影、提取、Agent（PKM/CLI/web/外部）、LLM 提供者、持久化的单元与集成测试 |
 
-Total: 554 tests (546 passing, 8 skipped without an LLM provider). / 共 554 个测试（546 通过，8 个在无 LLM provider 时跳过）。
+Total: 1 413 tests (1 403 passing, 10 skipped without an LLM provider or browser). / 共 1 413 个测试（1 403 通过，10 个在无 LLM provider 或浏览器时跳过）。
 
 ## Requirements / 依赖
 

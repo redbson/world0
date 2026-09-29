@@ -29,21 +29,37 @@ from world0.dynamics.activation import (
 from world0.dynamics.decay import (
     EVIDENCE_FLOOR_ERA_HL,
     FADING_THRESHOLD,
+    PRUNE_MIN_IDLE_TICKS,
     RELATION_FLOOR_SHARE,
     DecayEngine,
     concept_half_life,
     evidence_floor,
     relax_confidence,
     settle_concept,
+    settle_relation,
 )
 from world0.dynamics.lifecycle import (
+    ACTIVATION_REDUCTION_STEP,
+    BASE_CORE_CONNECTIONS,
+    CORE_MIN_ACTIVATIONS,
+    DENSE_DEVELOPING_ACTIVATIONS,
+    DENSE_DEVELOPING_CONFIDENCE,
+    DENSE_ESTABLISHED_ACTIVATIONS,
+    DENSE_ESTABLISHED_CONFIDENCE,
+    DENSE_ESTABLISHED_RECURRENCE,
+    MIN_CORE_CONNECTIONS,
+    RECURRENCE_FOR_DEVELOPING,
+    RECURRENCE_FOR_ESTABLISHED,
+    SPACED_DEVELOPING_EVIDENCE,
     SPACED_ESTABLISHED_BALANCE,
     SPACED_ESTABLISHED_EVIDENCE,
+    LifecycleEngine,
+    core_connections_required,
 )
 from world0.dynamics.hebbian import HEBBIAN_MIN_ASSOCIATION
 from world0.projection.metacognition import TENTATIVE_EVIDENCE, WELL_EVIDENCED
 from world0.schemas.clock import cognitive_elapsed
-from world0.schemas.concept import ConceptNode, Maturity
+from world0.schemas.concept import RECURRENCE_CHAIN_GAP, RECURRENCE_WINDOW, ConceptNode, Maturity
 from world0.schemas.relation import RelationEdge
 
 E = EVIDENCE_FLOOR_ERA_HL
@@ -89,6 +105,7 @@ def check_gain() -> None:
         node.activate(tick=steps)
         steps += 1
     approx = (1.08 * math.exp(0.45 / 0.75) - 1) / 0.08
+    assert steps == 11, steps
     ok("activations from creation to confidence 0.6 (no decay)", f"{steps} (integral estimate {approx:.1f})")
 
 
@@ -136,19 +153,54 @@ def check_idempotency() -> None:
     ok("relax_confidence, 20 000 random (c, f, H, t1, t2) incl. c < f and H ≈ E", f"max |whole − split| = {worst:.1e}")
 
 
+def _rk4_settle(node: ConceptNode, elapsed: float, dt: float = 0.02) -> float:
+    """Independent reference: RK4 on c' = -λ (c - f(t))⁺ with the half-life
+    switched to FADING's when c first drops below the threshold."""
+    h_mature = concept_half_life(node)
+    fading = node.model_copy()
+    fading.maturity = Maturity.FADING
+    h_fading = concept_half_life(fading)
+    f0 = evidence_floor(node, now_tick=node.last_activated_tick, now=FIXED_NOW)
+    mu = math.log(2) / E
+    c, t, is_fading = node.confidence, 0.0, node.maturity == Maturity.FADING
+    while t < elapsed - 1e-12:
+        h = min(dt, elapsed - t)
+        lam = math.log(2) / (h_fading if is_fading else h_mature)
+        def rhs(tt: float, cc: float) -> float:
+            return -lam * max(0.0, cc - f0 * math.exp(-mu * tt))
+        k1 = rhs(t, c)
+        k2 = rhs(t + h / 2, c + h / 2 * k1)
+        k3 = rhs(t + h / 2, c + h / 2 * k2)
+        k4 = rhs(t + h, c + h * k3)
+        c += h / 6 * (k1 + 2 * k2 + 2 * k3 + k4)
+        t += h
+        if not is_fading and c < FADING_THRESHOLD:
+            is_fading = True
+    return c
+
+
 def check_fading_boundary() -> None:
-    section("§3.2 the FADING boundary is exact: a settle inside the crossing gap changes nothing")
-    for n, c0, maturity in [(4, 0.5, Maturity.DEVELOPING), (6, 0.9, Maturity.ESTABLISHED), (5, 0.3, Maturity.CORE)]:
+    section("§3.2 the FADING boundary is exact: settling inside the crossing gap changes nothing")
+    # (n, c0, maturity, crossing tick): the interval ends 30 ticks after the
+    # crossing so the value still depends on where the half-life switched.
+    cases = [(2, 0.2, Maturity.DEVELOPING, 437), (2, 0.06, Maturity.ESTABLISHED, 262), (2, 0.055, Maturity.CORE, 412)]
+    for n, c0, maturity, cross in cases:
+        end = cross + 30
         outs = []
-        for cuts in ([], [200], [200, 900], [1, 2, 3, 500, 1500]):
+        for cuts in ([], [cross // 2], [cross - 50, cross - 1, cross + 1, cross + 10], [1, 2, 3, cross - 20]):
             node = _node(n, maturity=maturity, confidence=c0)
-            node.last_activated = FIXED_NOW
-            for cut in cuts + [2500]:
+            for cut in cuts + [end]:
                 settle_concept(node, cut, FIXED_NOW)
             outs.append((node.maturity, node.confidence))
         confs = [c for _, c in outs]
         assert max(confs) - min(confs) < 1e-9 and len({m for m, _ in outs}) == 1, outs
-        ok(f"n={n} {maturity.value:<11} c0={c0}", f"→ {outs[0][0].value} {confs[0]:.6f} for 4 different settle schedules")
+        assert outs[0][0] == Maturity.FADING, "the case must actually cross the threshold"
+        ref = _rk4_settle(_node(n, maturity=maturity, confidence=c0), float(end))
+        assert abs(ref - confs[0]) < 1e-4, (ref, confs[0])
+        early = _node(n, maturity=maturity, confidence=c0)
+        settle_concept(early, cross - 5, FIXED_NOW)
+        assert early.maturity != Maturity.FADING  # the crossing is inside the interval, not before it
+        ok(f"n={n} {maturity.value:<11} c0={c0}", f"crosses at ~{cross} → fading {confs[0]:.6f}; RK4 reference {ref:.6f}; 4 settle schedules agree")
 
 
 def check_schedule_independence() -> None:
@@ -169,10 +221,10 @@ def check_schedule_independence() -> None:
         res = {R: run(T, R) for R in (1, 50, 1000, None)}
         cs = [c for c, _ in res.values()]
         ws = [x for _, x in res.values()]
-        # the only residue is the era correction of Prop 3.1 (≤ f1 − f2)
-        assert max(cs) - min(cs) < 0.01 and max(ws) - min(ws) < 0.01, res
+        # exact semigroup: only wall-clock drift (~1e-9) remains
+        assert max(cs) - min(cs) < 1e-6 and max(ws) - min(ws) < 1e-6, res
         ok(f"use every {T:<4}", "reflect every 1 / 50 / 1000 / never → confidence "
-           + " / ".join(f"{c:.3f}" for c in cs) + ", weight " + " / ".join(f"{x:.3f}" for x in ws))
+           + " / ".join(f"{c:.6f}" for c in cs) + ", weight " + " / ".join(f"{x:.6f}" for x in ws))
 
 
 def _stream(kind: str):
@@ -188,6 +240,18 @@ def _stream(kind: str):
     if kind.startswith("cad"):
         T = int(kind[3:])
         return {k * T: use() for k in range(1, 31)}, 31 * T
+    if kind == "ghost":
+        # five one-shot partners expire; their edges outlive them in a world that never reflects
+        ev = {1: Observation(
+            concepts=["c"] + [f"p{i}" for i in range(5)],
+            relations=[("c", f"p{i}", "depends_on") for i in range(5)],
+            source="s",
+        )}
+        ev.update({1 + 48 * k: Observation(concepts=["c"], source="s") for k in range(1, 41)})
+        return ev, 1 + 48 * 41
+    if kind == "sparse-beyond-grace":
+        T = int(PRUNE_MIN_IDLE_TICKS) + 80
+        return {1 + T * k: Observation(concepts=["c"], source="s") for k in range(15)}, 1 + T * 14 + 5
     if kind == "burst":
         return {t: use() for t in range(1, 31)}, 5030
     if kind == "one-shot":
@@ -225,24 +289,27 @@ def _drive(events, horizon: int, every: int | None):
         if every and stop % every == 0 and stop < horizon:
             w.reflect(light=True)
     w.reflect()
-    node = w.concepts.resolve("c")
-    return None if node is None else (node.maturity.value, node.confidence)
+    return {c.name: (c.maturity.value, c.confidence, c.activation_count) for c in w.concepts.all()}
 
 
 def check_maturity_schedule_independence() -> None:
-    section("§3.5 Theorem 3.7: (confidence, maturity, existence) do not depend on the reflect cadence")
-    for kind in ("cad24", "cad72", "cad168", "cad720", "burst", "one-shot", "disconf", "late-links"):
+    section("§3.5 Theorem 3.7: (existence, maturity, confidence) do not depend on the reflect cadence")
+    for kind in ("cad24", "cad72", "cad168", "cad720", "burst", "one-shot", "disconf", "late-links",
+                 "ghost", "sparse-beyond-grace"):
         events, horizon = _stream(kind)
-        cadences = (1, 50, 1000, None) if kind not in ("cad720", "late-links") else (50, 1000, None)
+        cadences = (1, 50, 1000, None)
         res = [_drive(events, horizon, r) for r in cadences]
-        if res[0] is None:
-            assert all(r is None for r in res), res
-            ok(f"{kind:<10}", "concept pruned under every cadence")
+        ref = res[-1]
+        for r, state in zip(cadences, res):
+            assert state.keys() == ref.keys(), (kind, r, sorted(state), sorted(ref))
+            for name, (maturity, conf, n) in state.items():
+                assert (maturity, n) == (ref[name][0], ref[name][2]), (kind, r, name, state[name], ref[name])
+                assert abs(conf - ref[name][1]) < 1e-6, (kind, r, name, state[name], ref[name])
+        if "c" not in ref:
+            ok(f"{kind:<19}", "concept pruned under every cadence")
             continue
-        assert len({m for m, _ in res}) == 1, (kind, res)
-        spread = max(c for _, c in res) - min(c for _, c in res)
-        assert spread < 1e-6, (kind, res)
-        ok(f"{kind:<10}", f"{res[0][0]:<11} confidence spread over reflect every {cadences}: {spread:.1e}")
+        spread = max(abs(st["c"][1] - ref["c"][1]) for st in res)
+        ok(f"{kind:<19}", f"{ref['c'][0]:<11} n={ref['c'][2]:<3} spread over reflect every {cadences}: {spread:.1e}")
 
 
 def check_noise_threshold() -> None:
@@ -276,39 +343,76 @@ def check_one_off() -> None:
             break
     assert faded_at is not None and abs(faded_at - t_fade) <= 1.5, (faded_at, t_fade)
     assert pruned_at == 720, pruned_at
+    below_02 = None
+    probe = ConceptNode(name="probe")
+    probe.activate(tick=0)
+    for t in range(1, 200):
+        copy = probe.model_copy()
+        settle_concept(copy, t, probe.last_activated)
+        if copy.confidence < 0.02:
+            below_02 = t
+            break
+    assert below_02 is not None and abs(below_02 - t_02) <= 1.0, (below_02, t_02)
     ok("initial confidence after one mention", f"{c1:.4f}")
     ok("marked FADING after", f"{faded_at} obs (closed form {t_fade:.1f})")
     ok("confidence < 0.02 after", f"{t_02:.1f} obs; deleted at {pruned_at} (grace 720)")
 
 
+def _uses_to_established(T: int, reflect_every: int | None, cap: int = 60) -> tuple[int | None, int, int]:
+    """(use at which ESTABLISHED, node re-creations, final n) for a concept used every T ticks."""
+    w = World(store_path=tempfile.mkdtemp(), auto_reflect_every=None)
+    ids: set[str] = set()
+    recreated = -1
+    established = None
+    last_n = 0
+    for use in range(1, cap + 1):
+        w.ingest(Observation(concepts=["c"]))
+        node = w.concepts.resolve("c")
+        last_n = node.activation_count
+        if node.id not in ids:
+            ids.add(node.id)
+            recreated += 1
+        if established is None and node.maturity == Maturity.ESTABLISHED:
+            established = use
+            break
+        for _ in range(T - 1):
+            w.clock.advance(1)
+            if reflect_every and w.clock.tick % reflect_every == 0:
+                w.reflect(light=True)
+    return established, recreated, last_n
+
+
 def check_recurrence_bound() -> None:
-    section("§3.3 Prop 3.5: sparse cadences reach ESTABLISHED after n* uses (was 324 at T=720)")
+    section("§3.3 Prop 3.5: a cadence within the prune grace reaches ESTABLISHED at use n*; beyond it the concept is noise")
     def e(n: int, d: int = 0) -> float:
         return (n + 1) / (n + d + 2) * n / (n + 10)
     n_star = next(n for n in range(10, 200) if e(n) >= SPACED_ESTABLISHED_EVIDENCE)
     ok("n* = min { n ≥ 10 : e(n, 0) ≥ 0.5 }  (WELL_EVIDENCED)", f"{n_star} uses; balance(n*) = {(n_star + 1) / (n_star + 2):.3f} ≥ {SPACED_ESTABLISHED_BALANCE}")
     assert n_star == 12
-    ok("chain gap E/2 (a cadence T below it never breaks its own recurrence chain)", f"{E / 2:.0f} observations")
     for T in (24, 72, 168, 720):
+        for reflect_every in (None, 50):
+            used, recreated, _ = _uses_to_established(T, reflect_every)
+            assert used == n_star and recreated == 0, (T, reflect_every, used, recreated)
         w = World(store_path=tempfile.mkdtemp(), auto_reflect_every=None)
-        uses = 0
-        while uses < 400:
+        for _ in range(n_star):
             w.ingest(Observation(concepts=["c"]))
-            uses += 1
-            node = w.concepts.resolve("c")
-            if node.maturity == Maturity.ESTABLISHED:
-                break
             w.clock.advance(T - 1)
         node = w.concepts.resolve("c")
-        assert node.maturity == Maturity.ESTABLISHED and uses == n_star, (T, uses)
-        ok(f"cadence T={T}", f"ESTABLISHED at use {uses} (tick {w.clock.tick}, confidence {node.confidence:.3f}, recurrences {node.recurrence_count})")
-    # smallest cadence for which the chain breaks: the recurrence path closes
-    w = World(store_path=tempfile.mkdtemp())
-    for _ in range(40):
-        w.ingest(Observation(concepts=["c"]))
-        w.clock.advance(int(E / 2))
-    node = w.concepts.resolve("c")
-    ok(f"cadence T={int(E / 2)} (= E/2, chain breaks at every use)", f"maturity {node.maturity.value}, recurrences {node.recurrence_count}")
+        ok(f"cadence T={T}", f"ESTABLISHED at use {n_star} with and without reflect (tick {w.clock.tick - T + 1}, confidence {node.confidence:.3f}, recurrences {node.recurrence_count})")
+    for T in (int(PRUNE_MIN_IDLE_TICKS) + 1, 800, 2000):
+        outcomes = {r: _uses_to_established(T, r, cap=20) for r in (None, 50)}
+        for r, (used, recreated, n) in outcomes.items():
+            assert used is None and n == 1 and recreated >= 19, (T, r, outcomes)
+        ok(f"cadence T={T} > prune grace {int(PRUNE_MIN_IDLE_TICKS)}", "never ESTABLISHED; the concept (n ≤ 6 keeps its floor under 0.05) is forgotten between uses — identical without reflect")
+    # the recurrence chain of a concept that is *not* forgotten (n ≥ 7) breaks at exactly E/2
+    for gap in (int(RECURRENCE_CHAIN_GAP) - 1, int(RECURRENCE_CHAIN_GAP)):
+        node = ConceptNode(name="veteran")
+        for k in range(8):
+            node.activate(tick=1 + 24 * k)
+        rho = node.recurrence_count
+        node.activate(tick=node.last_activated_tick + gap)
+        assert node.recurrence_count == (rho + 1 if gap < RECURRENCE_CHAIN_GAP else 1), (gap, node.recurrence_count)
+    ok(f"chain gap E/2 = {RECURRENCE_CHAIN_GAP:.0f}", "a gap of E/2 − 1 keeps the recurrence chain (ρ+1); a gap of E/2 restarts it (ρ = 1)")
 
 
 def check_evidence_thresholds() -> None:
@@ -318,6 +422,7 @@ def check_evidence_thresholds() -> None:
     well = min(n for n, e in ev.items() if e >= WELL_EVIDENCED)
     assert all(ev[n] < ev[n + 1] for n in range(29))
     ok("e(n) strictly increasing in n (d = 0)")
+    assert tentative == 2 and well == 12, (tentative, well)
     ok("tentative ⇔ n ≤", f"{tentative}   (e(2)={ev[2]:.3f}, e(3)={ev[3]:.3f})")
     ok("well-evidenced ⇔ n ≥", f"{well}  (e(11)={ev[11]:.3f}, e(12)={ev[12]:.3f})")
 
@@ -594,6 +699,81 @@ def check_prediction_per_companion() -> None:
     ok("pair a–b with two opposing claims, b absent", f"missing ratio {r.prediction.missing_ratio} (was 0.6)")
 
 
+def _gate_node(n: int, *, d: int = 0, rho: int = 1, c: float = 0.1, maturity: Maturity = Maturity.EMBRYONIC) -> ConceptNode:
+    node = ConceptNode(name="g", maturity=maturity, confidence=c)
+    node.activation_count = n
+    node.disconfirmation_count = d
+    node.recurrence_count = rho
+    return node
+
+
+def check_gate_table() -> None:
+    section("§3.5 Definition 3.5: the promotion gates, at their boundaries")
+    assert (DENSE_DEVELOPING_ACTIVATIONS, DENSE_DEVELOPING_CONFIDENCE, RECURRENCE_FOR_DEVELOPING, SPACED_DEVELOPING_EVIDENCE) == (3, 0.3, 3, 0.15)
+    assert (DENSE_ESTABLISHED_ACTIVATIONS, DENSE_ESTABLISHED_RECURRENCE, DENSE_ESTABLISHED_CONFIDENCE,
+            RECURRENCE_FOR_ESTABLISHED, SPACED_ESTABLISHED_EVIDENCE, SPACED_ESTABLISHED_BALANCE) == (10, 3, 0.6, 10, 0.5, 0.8)
+    assert (CORE_MIN_ACTIVATIONS, BASE_CORE_CONNECTIONS, MIN_CORE_CONNECTIONS, ACTIVATION_REDUCTION_STEP) == (30, 5, 2, 20)
+    assert TENTATIVE_EVIDENCE == SPACED_DEVELOPING_EVIDENCE and WELL_EVIDENCED == SPACED_ESTABLISHED_EVIDENCE
+    ok("constants equal the table of Definition 3.5; the spaced gates' evidence lines are metacognition's")
+    engine = LifecycleEngine(None, None)  # the two lower rungs read no stores
+    emb, dev = Maturity.EMBRYONIC, Maturity.DEVELOPING
+    cases = [
+        (dict(n=3, c=0.3, rho=1, maturity=emb), Maturity.DEVELOPING, "embryonic dense: n ≥ 3 ∧ c ≥ 0.3"),
+        (dict(n=3, c=0.299, rho=1, maturity=emb), None, "  … c just below 0.3, one window: no"),
+        (dict(n=3, c=0.05, rho=3, maturity=emb), Maturity.DEVELOPING, "embryonic spaced: ρ ≥ 3 ∧ e ≥ 0.15 (e(3) = 0.185)"),
+        (dict(n=2, c=0.05, rho=3, maturity=emb), None, "  … n = 2: e = 0.125 < 0.15, no"),
+        (dict(n=10, c=0.6, rho=3, maturity=dev), Maturity.ESTABLISHED, "developing dense: n ≥ 10 ∧ ρ ≥ 3 ∧ c ≥ 0.6"),
+        (dict(n=30, c=0.99, rho=2, maturity=dev), None, "  … a burst (ρ = 2) is never established by intensity"),
+        (dict(n=10, c=0.6, rho=0, maturity=dev), Maturity.ESTABLISHED, "  … ρ = 0 (legacy record) keeps the old dense rule"),
+        (dict(n=12, c=0.01, rho=10, maturity=dev), Maturity.ESTABLISHED, "developing spaced: ρ ≥ 10 ∧ e ≥ 0.5 ∧ β ≥ 0.8 (n = 12)"),
+        (dict(n=11, c=0.01, rho=10, maturity=dev), None, "  … n = 11: e = 0.484 < 0.5, no"),
+        (dict(n=40, d=12, c=0.01, rho=10, maturity=dev), None, "  … contested (β < 0.8), no"),
+    ]
+    for kwargs, expect, label in cases:
+        got = engine._evaluate_one(_gate_node(**kwargs))
+        assert got == expect, (label, got)
+        ok(label, "" if expect is None else f"→ {expect.value}")
+    for n, k in ((30, 5), (49, 5), (50, 4), (70, 3), (90, 2), (500, 2)):
+        assert core_connections_required(n) == k, (n, core_connections_required(n))
+    ok("core connections max(2, 5 − ⌊(n−30)/20⌋)", "n = 30/50/70/90 → 5/4/3/2")
+
+
+def check_relation_settle_exact() -> None:
+    section("§4.2 Prop 4.2': relation settling is an exact semigroup (as for concepts)")
+    rng = random.Random(9)
+    worst = 0.0
+    for _ in range(3000):
+        explicit = rng.random() < 0.7
+        p, w0 = rng.uniform(0.05, 1.0), rng.uniform(0.05, 1.0)
+        reinforced = rng.randint(0, 6)
+        edges = []
+        for _k in range(2):
+            e = RelationEdge(source_id="a", target_id="b", semantic_relation="dependence", is_explicit=explicit)
+            e.probability, e.weight, e.confidence = p, w0, w0
+            e.reinforcement_count = reinforced
+            edges.append(e)
+        total = rng.randint(30, 9000)
+        cut = rng.randint(1, total - 1)
+        settle_relation(edges[0], total)
+        settle_relation(edges[1], cut)
+        settle_relation(edges[1], total)
+        worst = max(worst, abs(edges[0].weight - edges[1].weight), abs(edges[0].confidence - edges[1].confidence))
+    assert worst < 1e-8, worst
+    ok("3000 random (explicit/co-occurrence, p, w, r, split)", f"max |whole − split| = {worst:.1e}")
+    # a belief below 0.2 puts the floor under the prune line: the claim is mortal, one above is not
+    lives = {}
+    for p in (0.1, 0.7):
+        e = RelationEdge(source_id="a", target_id="b", semantic_relation="dependence", is_explicit=True)
+        e.probability, e.weight, e.confidence = p, p, p
+        t = 0
+        while e.weight >= 0.02 and t < 20_000:
+            t += 25
+            settle_relation(e, t)
+        lives[p] = t
+    assert lives[0.1] < 1500 and lives[0.7] > 7000, lives
+    ok("floor 0.1·p vs prune line 0.02", f"p = 0.1 dies after {lives[0.1]} ticks (noise); p = 0.7 after {lives[0.7]}")
+
+
 def check_opposition() -> None:
     section("§4.3 opposition is symmetric (F2)")
     from world0.schemas.relation import SEMANTIC_RELATION_SPECS
@@ -641,8 +821,10 @@ def main() -> None:
     check_one_off()
     check_recurrence_bound()
     check_evidence_thresholds()
+    check_gate_table()
     check_salience()
     check_confirm()
+    check_relation_settle_exact()
     check_relation_survival()
     check_opposition()
     check_jaccard()

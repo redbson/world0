@@ -737,9 +737,16 @@ class TestRelationEvidenceFloor:
         w.ingest(Observation(concepts=["A", "B"], relations=[("A", "B", "depends_on")], source="s"))
         for _ in range(3):
             w.ingest(Observation(concepts=["E", "F"], source="s"))  # Hebbian only
+        # Give the concepts enough confirmations that they are not noise
+        # (a concept confirmed ≤ 6 times is forgotten with its relations
+        # after ~720 idle observations, docs/paper Prop 3.3): only the
+        # relations are under test.
+        for _ in range(30):
+            for n in "ABEF":
+                w.ingest(Observation(concepts=[n], source="s"))
         ids = {n: w.concepts.resolve(n).id for n in "ABEF"}
         w.clock.advance(idle)
-        for n in "ABEF":  # keep the concepts alive; only relations are under test
+        for n in "ABEF":  # a mention after the idle period
             w.ingest(Observation(concepts=[n], source="s"))
         w.reflect(light=True)
         return w, ids
@@ -766,6 +773,9 @@ class TestRelationEvidenceFloor:
         w.ingest(Observation(concepts=["A", "B"], relations=[("A", "B", "depends_on")], source="s"))
         for _ in range(20):  # explicit re-statements move probability toward 1
             w.ingest(Observation(concepts=["A", "B"], relations=[("A", "B", "depends_on")], source="s"))
+        for _ in range(30):
+            for n in "AB":
+                w.ingest(Observation(concepts=[n], source="s"))
         ids = {n: w.concepts.resolve(n).id for n in "AB"}
         w.clock.advance(3000)
         for n in "AB":

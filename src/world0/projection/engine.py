@@ -63,6 +63,9 @@ RELATIVE_MIN_ACTIVATION: float = 0.02
 # noise used to impose, now decided by the timestamps themselves), then
 # name, then id.  (A quantum five orders of magnitude coarser than the
 # noise keeps a tie group from straddling a rounding boundary in practice.)
+# The quantum is relative to the strongest activation of the view: a view
+# built from faded seeds has peak scores of 1e-6 and below, where an
+# absolute quantum would tie everything and discard the ranking.
 SCORE_DIGITS: int = 6
 
 
@@ -121,8 +124,9 @@ class ProjectionEngine:
         peak = max(activations.values(), default=0.0)
         cut = min(min_activation, RELATIVE_MIN_ACTIVATION * peak)
         seed_set = set(seed_ids or ())
+        quantum = peak if peak > 0.0 else 1.0
         candidates = {
-            cid: round(score, SCORE_DIGITS)
+            cid: round(score / quantum, SCORE_DIGITS) * quantum
             for cid, score in activations.items()
             if score >= cut or cid in seed_set
         }

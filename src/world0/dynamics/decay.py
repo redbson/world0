@@ -53,8 +53,8 @@ Three guarantees this engine makes (analysis and probe evidence in
    now splits the interval at the analytically solved crossing instant:
    before it the maturity's half-life applies, after it the FADING one.
    The crossing time is a function of the state at the start of the gap
-   only, so any subdivision of the gap gives the same result (up to the
-   era correction of Proposition 3.1).  Disconfirmation (``weaken``)
+   only, so any subdivision of the gap gives the same result (exactly,
+   Proposition 3.1).  Disconfirmation (``weaken``)
    settles first and is judged at the event for the same reason.
 
 Optimization: items touched less than one tick ago are skipped entirely,
@@ -98,13 +98,13 @@ DECAY_GRACE_TICKS: float = 1.0
 # use, with a gentler slope because maturity stages already encode a
 # large share of a concept's evidence history.
 #
-# Calibration (docs/world0-cognitive-dynamics-analysis.md §5): with 0.2 a
-# concept re-observed every 24 observations leaves ``embryonic`` after
-# ~700 observations and reaches ``established`` after ~1400; one
-# re-observed every 168 settles as ``developing`` (≈0.36); one re-observed
-# every 720 stays alive on its evidence floor; a one-off mention fades
-# after ~54 observations; a concept confirmed 30× and then abandoned needs
-# ~26 000 observations to fade.
+# Calibration (docs/world0-cognitive-dynamics-analysis.md §5, since revised
+# by event-time promotion, §7.22 and docs/paper §3.5): a concept re-observed
+# every 24 / 168 / 720 observations is ``developing`` at its 3rd use and
+# ``established`` at its 12th (ticks 265 / 1849 / 7921; settled confidence
+# 0.76 / 0.48 / 0.30 after 30 uses); a one-off mention fades after ~50
+# observations and is deleted after 720; a concept confirmed 30× and then
+# abandoned needs ~26 000 observations to fade.
 CONCEPT_EVIDENCE_HL_GAIN: float = 0.20
 CONCEPT_EVIDENCE_HL_MAX_SCALE: float = 8.0
 # Absolute ceiling on the effective half-life so heavily used core
@@ -341,22 +341,58 @@ def concept_prunable(
 def _relaxed_relation(
     edge: RelationEdge, now_tick: int, now: datetime
 ) -> tuple[float, float] | None:
-    """(weight, confidence) after settling to ``now_tick``; None inside the grace."""
+    """(weight, confidence) after settling to ``now_tick``; None inside the grace.
+
+    Same exact moving-floor relaxation as concepts (``relax_confidence``):
+    the floor is taken at the decay reference point and keeps falling on the
+    era scale while the weight follows it, so settling in any number of
+    pieces gives the same weight (docs/paper, Proposition 4.2).
+    """
     elapsed = edge.decay_elapsed(now_tick, now)
     if elapsed < DECAY_GRACE_TICKS:
         return None
     # More reinforced relations decay slower
     half_life = RELATION_BASE_HALF_LIFE * (1.0 + edge.reinforcement_count * 0.5)
-    decay_factor = math.pow(0.5, elapsed / half_life)
     # Relax toward the probability-anchored floor (explicit edges) or
     # toward zero (auto-discovered edges).
-    floor = relation_floor(edge, now_tick=now_tick, now=now)
-    weight, confidence = edge.weight, edge.confidence
-    if weight > floor:
-        weight = max(0.0, floor + (weight - floor) * decay_factor)
-    if confidence > floor:
-        confidence = max(0.0, floor + (confidence - floor) * decay_factor)
-    return weight, confidence
+    floor = relation_floor(
+        edge, now_tick=edge.decay_reference_tick(), now=edge.decay_reference_time()
+    )
+    return (
+        relax_confidence(edge.weight, floor, half_life, elapsed),
+        relax_confidence(edge.confidence, floor, half_life, elapsed),
+    )
+
+
+def relation_dead(
+    edge: RelationEdge, now_tick: int, now: datetime | None = None
+) -> bool:
+    """Whether a relation's settled weight is below the prune line.
+
+    A pure predicate of the settled state, like ``concept_prunable``: an
+    edge is dead from the first instant this holds, whether a reflect has
+    physically removed it or not.  Events that would touch a dead edge
+    (a restatement, a co-occurrence) treat it as absent
+    (``RelationManager.reap_dead``).
+    """
+    return projected_relation_weight(edge, now_tick, now) < RELATION_PRUNE_THRESHOLD
+
+
+def concept_expired(
+    node: ConceptNode, now_tick: int, now: datetime | None = None
+) -> bool:
+    """Whether ``node`` would be prunable once settled to ``now_tick``.
+
+    Like ``relation_dead`` this reads the settled state without mutating
+    the node, so it answers the same whether or not decay has been applied
+    since the last activation.  Recently used concepts return early.
+    """
+    now = now or wall_now()
+    if node.elapsed_since_activation(now_tick, now) < PRUNE_MIN_IDLE_TICKS:
+        return False
+    probe = node.model_copy()
+    settle_concept(probe, now_tick, now)
+    return concept_prunable(probe, now_tick, now)
 
 
 def projected_relation_weight(

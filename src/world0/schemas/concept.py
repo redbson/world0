@@ -97,16 +97,23 @@ MAX_REINFORCEMENT_LOG: int = 64
 MAX_TASK_PROFILE_ENTRIES: int = 64
 
 # ── Recurrence ───────────────────────────────────────────────────────
-# Activations are grouped into windows of RECURRENCE_WINDOW ticks (a
-# "cognitive day").  ``recurrence_count`` counts the *distinct* windows in
-# which a concept was activated, so thirty mentions in one burst count
-# once while one mention a window for thirty windows counts thirty times.
+# ``recurrence_count`` counts activations at least RECURRENCE_WINDOW ticks
+# (a "cognitive day") after the previously counted one, so thirty mentions
+# in one burst count once while one mention a day for thirty days counts
+# thirty times.  (Spacing is measured from the last *counted* activation,
+# not on a fixed grid of windows: on a grid a burst straddling a boundary
+# would count twice, and one of ~26 ticks three times.)
 # Spaced recurrence is the evidence that a concept is durable rather than
 # incidental; the lifecycle uses it as an alternative promotion path and
 # a revived FADING concept only returns to DEVELOPING when it has recurred
 # at least REVIVAL_RECURRENCE times.
 RECURRENCE_WINDOW: int = 24
 REVIVAL_RECURRENCE: int = 3
+# A revived concept lands at least at the fading threshold
+# (``dynamics.decay.FADING_THRESHOLD``, checked equal by a test): a
+# confirmation must not leave it below the line that re-marks it FADING at
+# the next settle, which would demote it on the strength of a confirmation.
+REVIVAL_MIN_CONFIDENCE: float = 0.05
 
 # ── Salience: freshness ∨ evidence-backed persistence ────────────────
 # ``salience()`` keeps a well-evidenced concept in view while it is
@@ -265,10 +272,12 @@ class ConceptNode(BaseModel):
     # a slow secondary drift.
     created_tick: int = 0
     last_activated_tick: int = 0
-    # Distinct RECURRENCE_WINDOW-sized tick windows with an activation, and
-    # the last window counted.
+    # Activations spaced at least RECURRENCE_WINDOW ticks apart, and the tick
+    # of the last one counted (-1: none; ``last_recurrence_window`` is the
+    # legacy grid index, kept so stores written before load).
     recurrence_count: int = 0
     last_recurrence_window: int = -1
+    last_recurrence_tick: int = -1
     last_weakened: datetime | None = None
     # Instant (both coordinates) at which time decay was last applied.
     # Lets the decay engine decay only the *elapsed interval* instead of
@@ -360,10 +369,14 @@ class ConceptNode(BaseModel):
         if tick is not None:
             chain_broken = int(tick) - self.last_activated_tick >= RECURRENCE_CHAIN_GAP
             self.last_activated_tick = int(tick)
-            window = int(tick) // RECURRENCE_WINDOW
-            if window != self.last_recurrence_window:
+            anchor = self.last_recurrence_tick
+            if anchor < 0 and self.last_recurrence_window >= 0:
+                # Record written on the fixed grid: its last counted window.
+                anchor = self.last_recurrence_window * RECURRENCE_WINDOW
+            if anchor < 0 or int(tick) - anchor >= RECURRENCE_WINDOW:
                 self.recurrence_count += 1
-                self.last_recurrence_window = window
+                self.last_recurrence_tick = int(tick)
+                self.last_recurrence_window = int(tick) // RECURRENCE_WINDOW
         self.reinforcement_log.append(
             ReinforcementEntry(timestamp=now, source=source, task=task)
         )
@@ -386,6 +399,7 @@ class ConceptNode(BaseModel):
                 if self.recurrence_count >= REVIVAL_RECURRENCE
                 else Maturity.EMBRYONIC
             )
+            self.confidence = max(self.confidence, REVIVAL_MIN_CONFIDENCE)
         if chain_broken:
             # Judged after the revival above: the chain that justified the
             # landing rung is spent, this activation starts the next one.

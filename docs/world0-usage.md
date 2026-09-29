@@ -243,12 +243,12 @@ Five-stage pipeline:
 1. 概念衰减 + 关系衰减
 2. 社区检测与更新
 3. 色彩场 fade → 由社区重新播种 → settle
-4. 生命周期评估（成熟度升降）
+4. 生命周期追赶评估（成熟度晋升在激活 / 连接事件上已经发生，这里只补上经由其他途径变更的记录；不降级，褪色由衰减负责）
 5. 关系修剪 → 概念修剪
 1. decay concepts + decay relations
 2. detect and update communities
 3. color-field fade → reseed from communities → settle
-4. lifecycle evaluation (maturity up/down)
+4. lifecycle catch-up (promotion already happens at the activation / connection event; this only covers records changed some other way; never demotes — fading is decay's job)
 5. prune relations → prune concepts
 
 `ReflectResult` 包含：`decayed_*`、`promoted_concepts`、`demoted_concepts`、`pruned_*`、`new_communities`、`stable_communities`、`pruned_communities`、`color_sources`。

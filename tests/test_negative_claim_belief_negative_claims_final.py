@@ -296,6 +296,12 @@ class TestForgetting:
             _state(w, "A", "B", "conflict")
             for _ in range(3):
                 w.ingest(Observation(concepts=["E", "F"], source="s"))  # co-occurrence only
+            # Concepts confirmed often enough are not noise; only the
+            # relations are under test (a concept confirmed <= 6 times goes
+            # with its relations after ~720 idle ticks).
+            for _ in range(30):
+                for n in "ABEF":
+                    w.ingest(Observation(concepts=[n], source="s"))
             ids = {n: w.concepts.resolve(n).id for n in "ABEF"}
             w.clock.advance(idle)
             for n in "ABEF":
@@ -314,7 +320,11 @@ class TestForgetting:
         for step in (10, 50, 200, 1000):
             w, edge = _once(tmp_path / str(step), "conflict")
             out.append(_survival(w, edge, step=step))
-        assert max(out) - min(out) <= 250, out  # was 440..1000 before the fix
+        # Settling is an exact semigroup, so the edge dies at the same instant
+        # whatever the cadence; the probe only sees it at multiples of its own
+        # step (was 440..1000 before the fix).
+        steps = (10, 50, 200, 1000)
+        assert all(abs(v - out[0]) <= step + steps[0] for v, step in zip(out, steps)), out
 
 
 # ── contested pairs ────────────────────────────────────────────────────

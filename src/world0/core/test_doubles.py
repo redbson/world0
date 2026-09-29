@@ -462,6 +462,9 @@ class FakeRelationStore:
     def __len__(self) -> int:
         return len(self._edges)
 
+    def reap_dead_between(self, id_a: str, id_b: str) -> int:
+        return 0
+
     # writer
     def discover(
         self,

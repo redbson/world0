@@ -24,18 +24,23 @@ Promotion rules (either gate suffices)::
 
 Why these gates (docs/paper §3.3):
 
-* ``ρ`` counts distinct 24-tick windows, so thirty mentions in one burst
-  count once; every path to ESTABLISHED needs spacing (the dense path a
+* ``ρ`` counts activations at least 24 ticks apart, so thirty mentions in
+  one burst count once (twice at most when the burst is longer than a
+  window); every path to ESTABLISHED needs spacing (the dense path a
   minimum of three windows, the spaced path ten).  Intensity alone is not
   durability.
 * ``e(n, d) ≥ 0.5`` is exactly the metacognition layer's *well evidenced*
   line (``projection.metacognition.WELL_EVIDENCED``): a concept the Agent
   is shown as well evidenced is not still labelled DEVELOPING, and a
-  concept labelled ESTABLISHED is one the Agent is told to trust.  It is
-  reached after 12 confirmations at any cadence, where the old confidence
-  gate needed 324 at a 720-observation cadence — the confidence
-  equilibrium of a sparse cadence is capped by the evidence floor, which
-  is a fact about *decay*, not about whether the concept is real.
+  concept labelled ESTABLISHED is one the Agent is told to trust (for
+  spaced use: a burst can be well evidenced and still DEVELOPING, since
+  its ρ is too low).  It is reached after 12 confirmations at any cadence
+  up to the prune grace (720 observations), where the old confidence gate
+  needed 324 at a 720-observation cadence — the confidence equilibrium of
+  a sparse cadence is capped by the evidence floor, which is a fact about
+  *decay*, not about whether the concept is real.  Beyond the grace the
+  concept (n ≤ 6 keeps its floor under the fading line) is forgotten as
+  noise between uses, in every world.
 * Records with ``ρ == 0`` predate recurrence tracking; the dense gate does
   not ask them for spacing.
 * ``balance ≥ 0.8`` keeps contested concepts out: confirmations must
@@ -49,8 +54,9 @@ The ESTABLISHED → CORE connection threshold is dynamic::
 Heavily activated concepts need fewer connections, acknowledging that
 frequency of use is itself evidence of centrality; the minimum keeps
 isolated concepts from reaching CORE.  A connection counts while its
-(settled) weight is at least the prune threshold — so whether a reflect
-has already pruned a dead edge does not change the count.
+(settled) weight is at least the prune threshold and the concept at the
+other end is not expired (``concept_expired``) — so whether a reflect has
+already pruned a dead edge or a dead neighbour does not change the count.
 
 **When eligibility is evaluated.**  A promotion changes the half-life
 used for every later decay interval, so *when* it is applied matters as
@@ -66,7 +72,12 @@ each climbing the ladder to a fixpoint.  ``evaluate()`` (reflect) is only
 a catch-up for state changed outside these paths (merge, imported or
 hand-edited records); for a world driven through ``ingest`` it changes
 nothing.  Consequently the maturity trajectory — and with it the half-life
-history — is a function of the observation stream alone.
+history — is a function of the observation stream alone.  The same holds
+for existence: a concept or relation that is already *dead* (settled
+state past recovery, ``concept_expired`` / ``relation_dead``) is treated as
+absent at every event, so physical deletion at reflect is garbage
+collection and cannot change what a later mention meets (docs/paper
+Definition 3.6, Theorem 3.7).
 
 Demotion:
   any → fading: exactly at the instant confidence crosses 0.05
@@ -80,6 +91,7 @@ from typing import TYPE_CHECKING
 
 from world0.dynamics.decay import (
     RELATION_PRUNE_THRESHOLD,
+    concept_expired,
     projected_relation_weight,
     settle_concept,
 )
@@ -219,16 +231,28 @@ class LifecycleEngine:
     # ── gates ────────────────────────────────────────────────────────
 
     def _connections(self, node: ConceptNode) -> int:
-        """Live connections: edges whose settled weight is above the prune line."""
+        """Live connections: alive edges to concepts that are not expired.
+
+        An edge is alive while its settled weight is at least the prune
+        line; a neighbour is alive until it is past recovery
+        (``concept_expired``).  Both are pure predicates of settled state,
+        so the count is the same whether a reflect has already deleted the
+        dead edges and neighbours or not.
+        """
         edges = self._relations.for_concept(node.id)
         if self._clock is None:
             return len(edges)
         now, tick = wall_now(), self._clock.tick
-        return sum(
-            1
-            for edge in edges
-            if projected_relation_weight(edge, tick, now) >= RELATION_PRUNE_THRESHOLD
-        )
+        live = 0
+        for edge in edges:
+            if projected_relation_weight(edge, tick, now) < RELATION_PRUNE_THRESHOLD:
+                continue
+            other_id = edge.other_end(node.id)
+            other = self._concepts.get(other_id) if other_id else None
+            if other is None or concept_expired(other, tick, now):
+                continue
+            live += 1
+        return live
 
     def _evaluate_one(self, node: ConceptNode) -> Maturity | None:
         """The maturity ``node`` is eligible to rise to next, if any."""

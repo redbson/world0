@@ -10,6 +10,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from world0.dynamics.decay import concept_expired
+from world0.schemas.clock import CognitiveClock, wall_now
 from world0.schemas.relation import (
     RelationType,
     normalize_semantic_relation,
@@ -43,11 +45,40 @@ class IngestPipeline:
         relations: RelationStore,
         hebbian: HebbianLearner,
         color: ColorField,
+        clock: CognitiveClock | None = None,
     ) -> None:
         self._concepts = concepts
         self._relations = relations
         self._hebbian = hebbian
         self._color = color
+        # Optional: without a clock (mock stores) expiry is not judged.
+        self._clock = clock
+
+    def _reap_if_expired(self, node):
+        """Delete ``node`` (with its relations) if it is already dead.
+
+        A concept past recovery — FADING, below the prune line and idle for
+        ``PRUNE_MIN_IDLE_TICKS`` — is gone whether or not a reflect has
+        physically deleted it; a mention must meet the same state either
+        way (a fresh node), or existence would depend on how often reflect
+        ran (docs/paper, Theorem 3.7).  Judged at the last tick a reflect
+        could have run, the one before this observation.  Returns True
+        when the node was removed.
+        """
+        if self._clock is None or node is None:
+            return False
+        if not concept_expired(node, self._clock.tick - 1, wall_now()):
+            return False
+        self._relations.remove_for_concept(node.id)
+        self._concepts.remove(node.id)
+        return True
+
+    def _live_resolve(self, ref: str):
+        """``resolve`` that treats an already-expired concept as absent."""
+        node = self._concepts.resolve(ref)
+        if node is not None and self._reap_if_expired(node):
+            return None
+        return node
 
     def run(self, observation: Observation) -> IngestResult:
         result = IngestResult()
@@ -86,8 +117,7 @@ class IngestPipeline:
         ]
         for candidate in candidates:
             name = candidate.name
-            node, is_new = self._concepts.get_or_create(
-                name,
+            create_args = dict(
                 origin=observation.source,
                 task=observation.task,
                 description=candidate.description
@@ -97,6 +127,9 @@ class IngestPipeline:
                 domain=candidate.domain or observation.domain,
                 aliases=candidate.aliases,
             )
+            node, is_new = self._concepts.get_or_create(name, **create_args)
+            if not is_new and self._reap_if_expired(node):
+                node, is_new = self._concepts.get_or_create(name, **create_args)
             for alias in candidate.aliases:
                 self._concepts.add_alias(node.id, alias)
             # Always reinforce — creation is also an activation event.
@@ -317,7 +350,7 @@ class IngestPipeline:
             if node:
                 self._concepts.update_description(node.id, candidate.description)
         for name, desc in observation.descriptions.items():
-            node = self._concepts.resolve(name)
+            node = self._live_resolve(name)
             if node:
                 self._concepts.update_description(node.id, desc)
 
@@ -382,4 +415,4 @@ class IngestPipeline:
         concept_id = local_refs.get(ref)
         if concept_id:
             return self._concepts.get(concept_id)
-        return self._concepts.resolve(ref)
+        return self._live_resolve(ref)

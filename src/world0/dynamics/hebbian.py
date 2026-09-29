@@ -140,6 +140,9 @@ class HebbianEngine:
             pairs = pairs[:MAX_PAIRS]
 
         for id_a, id_b in pairs:
+            # An edge that is already dead is absent, not revivable
+            # (RelationManager.reap_dead_between).
+            self._relations.reap_dead_between(id_a, id_b)
             existing = self._relations.find_any_between(id_a, id_b)
             key = _pair_key(id_a, id_b)
             if existing:

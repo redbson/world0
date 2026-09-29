@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-from world0.dynamics.decay import settle_relation
-from world0.schemas.clock import CognitiveClock
+from world0.dynamics.decay import relation_dead, settle_relation
+from world0.schemas.clock import CognitiveClock, wall_now
 from world0.schemas.relation import (
     RelationEdge,
     RelationType,
@@ -76,6 +76,26 @@ class RelationManager:
         """Mark a relation as having unsaved changes."""
         self._dirty.add(relation_id)
 
+    # ── lazy reaping ──────────────────────────────────────────────────
+
+    def reap_dead_between(self, id_a: str, id_b: str) -> int:
+        """Remove relations between two concepts that are already dead.
+
+        A relation whose settled weight is below the prune line is gone,
+        whether or not a reflect has physically deleted it: a restatement
+        or a co-occurrence must meet the same state either way (a fresh
+        edge), not revive the old one just because no reflect ran
+        (docs/paper, Theorem 3.7).  Deadness is judged at the last tick a
+        reflect could have run, the tick before the current observation.
+        Returns the number removed.
+        """
+        tick = self._clock.tick - 1
+        now = wall_now()
+        dead = [e for e in self.find_any_between(id_a, id_b) if relation_dead(e, tick, now)]
+        for edge in dead:
+            self.remove(edge.id)
+        return len(dead)
+
     # ── discovery ─────────────────────────────────────────────────────
 
     def discover(
@@ -110,6 +130,7 @@ class RelationManager:
         # Directed relations are matched in their stated orientation:
         # "B depends on A" is a different claim from "A depends on B" and
         # must not confirm it (docs §7.18).
+        self.reap_dead_between(source_id, target_id)
         existing = self.find_between(
             source_id, target_id, relation_type, directed=True
         )
@@ -119,6 +140,8 @@ class RelationManager:
                 existing.structural_strength = semantic_spec.structural_strength
                 existing.propagation_strength = semantic_spec.propagation_strength
             if probability is not None or prior_probability is not None:
+                # Owed decay first, then the restatement (Theorem 3.2).
+                settle_relation(existing, self._clock.tick)
                 existing.update_probability(
                     evidence_probability=probability,
                     prior_probability=prior_probability,
@@ -128,6 +151,8 @@ class RelationManager:
                     tick=self._clock.tick,
                 )
                 self._dirty.add(existing.id)
+                if self._on_connection is not None:
+                    self._on_connection(existing.source_id, existing.target_id)
             return existing, False
 
         # Explicit relations start stronger than Hebbian (auto-discovered)
@@ -156,7 +181,14 @@ class RelationManager:
             probability=init_probability,
             belief_prior=init_probability if is_explicit else None,
             probability_observation_count=1 if probability is not None else 0,
-            weight=init_probability if has_probability_input else init_weight,
+            # The inhibition gain of a negative claim is a property of its
+            # label, not of how sure the extractor was (belief lives in
+            # ``probability``); other axes seed the weight from the belief.
+            weight=(
+                init_probability
+                if has_probability_input and relation_type != RelationType.NEGATIVE
+                else init_weight
+            ),
             confidence=init_probability if has_probability_input else init_confidence,
             provenance=provenance,
             task_history=[provenance] if provenance else [],
@@ -256,6 +288,9 @@ class RelationManager:
         edge = self._relations.get(relation_id)
         if not edge:
             return None
+        # Settle first: the penalty must not be decayed retroactively over
+        # an interval that started before it (Theorem 3.2).
+        settle_relation(edge, self._clock.tick)
         edge.weaken(provenance=provenance)
         self._dirty.add(edge.id)
         return edge
@@ -278,6 +313,7 @@ class RelationManager:
         edge = self._relations.get(relation_id)
         if not edge:
             return None
+        settle_relation(edge, self._clock.tick)
         edge.weight = min(1.0, max(0.01, edge.weight + weight_delta))
         edge.confidence = min(1.0, max(0.01, edge.confidence + confidence_delta))
         # Feedback about the relation's usefulness moves the semantic belief
@@ -285,6 +321,8 @@ class RelationManager:
         # scaled) confidence value.
         edge.probability = min(1.0, max(0.01, edge.probability + confidence_delta))
         self._dirty.add(edge.id)
+        if (weight_delta > 0 or confidence_delta > 0) and self._on_connection is not None:
+            self._on_connection(edge.source_id, edge.target_id)
         return edge
 
     # ── removal ───────────────────────────────────────────────────────

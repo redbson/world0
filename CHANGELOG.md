@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - **Formal paper** (`docs/paper/world0-formal.md`) — the current design
   written as a mathematical model with propositions and proofs: the
-  semigroup property of decay with its era correction, reflect-cadence
+  exact semigroup property of the moving-floor decay, reflect-cadence
   independence, the six-confirmation noise threshold, relation survival
   `E·log2(5p)`, Jaccard as a function of the two conditionals (gate 0.2 ⇔
   P ≥ 1/3), seed dominance and horizon completeness of activation, the
@@ -300,11 +300,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   semigroup and the fading crossing is exact.  A concept used every 720 ticks
   now reaches ESTABLISHED at its 12th use (it needed 324 uses / 232,561
   observations), and the same stream ends in the same (confidence, maturity,
-  existence) under any reflect schedule (spread ≤ 2e-9; before: core /
+  existence) under any reflect schedule (spread ≤ 3e-9; before: core /
   established / developing / embryonic).  Projection ties are broken on
-  scores quantised to 1e-6 (recency, name, id) so equal concepts no longer
-  depend on wall-clock noise.  Still schedule-dependent: re-mentioning a
-  concept that is already prune-eligible (documented in §13).
+  scores quantised to 1e-6 of the strongest activation (recency, name, id)
+  so equal concepts no longer depend on wall-clock noise.  The claim that a
+  sparse cadence reaches ESTABLISHED at the 12th use holds up to the prune
+  grace (720 observations); beyond it the concept is forgotten as noise
+  between uses, in every world (see the existence entry below).
+- **Existence and liveness no longer depend on how often `reflect` runs**
+  (paper F7, Definition 3.6, Theorem 3.7; found by independent review).  A
+  concept or relation that is already dead (a concept: fading, below 0.02
+  and idle ≥ 720; a relation: settled weight below 0.02) is now treated as
+  absent at every event — `IngestPipeline` deletes an expired concept (with
+  its relations) before a mention starts a fresh one, `reap_dead_between`
+  does the same for dead edges on restatement and co-occurrence — so
+  physical deletion at reflect is garbage collection.  Before, a
+  never-reflecting world revived the old node (n accumulating) and a
+  reflecting world created a new one: a concept used every 800 observations
+  reached ESTABLISHED at the 12th use in one and never in the other, and
+  five one-shot partners kept an edge count that made a concept CORE
+  (0.804) where the reflecting world had ESTABLISHED (0.790).  The CORE gate
+  counts only edges above the prune line whose other end is not expired.
+  Relation settling is now the same exact moving-floor solution as
+  concepts (the cadence-dependent survival 8 070–9 000 became one value),
+  and every relation event settles first (`weaken`, restatement with a
+  prior, `adjust_strength`).  Other leaks closed: restating an edge through
+  `relation_priors` and `adjust_strength` now fire the CORE evaluation,
+  `ActivationEngine.activate(record=True)` and positive `adjust_confidence`
+  fire the promotion hook, recurrences are counted at least 24 ticks
+  apart instead of on a fixed grid (a 26-tick burst is no longer three
+  windows), a revived concept lands at the fading line instead of below it,
+  a negative claim's inhibition gain is not overwritten by an extractor
+  prior at creation (0.176 → 0.776 with prior 0.7 before),
+  `split_concept` stamps the new node with the current tick (it was pruned
+  by the next reflect), the projection's score quantum is relative to the
+  strongest activation (faded seeds kept their ranking), and the lifecycle
+  hooks call through `World._lifecycle` so a swapped policy keeps sole
+  authority.  340 random streams end in the same state under reflect
+  every 1 / 50 / 1 000 observations and never
+  (`tests/test_schedule_independence.py`, `docs/paper/verify.py`).
+  Side effect: the shipped `Projection.render()` prints more for a world
+  that never reflects — concepts now reach CORE/ESTABLISHED at the event,
+  and the "Core Understanding" section carries descriptions and link lists
+  (a 200-concept, 3 000-observation world: 1 380 → 3 180 tokens per
+  15-concept view; the compact renderer is unaffected).
 - **A stated negative claim carries a belief, not an inhibition gain**
   (paper §4.2 note, analysis doc §7.21).  `RelationManager.discover` seeded an
   explicit edge's `probability` from `propagation_strength`, which on the
@@ -319,10 +358,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a once-stated `dependence` carries), via `SemanticRelationSpec.claim_prior`
   (positive / parallel unchanged, bit for bit); the inhibition gain
   (`weight`) and activation are untouched.  Stated-once negative claims now
-  live 8 100 observations like a dependence (restated x5: 9 200), a contested
+  live 8 100 observations like a dependence (restated x5: 9 250), a contested
   pair started at equal belief is symmetric under swapping the axes
-  (`enables x10` then `conflict x10`: 0.447 / 0.811, mirror 0.849 / 0.410;
-  before 0.447 / 0.433 and 0.849 / 0.032), and beliefs below 0.2 (an
+  (`dependence x10` then `conflict x10`: 0.410 / 0.811, mirror 0.811 / 0.410;
+  `enables` starts at 0.76, so its pair with `conflict` is not an exact
+  mirror: 0.447 / 0.811 and 0.849 / 0.410; before 0.447 / 0.433 and
+  0.849 / 0.032), and beliefs below 0.2 (an
   extractor's "probably not", a claim disconfirmed that far) are still
   forgotten.  Stores written earlier are migrated once on load
   (`RelationEdge.adopt_claim_prior`, new field `belief_prior`; a belief that

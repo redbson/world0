@@ -2,7 +2,7 @@
 trajectory no longer depends on when ``reflect()`` runs.
 
 Baseline probes (each failed before the change; numbers in
-``docs/world0-cognitive-dynamics-analysis.md`` §7.21):
+``docs/world0-cognitive-dynamics-analysis.md`` §7.22):
 
 - a concept used every 720 observations needed 324 uses (≈ 233 000
   observations) to reach ESTABLISHED, because the promotion gate read the
@@ -288,13 +288,22 @@ class TestSparseCadenceReachesEstablished:
             world.clock.advance(T - 1)
         return cap + 1, node
 
-    @pytest.mark.parametrize("T", [24, 72, 168, 720, 2000])
-    def test_twelve_uses_at_any_cadence_below_half_an_era(self, T):
+    @pytest.mark.parametrize("T", [24, 72, 168, 720])
+    def test_twelve_uses_at_any_cadence_within_the_prune_grace(self, T):
         uses, node = self._uses_to_established(T)
         # Baseline: 13 / 15 / 27 / 324 uses at T = 24 / 72 / 168 / 720.
         assert uses == 12
         assert node.recurrence_count == 12
         assert node.evidence() >= SPACED_ESTABLISHED_EVIDENCE
+
+    @pytest.mark.parametrize("T", [721, 800, 2000])
+    def test_a_cadence_beyond_the_prune_grace_is_forgotten_as_noise(self, T):
+        """Between uses the concept has faded (n <= 6 keeps its floor below
+        the prune line) and idled past PRUNE_MIN_IDLE_TICKS, so every mention
+        meets a fresh node: the same in a world that never reflects."""
+        uses, node = self._uses_to_established(T, cap=20)
+        assert uses > 20 and node.maturity != Maturity.ESTABLISHED
+        assert node.activation_count == 1
 
     def test_a_cadence_beyond_half_an_era_never_qualifies(self):
         uses, node = self._uses_to_established(int(RECURRENCE_CHAIN_GAP), cap=40)
