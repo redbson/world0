@@ -15,6 +15,7 @@ import argparse
 import json
 import os
 import random
+import re
 import statistics
 from collections import defaultdict
 
@@ -134,6 +135,14 @@ def prepare(out: str, gold_path: str, seeds: list[int], horizon: int, every: int
     print(f"{qid} queries x {len(conditions)} conditions -> {out}")
 
 
+_ID = re.compile(r"^([a-z0-9\-]+)\.[a-z0-9\-]+\.[0-9a-f]{12}$")
+
+
+def resolve_ids(pred: set[str]) -> set[str]:
+    """``cazeman-ledger.panucom-work.18f0f6afe5bf`` (World 0's render id) -> ``cazeman ledger``."""
+    return {(_ID.match(x).group(1).replace("-", " ") if _ID.match(x) else x) for x in pred}
+
+
 def f1(pred: set[str], gold: set[str]) -> float:
     hit = len(pred & gold)
     if not pred and not gold:
@@ -148,7 +157,11 @@ def grade(gold_path: str, answers_path: str) -> None:
     raw = json.load(open(answers_path))
     answers = {(a["q"], a["c"]): a["answer"] for a in raw if a}
     by = defaultdict(list)
+    per_query: dict[str, dict[int, list[float]]] = defaultdict(lambda: defaultdict(list))
     stale_named = defaultdict(list)
+    id_answers = defaultdict(list)
+    resolved = defaultdict(list)
+    tokens = defaultdict(list)
     for q in man["queries"]:
         for cond in man["conditions"]:
             ans = answers.get((q["qid"], cond))
@@ -156,23 +169,51 @@ def grade(gold_path: str, answers_path: str) -> None:
                 continue
             pred = {x.strip().lower() for x in ans}
             gold = {x.lower() for x in q["gold"]}
-            by[(cond, q["kind"])].append(f1(pred, gold))
+            score = f1(pred, gold)
+            by[(cond, q["kind"])].append(score)
+            if q["kind"] != "detail":
+                resolved[cond].append(f1(resolve_ids(pred), gold))
+            tokens[cond].append(q["tokens"][cond])
+            id_answers[cond].append(float(any(x.count(".") >= 2 and "-" in x for x in pred)))
+            if q["kind"] != "detail":
+                per_query[cond][q["qid"]].append(score)
             if q["kind"] == "stale":
                 stale_named[cond].append(float(any(x.lower() in pred for x in q["stale"])))
     kinds = ["focus", "chain", "bridge", "stale", "detail"]
-    print("| condition | " + " | ".join(kinds) + " | four-kind mean | stale named | n |")
-    print("|---|" + "---|" * (len(kinds) + 3))
+    rng = random.Random(0)
+
+    def boot(vals: list[float]) -> str:
+        means = sorted(statistics.mean(rng.choices(vals, k=len(vals))) for _ in range(2000))
+        return f"{statistics.mean(vals):.2f} [{means[50]:.2f}, {means[1949]:.2f}]"
+
+    print("| condition | " + " | ".join(kinds) + " | four-kind mean [95 % bootstrap over queries] | stale named | answers as ids | ids resolved (non-detail F1) | mean tokens | n |")
+    print("|---|" + "---|" * (len(kinds) + 6))
     for cond in man["conditions"]:
-        cells, four = [], []
+        cells = []
         for k in kinds:
             v = by.get((cond, k), [])
             cells.append(f"{statistics.mean(v):.2f}" if v else "-")
-            if v and k != "detail":
-                four.append(statistics.mean(v))
+        four = [statistics.mean(v) for k in kinds if k != "detail"
+                for v in [by.get((cond, k), [])] if v]
+        # four-kind mean: kind means averaged; bootstrap resamples the per-query scores within kind
+        rs = []
+        for _ in range(2000):
+            ks = []
+            for k in kinds:
+                if k == "detail":
+                    continue
+                v = by.get((cond, k), [])
+                if v:
+                    ks.append(statistics.mean(rng.choices(v, k=len(v))))
+            rs.append(statistics.mean(ks))
+        rs.sort()
         sn = stale_named.get(cond, [])
         n = sum(len(by.get((cond, k), [])) for k in kinds)
-        print(f"| {cond} | " + " | ".join(cells) + f" | {statistics.mean(four):.2f} | "
-              + (f"{100 * statistics.mean(sn):.0f}%" if sn else "-") + f" | {n} |")
+        print(f"| {cond} | " + " | ".join(cells)
+              + f" | {statistics.mean(four):.2f} [{rs[50]:.2f}, {rs[1949]:.2f}] | "
+              + (f"{100 * statistics.mean(sn):.0f}%" if sn else "-")
+              + f" | {100 * statistics.mean(id_answers[cond]):.0f}% | {statistics.mean(resolved[cond]):.2f}"
+              + f" | {statistics.mean(tokens[cond]):.0f} | {n} |")
 
 
 def main() -> None:

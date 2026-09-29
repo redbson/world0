@@ -295,5 +295,26 @@ def main(path: str) -> None:
     print("\n".join(out))
 
 
+def timing(path: str) -> None:
+    """Serial, cache-free timing run (``run --timing --workers 1``): query latency and write cost."""
+    rows = load(path)
+    print("## Cost: serial run without World 0's projection cache (H=1000, 4 seeds)\n")
+    body = []
+    for s in systems_in(rows, set(ORDER[:17])):
+        lat = [r["latency_ms"] for r in qrows(rows, system=s, budget=bud(s, 1200))]
+        res = [r for r in rows if r["type"] == "resource" and r["system"] == s]
+        if not lat:
+            continue
+        lat.sort()
+        body.append([name(s), f"{statistics.median(lat):.2f}", f"{lat[int(0.95 * len(lat)) - 1]:.2f}",
+                     f"{statistics.mean(r['observe_ms_per_event'] for r in res):.3f}",
+                     f"{statistics.mean(r.get('bytes', 0) for r in res) / 1024:.0f}" if res and "bytes" in res[0] else "shares world0"])
+    print(table(["system", "query median ms", "query p95 ms", "write ms/event", "stored KB"], body))
+    print("\n*budget 1200; single process, but other jobs were running on the machine, so read the ratios, not the absolute values. Stored KB compares a SQLite file (World 0) with raw string sizes (the others).*")
+
+
 if __name__ == "__main__":
-    main(sys.argv[1] if len(sys.argv) > 1 else "docs/eval/results")
+    if len(sys.argv) > 2 and sys.argv[1] == "--timing":
+        timing(sys.argv[2])
+    else:
+        main(sys.argv[1] if len(sys.argv) > 1 else "docs/eval/results")
