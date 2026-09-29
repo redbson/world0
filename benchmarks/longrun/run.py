@@ -19,6 +19,7 @@ BUDGETS = [150, 300, 600, 1200, 2400, 4800]
 CORE = ["none", "window", "full_context", "rag", "rag_recency", "summary_buffer", "summary_task",
         "factstore", "fact_task", "kg_static", "kg_temporal", "state_doc",
         "world0", "world0_compact", "world0_tuned"]
+EVIDENCE = CORE + ["fact_task_s2", "world0_tuned_s2"]   # + 'show only claims stated at least twice'
 ABLATION = CORE + ["world0_reflect", "world0_focus", "world0_notask", "world0_depth1", "world0_depth3"]
 TUNE = ["w0-d1-r0", "w0-d2-r0", "w0-d3-r0", "w0-d1-r25", "w0-d2-r25", "w0-d3-r25"]
 DEV_SEEDS = range(100, 105)
@@ -34,7 +35,7 @@ def studies(seeds: int) -> dict[str, list[dict]]:
             CORE, list(range(min(seeds, 6 if h < 6000 else 4))), horizon=h, query_every=max(10, h // 150))],
         "bigworld": jobs(CORE, list(range(min(seeds, 4))), horizon=6000, n_domains=40,
                          concepts_per_domain=40, growth=True, query_every=40),
-        "extraction": [j for p in (0.05, 0.1, 0.2, 0.3) for j in jobs(CORE, list(range(min(seeds, 6))), horizon=1000, extract_p=p)],
+        "extraction": [j for p in (0.05, 0.1, 0.2, 0.3) for j in jobs(EVIDENCE, list(range(min(seeds, 6))), horizon=1000, extract_p=p)],
         "taskmode": [j for m in ("none", "wrong") for j in jobs(CORE, list(range(min(seeds, 6))), horizon=1000, task_mode=m)],
         "chatter": [j for n in (0.0, 0.5, 0.75) for j in jobs(CORE, list(range(min(seeds, 6))), horizon=1000, noise_rate=n)],
         "verbosity": [j for v in (0, 120, 400) for j in jobs(CORE, list(range(min(seeds, 6))), horizon=1000, verbosity=v)],

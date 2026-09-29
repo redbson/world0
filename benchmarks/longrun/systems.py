@@ -326,6 +326,7 @@ class FactStore(System):
     use_task = False
     honor_retractions = True
     keep_details = True
+    min_count = 1               # ignore facts stated fewer times than this (falls back if nothing remains)
 
     def __init__(self) -> None:
         self.count: dict[Claim, int] = defaultdict(int)
@@ -362,21 +363,27 @@ class FactStore(System):
         return max((task_overlap(q.task_text, t) for t in self.tasks.get(c, ())), default=0.0)
 
     def _select(self, linked: list[str], q: Query) -> list[Claim]:
+        seen = self._walk(linked, self.min_count)
+        if not seen and self.min_count > 1:
+            seen = self._walk(linked, 1)
+        tm = {c: self._task_match(c, q) for c in seen}
+        if self.use_task and any(v > 0 for v in tm.values()):
+            seen = {c: h for c, h in seen.items() if tm[c] > 0}
+        return sorted(seen, key=lambda c: (seen[c], -tm[c], -self.count[c], -self.last[c], c))
+
+    def _walk(self, linked: list[str], min_count: int) -> dict[Claim, int]:
         seen: dict[Claim, int] = {}
         frontier, visited = set(linked), set(linked)
         for hop in range(1, self.hops + 1):
             nxt = set()
             for x in frontier:
                 for c in self.adj.get(x, ()):
-                    if c in self.count and c not in seen:
+                    if c in self.count and c not in seen and self.count[c] >= min_count:
                         seen[c] = hop
                         nxt |= {c.src, c.tgt}
             frontier = nxt - visited
             visited |= nxt
-        tm = {c: self._task_match(c, q) for c in seen}
-        if self.use_task and any(v > 0 for v in tm.values()):
-            seen = {c: h for c, h in seen.items() if tm[c] > 0}
-        return sorted(seen, key=lambda c: (seen[c], -tm[c], -self.count[c], -self.last[c], c))
+        return seen
 
     def _line(self, c: Claim) -> str:
         tk = f" (ticket {', '.join(self.tickets[c])})" if self.tickets.get(c) else ""
@@ -402,6 +409,13 @@ class FactTask(FactStore):
     name = "fact_task"
     hops = 2
     use_task = True
+
+
+class FactTaskS2(FactTask):
+    """fact_task that ignores facts stated only once (the evidence rule a fact store can apply)."""
+
+    name = "fact_task_s2"
+    min_count = 2
 
 
 class KGTemporal(FactStore):
@@ -457,6 +471,7 @@ class World0(System):
     ingest_task = True
     compact = False
     use_cache = True
+    min_support = 1             # compact render: only claims stated at least this often (fallback: all)
 
     def __init__(self, shared: "World0 | None" = None) -> None:
         from world0 import World
@@ -491,7 +506,8 @@ class World0(System):
         names = {c.id: c.name for c in proj.concepts}
         lines, mentioned = [], set()
         rels = [r for r in proj.relations if r.is_explicit and _REL.get(r.semantic_relation)]
-        for r in sorted(rels, key=lambda r: (-r.probability, r.id)):
+        strong = [r for r in rels if r.probability_observation_count + 1 >= self.min_support]
+        for r in sorted(strong or rels, key=lambda r: (-r.probability, r.id)):
             cl = Claim.make(names[r.source_id], _REL[r.semantic_relation], names[r.target_id])
             lines.append(f"{cl.sentence()} (belief {r.probability:.2f})")
             mentioned |= {r.source_id, r.target_id}
@@ -578,6 +594,13 @@ class World0Tuned(World0Compact):
         super().__init__(shared)
 
 
+class World0TunedS2(World0Tuned):
+    """world0_tuned that shows only relations stated at least twice (uses World 0's own evidence counts)."""
+
+    name = "world0_tuned_s2"
+    min_support = 2
+
+
 class World0Reflect(World0Compact):
     name = "world0_reflect"
     reflect_every = 25
@@ -618,8 +641,8 @@ class World0Custom(World0Compact):
 ALL_SYSTEMS: dict[str, type[System]] = {
     cls.name: cls for cls in (
         NoMemory, Window, FullContext, RAG, RAGRecency, SummaryBuffer, SummaryTask,
-        FactStore, FactTask, KGStatic, KGTemporal, StateDoc,
-        World0, World0Compact, World0Tuned, World0Reflect, World0Focus, World0NoTask,
+        FactStore, FactTask, FactTaskS2, KGStatic, KGTemporal, StateDoc,
+        World0, World0Compact, World0Tuned, World0TunedS2, World0Reflect, World0Focus, World0NoTask,
         World0Depth1, World0Depth3,
     )
 }

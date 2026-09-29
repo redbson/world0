@@ -4,7 +4,8 @@ Headline per kind (documented in docs/eval):
 
 * focus   - recall of the hop-ball gold (precision, F1 and radii 1 / 3 alongside);
 * chain   - F1 of the dependency closure an ideal reader derives from the shown claims;
-* bridge  - claim F1 (a wrong-sense claim is a precision loss);
+* bridge  - recall of the bridge concept's claims in the task's domain times sense purity
+            (share of the bridge concept's shown claims that belong to that domain; radius-free);
 * stale   - strict: the current claim is shown and the retracted one is not
             (the lenient belief-order credit is reported separately);
 * detail  - the ticket is in the shown text (episodic; out of scope for World 0).
@@ -55,7 +56,7 @@ def stale_category(q: Query, ctx: Context) -> tuple[str, bool, bool]:
     return "neither", False, False
 
 
-HEADLINE = {"focus": "claim_r", "chain": "answer_f1", "bridge": "claim_f1",
+HEADLINE = {"focus": "claim_r", "chain": "answer_f1", "bridge": "bridge_sense",
             "stale": "stale_correct", "detail": "detail_hit"}
 
 
@@ -68,8 +69,13 @@ def score(q: Query, ctx: Context) -> dict:
         "shown_claims": len(ctx.claims),
         "tokens": est_tokens(ctx.text), "chars4": chars4(ctx.text),
         "answer_f1": 0.0, "stale_cat": "", "stale_correct": 0.0, "stale_lenient": 0.0,
-        "stale_shown": 0.0, "detail_hit": 0.0, "ticket_precision": 0.0,
+        "stale_shown": 0.0, "detail_hit": 0.0, "ticket_precision": 0.0, "bridge_sense": 0.0,
     }
+    if q.kind == "bridge":
+        right, wrong = len(ctx.claims & q.gold_claims), len(ctx.claims & q.wrong_claims)
+        purity = right / (right + wrong) if right + wrong else 0.0
+        row["bridge_purity"] = purity
+        row["bridge_sense"] = r * purity
     if q.kind == "focus":
         for radius, gold in q.gold_by_radius.items():
             _, rr, ff = prf(ctx.claims, gold)
