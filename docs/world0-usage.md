@@ -230,9 +230,9 @@ Uses the configured LLM provider to extract an `Observation` from raw text, then
 - filters via `ProjectionEngine` (MMR)
 - returns a `Projection`
 
-`Projection.render()` 产出可直接注入 prompt 的 Markdown：分区为 *Core Understanding / Active Concepts / Emerging Concepts / Key Relations / Task Context*。`Projection.top_concepts(n)` 返回按激活分排序的前 N 个概念。
+`Projection.render()` 默认产出紧凑的提示词形式：当前主张逐条写成自然语言并带置信度（`api depends on db (belief 0.82)`），随后是 *Also relevant*（视野中的其他概念）、*Definitions*（概念卡描述）、*No longer holds*（已撤回的主张）、*Seen under other tasks*（其他任务下的主张）、*Hold loosely*（有争议或证据单薄）。`render(style="full")` 是诊断视图，分区为 *Core Understanding / Active Concepts / Emerging Concepts / Key Relations / … / Task Context*。`Projection.top_concepts(n)` 返回按激活分排序的前 N 个概念。
 
-`Projection.render()` produces prompt-ready Markdown grouped into *Core Understanding / Active Concepts / Emerging Concepts / Key Relations / Task Context*. `Projection.top_concepts(n)` returns the top-N concepts by activation score.
+`Projection.render()` produces the compact prompt form by default: each current claim as a sentence with its belief (`api depends on db (belief 0.82)`), then *Also relevant* (other concepts in view), *Definitions* (concept-card descriptions), *No longer holds* (withdrawn claims), *Seen under other tasks* and *Hold loosely* (contested or thin knowledge). `render(style="full")` is the diagnostic view grouped into *Core Understanding / Active Concepts / Emerging Concepts / Key Relations / … / Task Context*. `Projection.top_concepts(n)` returns the top-N concepts by activation score.
 
 ### `World.reflect() -> ReflectResult`
 

@@ -140,6 +140,22 @@ class TestV2:
         ctx = systems["world0_compact"].query(last, linked, 1200)
         assert all(c.src in ctx.text and c.tgt in ctx.text for c in ctx.claims)
 
+    def test_compact_parser_credits_only_current_claims(self, tmp_path):
+        """Withdrawn, other-task and contested lines are context, not claims."""
+        from world0 import Observation, World
+
+        w = World(store_path=tmp_path)
+        for _ in range(3):
+            w.ingest(Observation(concepts=["api", "db"], relations=[("api", "db", "depends_on")], task="alpha work"))
+            w.ingest(Observation(concepts=["api", "q"], relations=[("api", "q", "depends_on")], task="beta work"))
+        w.ingest(Observation(concepts=["api", "cache"], relations=[("api", "cache", "depends_on")],
+                             retracted_relations=[("api", "db", "depends_on")], task="alpha work"))
+        text = w.project(["api"], task="alpha work", max_concepts=6).render()
+        assert "No longer holds:" in text and "Seen under other tasks:" in text
+        claims, concepts, _ = parse_compact(text)
+        assert claims == {Claim.make("api", "depends_on", "cache")}
+        assert concepts == {"api", "cache", "q"}  # q is in view ("Also relevant"), its claim is not current here
+
     def test_no_system_uses_the_hidden_domain(self):
         """Systems may see the task label but never ``ev.domain``."""
         import inspect

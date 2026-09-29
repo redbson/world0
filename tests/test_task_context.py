@@ -183,7 +183,7 @@ class TestContextSplit:
 
     def test_render_lists_the_other_contexts(self, tmp_path):
         w = _polysemous_world(tmp_path)
-        text = w.project(["pipeline"], task="data engineering work", max_concepts=10).render()
+        text = w.project(["pipeline"], task="data engineering work", max_concepts=10).render(style="full")
         assert "### Seen in Other Tasks" in text
         assert "model training work" in text
 

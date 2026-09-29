@@ -421,7 +421,7 @@ class TestReflectConsolidation:
 # ═══════════════════════════════════════════════════════════════════════
 
 class TestRenderQuality:
-    """Projection render() output should be well-structured for LLM consumption."""
+    """The full (diagnostic) render is well-structured markdown."""
 
     def _ingest_all(self, world):
         for obs in SESSION_1_OBSERVATIONS + SESSION_2_OBSERVATIONS + SESSION_3_OBSERVATIONS:
@@ -436,7 +436,7 @@ class TestRenderQuality:
     def test_render_contains_markdown_structure(self, world):
         self._ingest_all(world)
         proj = world.project(["FastAPI", "Python"], task="backend work")
-        rendered = proj.render()
+        rendered = proj.render(style="full")
 
         assert "## Cognitive Context" in rendered
         assert "**" in rendered  # bold concept names
@@ -445,7 +445,7 @@ class TestRenderQuality:
     def test_render_includes_relations(self, world):
         self._ingest_all(world)
         proj = world.project(["FastAPI", "Python"], task="backend work")
-        rendered = proj.render()
+        rendered = proj.render(style="full")
 
         if proj.relations:
             assert "### Key Relations" in rendered

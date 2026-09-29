@@ -42,7 +42,7 @@ class TestRetraction:
         assert ("api", "cache") in _names(p, p.relations)
         assert ("api", "db") not in _names(p, p.relations)
         assert _names(p, p.retracted) == {("api", "db")}
-        assert "### No Longer Holds" in p.render()
+        assert "### No Longer Holds" in p.render(style="full")
 
     def test_the_ingest_result_reports_it(self, tmp_path):
         w = World(store_path=tmp_path)

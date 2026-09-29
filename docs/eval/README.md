@@ -56,8 +56,8 @@ Agent 每次在一个领域里工作一段（run），每个事件陈述当前�
 | `kg_temporal` | 带失效与出处的图（Zep/GraphRAG 式），两跳 | 抽取结果 |
 | `kg_static` | 只增不删的图（不处理撤回），作消融 | 抽取结果 |
 | `state_doc` | 把整个当前状态当作一份文档，当前任务的事实排在前面，截断到预算 | 抽取结果 |
-| `world0` | World 0 按出厂方式：`World.project`（depth 2、不 reflect）+ `Projection.render()` | 抽取结果 |
-| `world0_compact` | 同一个投影，用紧凑格式渲染（类型化主张 + 信念） | 抽取结果 |
+| `world0` | World 0 默认参数：`World.project`（depth 2、不 reflect）+ 完整渲染 `Projection.render(style="full")`（第 24 轮之前的默认渲染，保留以便与早期报告对比） | 抽取结果 |
+| `world0_compact` | 同一个投影，用 World 0 的默认紧凑渲染 `Projection.render()`（自然语言主张 + 信念；撤回的、其他任务的、有争议的另列） | 抽取结果 |
 | `world0_tuned` | 紧凑渲染，depth / reflect 频率**只在 dev seeds（100–104）上选定**（`tuned.json`），报告用 test seeds（0–9） | 抽取结果 |
 | `world0_reflect / focus / notask / depth1 / depth3` | World 0 的消融变体 | 抽取结果 |
 
@@ -79,7 +79,7 @@ Agent 每次在一个领域里工作一段（run），每个事件陈述当前�
 每个系统的实际 token 用量与分数并列报告，因为结构化系统只返回相关内容，并不会用满预算。
 
 打分读的是**系统实际放进提示词的文本**（`parse.py` 从渲染文本里解析主张），不是背后的投影对象：
-出厂的 `render()` 最多打印 10 条关系，超出的不计分。
+完整渲染最多打印 10 条关系，超出的不计分；紧凑渲染只把第一个小节之前的主张行计为主张，"No longer holds / Seen under other tasks / Hold loosely" 下的行不计。
 
 ## 4. 统计
 

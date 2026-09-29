@@ -44,14 +44,26 @@ def parse_shipped(text: str) -> tuple[set[Claim], set[str], dict[Claim, float]]:
 
 
 def parse_compact(text: str) -> tuple[set[Claim], set[str], dict[Claim, float]]:
+    """``Projection.render(style="compact")``: claim bullets before the first section.
+
+    Withdrawn claims, claims from other tasks and the "Hold loosely"
+    section come under their own ``Label:`` lines and are not credited as
+    claims; ``Also relevant`` names the other concepts in view.
+    """
     claims: set[Claim] = set()
     concepts: set[str] = set()
     beliefs: dict[Claim, float] = {}
+    in_claims = True
     for line in text.splitlines():
         if line.startswith("Also relevant: "):
             concepts |= {x.strip() for x in line[len("Also relevant: "):].rstrip(".").split(",") if x.strip()}
             continue
-        m = _SENTENCE.match(line)
+        if line.endswith(":") and not line.startswith("- "):
+            in_claims = False  # "Definitions:", "No longer holds:", …
+            continue
+        if not (in_claims and line.startswith("- ")):
+            continue
+        m = _SENTENCE.match(line[2:])
         if m:
             a, phrase, b, belief = m.groups()
             c = Claim.make(a, _PHRASE2REL[phrase], b)

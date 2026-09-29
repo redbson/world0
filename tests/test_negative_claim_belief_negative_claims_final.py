@@ -385,7 +385,7 @@ class TestContestedPairs:
         w = World(store_path=tmp_path / "w")
         _state(w, "pytorch", "gpu", "enables")
         _state(w, "pytorch", "gpu", "conflict")
-        text = w.project(["pytorch"]).render()
+        text = w.project(["pytorch"]).render(style="full")
         line = next(ln for ln in text.splitlines() if "→ conflict [negative]" in ln)
         assert "belief: 0.70" in line
         assert "Contested:" in text

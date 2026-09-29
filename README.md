@@ -203,24 +203,25 @@ projection = w.project(
 print(projection.render())
 ```
 
-The `render()` output is markdown, ready to inject into an Agent's system prompt:
+`render()` returns the compact prompt form: current claims in plain language with their belief, the other concepts in view, then what to discount — withdrawn claims, claims made under other tasks, contested or thin knowledge. `render(style="full")` is the diagnostic view (maturity, confidence, evidence, strengths, reinforcement counts, attention traces).
 
-`render()` 输出为 markdown 格式，可直接注入 Agent 的 system prompt：
+`render()` 返回紧凑的提示词形式：当前主张（自然语言 + 置信度）、视野中的其他概念，以及需要打折扣的内容——已撤回的主张、在其他任务下提出的主张、有争议或证据单薄的知识。`render(style="full")` 是诊断视图（成熟度、置信度、证据、强度、强化次数、注意力追踪）。
 
 ```markdown
 ## Cognitive Context
-
-### Core Understanding
-- **FastAPI** (developing, confidence: 0.73): Modern async web framework for Python. Linked to: Python, REST API.
-- **PostgreSQL** (developing, confidence: 0.68). Linked to: REST API, SQLAlchemy.
-
-### Key Relations
-- FastAPI → depends_on → Python (strength: 0.62, reinforced 8x)
-- REST API → depends_on → PostgreSQL (strength: 0.55, reinforced 6x)
-
-### Task Context
-Concepts activated for: optimize query performance
+Context for: ml training
+- training loop depends on PyTorch (belief 0.73)
+- PyTorch depends on GPU (belief 0.73)
+Also relevant: ONNX.
+Seen under other tasks:
+- PyTorch enables ONNX (deployment)
+Hold loosely:
+- thin evidence: ONNX
 ```
+
+In the LongRun evaluation real LLM readers answered 0.90 of the questions from the compact form and 0.57 from the full one at the same token budget (`docs/eval/01-report.md`).
+
+LongRun 评测中，同样的 token 预算下，真实 LLM 读者用紧凑形式答对 0.90，用完整形式 0.57（`docs/eval/01-report.md`）。
 
 ## Core Concepts / 核心概念
 

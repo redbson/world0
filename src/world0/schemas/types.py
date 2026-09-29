@@ -214,8 +214,105 @@ class Projection(BaseModel):
         )
         return ranked[:n]
 
-    def render(self) -> str:
-        """Render as LLM-prompt-ready markdown."""
+    def render(self, style: str = "compact") -> str:
+        """Render the view for an Agent's prompt.
+
+        ``"compact"`` (the default) states each claim in plain language
+        with its belief — ``api depends on db (belief 0.82)`` — and lists
+        the other concepts in view by name; ``"full"`` is the diagnostic
+        view (maturity, confidence, evidence, strengths, reinforcement
+        counts, attention traces).  In LongRun real readers answered 0.90
+        of the questions from the compact form and 0.57 from the full one
+        at the same token budget (``docs/eval/01-report.md``).
+        """
+        if style == "compact":
+            return self._render_compact()
+        if style != "full":
+            raise ValueError(f"unknown render style {style!r} (compact, full)")
+        return self._render_full()
+
+    def _display_names(self) -> dict[str, str]:
+        """Concept names, with the sense added where two in view share a name."""
+        seen: dict[str, int] = {}
+        for c in self.concepts:
+            seen[c.name.lower()] = seen.get(c.name.lower(), 0) + 1
+        names = dict(self.outside_names)
+        for c in self.concepts:
+            if seen[c.name.lower()] > 1:
+                names[c.id] = f"{c.name} ({c.representation_feature()})"
+            else:
+                names[c.id] = c.name
+        return names
+
+    def _render_compact(self) -> str:
+        """Claims first, then what else is in view, then what to discount.
+
+        Claim lines are the explicit relations in view, strongest belief
+        first; co-occurrence edges assert nothing and only put their
+        concepts under "Also relevant".  Withdrawn claims, claims from
+        other tasks and contested / thin knowledge follow in labelled
+        sections, so a reader never takes them for current claims.
+        """
+        # Local import: the phrase table is a presentation concern of the
+        # relation schema, kept next to the specs it covers.
+        from world0.schemas.relation import relation_phrase
+
+        names = self._display_names()
+
+        def sentence(r: RelationEdge) -> str:
+            return f"{names.get(r.source_id, r.source_id)} {relation_phrase(r.semantic_relation)} " \
+                   f"{names.get(r.target_id, r.target_id)}"
+
+        lines: list[str] = ["## Cognitive Context"]
+        if self.task:
+            lines.append(f"Context for: {self.task}")
+        if not self.concepts:
+            lines.append("No concepts in view.")
+            return "\n".join(lines)
+        claims = [r for r in self.relations if r.is_explicit]
+        mentioned: set[str] = set()
+        for r in sorted(claims, key=lambda r: -r.probability):  # stable: engine order breaks ties
+            lines.append(f"- {sentence(r)} (belief {r.probability:.2f})")
+            mentioned |= {r.source_id, r.target_id}
+        rest = [
+            names[c.id]
+            for c in sorted(self.concepts, key=lambda c: -self.activation_scores.get(c.id, 0.0))
+            if c.id not in mentioned
+        ]
+        if rest:
+            lines.append("Also relevant: " + ", ".join(rest) + ".")
+        described = [c for c in self.concepts if c.description]
+        if described:
+            lines.append("Definitions:")
+            lines.extend(f"- {names[c.id]}: {c.description}" for c in described)
+        if self.retracted:
+            lines.append("No longer holds:")
+            lines.extend(f"- {sentence(r)}" for r in self.retracted[:10])
+        if self.other_contexts:
+            lines.append("Seen under other tasks:")
+            for r in self.other_contexts[:10]:
+                tasks = ", ".join(sorted({t for t in r.claim_tasks if t})[:3])
+                lines.append(f"- {sentence(r)}" + (f" ({tasks})" if tasks else ""))
+        loose: list[str] = []
+        rels = {r.id: r for r in (*self.relations, *self.other_contexts)}
+        for claim in self.epistemic.contested:
+            parts = []
+            for rid, semantic, belief in claim.claims:
+                rel = rels.get(rid)
+                src = names.get(rel.source_id if rel else claim.source_id, "?")
+                tgt = names.get(rel.target_id if rel else claim.target_id, "?")
+                parts.append(f"{src} {relation_phrase(semantic)} {tgt} ({belief:.2f})")
+            joiner = " vs " if claim.status == "contested" else " over "
+            loose.append(f"- {claim.status}: {joiner.join(parts)}")
+        tentative = [names[cid] for cid in self.epistemic.tentative_ids() if cid in names]
+        if tentative:
+            loose.append(f"- thin evidence: {', '.join(tentative)}")
+        if loose:
+            lines.append("Hold loosely:")
+            lines.extend(loose)
+        return "\n".join(lines)
+
+    def _render_full(self) -> str:
         lines: list[str] = ["## Cognitive Context", ""]
 
         # Group by maturity
@@ -305,7 +402,7 @@ class Projection(BaseModel):
             lines.append("### Seen in Other Tasks")
             names = {c.id: c.name for c in self.concepts}
             for r in self.other_contexts[:10]:
-                tasks = ", ".join(sorted({t for t in r.task_history if t})[:3])
+                tasks = ", ".join(sorted({t for t in (r.claim_tasks or r.task_history) if t})[:3])
                 lines.append(
                     f"- {names.get(r.source_id, r.source_id)} → {r.semantic_relation} → "
                     f"{names.get(r.target_id, r.target_id)} (under: {tasks})"

@@ -506,7 +506,12 @@ def _tuned() -> dict:
 
 
 class World0(System):
-    """World 0 as its facade ships (depth 2, no reflect) with ``Projection.render()``."""
+    """World 0 at its facade defaults (depth 2, no reflect) with the full (diagnostic) render.
+
+    Kept on ``render(style="full")`` — World 0's default render until
+    round 24 — so earlier reports stay comparable; the default is now the
+    compact render (``world0_compact``).
+    """
 
     name = "world0"
     depth = 2
@@ -549,19 +554,16 @@ class World0(System):
 
     def _render(self, proj) -> str:
         if not self.compact:
-            return proj.render()
-        names = {c.id: c.name for c in proj.concepts}
-        lines, mentioned = [], set()
-        rels = [r for r in proj.relations if r.is_explicit and _REL.get(r.semantic_relation)]
-        strong = [r for r in rels if r.probability_observation_count + 1 >= self.min_support]
-        for r in sorted(strong or rels, key=lambda r: (-r.probability, r.id)):
-            cl = Claim.make(names[r.source_id], _REL[r.semantic_relation], names[r.target_id])
-            lines.append(f"{cl.sentence()} (belief {r.probability:.2f})")
-            mentioned |= {r.source_id, r.target_id}
-        rest = [c.name for c in proj.concepts if c.id not in mentioned]
-        if rest:
-            lines.append("Also relevant: " + ", ".join(rest) + ".")
-        return "\n".join(lines)
+            return proj.render(style="full")
+        if self.min_support > 1:
+            # Only claims stated at least ``min_support`` times (fallback: all).
+            rels = [r for r in proj.relations if r.is_explicit]
+            strong = [r for r in rels if r.probability_observation_count + 1 >= self.min_support]
+            if strong and len(strong) < len(rels):
+                keep = {r.id for r in strong}
+                proj = proj.model_copy(update={"relations": [
+                    r for r in proj.relations if not r.is_explicit or r.id in keep]})
+        return proj.render(style="compact")
 
     def query(self, q, linked, budget):
         task = q.task_text if self.use_task else ""
@@ -611,16 +613,13 @@ class World0(System):
             pass
 
 
-_REL = {"dependence": "depends_on", "inclusion": "contains", "conflict": "conflict", "enables": "enables"}
-
-
 class World0Compact(World0):
-    """The same projection rendered compactly (typed claims with belief).
+    """The same projection with World 0's default, compact render.
 
-    ``Projection.render()`` spends most tokens on concept ids, maturity and
+    The full render spends most tokens on concept ids, maturity and
     confidence annotations, co-occurrence edges and an attention section and
-    prints at most ten relations; this renderer isolates how much of World 0's
-    cost is the render and how much the projection.
+    prints at most ten relations; comparing the two isolates how much of
+    World 0's cost is the render and how much the projection.
     """
 
     name = "world0_compact"

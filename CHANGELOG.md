@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Compact render is the default** (analysis doc §7.26) —
+  `Projection.render()` now returns the prompt form LongRun's readers did
+  best with (0.90 vs 0.57 for the full render at the same budget): current
+  claims as sentences with belief, strongest first
+  (`api depends on db (belief 0.82)`), other concepts in view, concept-card
+  definitions, and labelled sections for what to discount — withdrawn
+  claims, claims made under other tasks, contested or thin knowledge.
+  Homonyms carry their sense.  `render(style="full")` keeps the diagnostic
+  view.  `RELATION_PHRASES` / `relation_phrase()` phrase every semantic
+  relation.
 - **Task context** (analysis doc §7.24, paper §7.3) — task words are weighted
   by how distinctive they are among the world's task labels
   (`TaskVocabulary`: `ln((L+1)/(df+1)) + 0.01`), so shared boilerplate
@@ -336,6 +346,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   projection unchanged.  `RelationEdge.is_directed` exposes the rule.
 
 ### Fixed
+- **`inclusion` direction** — the extraction prompt and the relation spec
+  described `inclusion` as "A is contained in B" while the `contains` alias
+  (and every stated `contains` claim) reads source-contains-target; both now
+  say "A contains B" (`proper_inclusion` likewise).
 - **Maturity no longer depends on how often `reflect` runs** (`docs/paper/world0-formal.md`
   §3.5, F6, Theorem 3.7).  Promotion gates now contain only quantities that
   become true at events (confirmations, disconfirmations, spaced recurrence,

@@ -124,7 +124,7 @@ class TestAttentionSchema:
         by_name = {c.name: p.attention[c.id] for c in p.concepts}
         assert by_name["kubernetes"].in_focus and by_name["kubernetes"].sustained
         assert not by_name["pytorch"].sustained  # bridge seed passes no focus to its ML side
-        text = p.render()
+        text = p.render(style="full")
         assert "### Why These Concepts" in text and "still in focus" in text
 
 

@@ -1228,6 +1228,27 @@ fading 发作。）认知基准的精确度 / 召回 / 覆盖 / Jaccard 距离�
 `tests/test_task_context.py`）。评审的 12 个复现脚本在修复后全部给出正确结果；加入 25% 撤回事件的随机流在四种 reflect 安排下
 终态一致（差 ≤ 1e-6）。
 
+### 7.26 紧凑渲染成为默认 ✅
+
+**问题**。LongRun 里同一个投影，出厂 `render()` 让真实读者答对 0.57，基准自带的紧凑格式 0.90：出厂渲染按成熟度分节，
+每个概念打印 `name.feature.id`、成熟度、置信度、证据，关系行打印轴、结构 / 传播强度与强化次数，最多 10 条关系；读者要自己
+把 id 对回名字，预算大半花在注释上。紧凑格式只存在于基准代码里，Agent 拿不到。
+
+**改动**。`Projection.render(style="compact")` 成为默认，`style="full"` 保留为诊断视图：
+
+- 当前主张一行一句，按信念从高到低：`api depends on db (belief 0.82)`；短语表 `RELATION_PHRASES` 覆盖全部 26 个语义关系，
+  按陈述方向读（`contains` / `part_of` / `depends_on` 的别名方向与规范名一致）。
+- 共现边不算主张，只把端点列进 `Also relevant`；概念卡描述列在 `Definitions`；同名概念加上义项（`Apple (fruit)`）。
+- 需要打折扣的另列、带标签，读者不会把它们当成当前主张：`No longer holds`（撤回）、`Seen under other tasks`（带任务名，
+  来自 `claim_tasks`）、`Hold loosely`（有争议 / 倾向的主张对、证据单薄的概念）。
+- 顺带修正：`inclusion` / `proper_inclusion` 的说明原为 "A is contained in B"，与别名 `contains`（源包含目标）方向相反；
+  抽取提示词与规格说明统一为 "A contains B"。
+
+**测量**（LongRun main，10 个 seed，基准改用库里的紧凑渲染）：1200 token 下 `world0_tuned` 0.95 → 0.95、`world0_compact`
+0.90 → 0.90，token 多 14–18%（撤回与"其他任务"两节是基准自带渲染丢掉的内容）；紧预算下略降（300：0.75 → 0.71，600：
+0.93 → 0.91）。打分只从主张行解析，这两节对读者的价值（不复述过期或别的任务的主张）不计分；保留它们是有意的取舍。
+`tests/test_compact_render.py`。
+
 ---
 
 ## 8. 复现

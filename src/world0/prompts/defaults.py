@@ -52,8 +52,8 @@ label only; World 0 maps that label to an axis and deterministic scores.
 
 Positive / attraction labels:
 - membership: x belongs to A
-- inclusion: A is contained in B
-- proper_inclusion: A is strictly contained in B
+- inclusion: A contains B
+- proper_inclusion: A strictly contains B
 - functional_map: f(x) maps to y
 - co_creation: concepts jointly produce or shape each other
 - mutual_reinforcement: concepts strengthen each other's relevance

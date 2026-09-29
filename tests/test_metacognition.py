@@ -47,7 +47,7 @@ class TestReliability:
         w = World(store_path=tmp_path / "w")
         _mention(w, "often", 20)
         _mention(w, "once", 1)
-        text = w.project(["hub"], max_concepts=10).render()
+        text = w.project(["hub"], max_concepts=10).render(style="full")
         assert "### Epistemic Status" in text
         assert "Thin evidence" in text and "once" in text.split("Thin evidence")[1]
 
@@ -88,7 +88,7 @@ class TestContestedClaims:
             w.ingest(Observation(concepts=["pytorch", "gpu cluster"], relations=[("pytorch", "gpu cluster", "conflict")], source="s"))
         p = w.project(["pytorch"])
         assert len(p.epistemic.contested) == 1
-        text = p.render()
+        text = p.render(style="full")
         assert "Leaning: pytorch enables gpu cluster" in text or "Contested:" in text
 
 
@@ -97,7 +97,7 @@ class TestRender:
         w = World(store_path=tmp_path / "w")
         for _ in range(4):
             w.ingest(Observation(concepts=["a", "b", "c"], relations=[("a", "b", "depends_on")], source="s"))
-        text = w.project(["a"]).render()
+        text = w.project(["a"]).render(style="full")
         line_ab = next(ln for ln in text.splitlines() if "→ dependence" in ln)
         assert "belief:" in line_ab
         assert any("co-occurrence" in ln for ln in text.splitlines() if "generic_relation" in ln)

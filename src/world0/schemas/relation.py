@@ -166,10 +166,10 @@ SEMANTIC_RELATION_SPECS: dict[str, SemanticRelationSpec] = {
         "membership", RelationType.POSITIVE, 0.94, 0.88, "x belongs to A"
     ),
     "inclusion": SemanticRelationSpec(
-        "inclusion", RelationType.POSITIVE, 0.92, 0.86, "A is contained in B"
+        "inclusion", RelationType.POSITIVE, 0.92, 0.86, "A contains B"
     ),
     "proper_inclusion": SemanticRelationSpec(
-        "proper_inclusion", RelationType.POSITIVE, 0.93, 0.87, "A is strictly contained in B"
+        "proper_inclusion", RelationType.POSITIVE, 0.93, 0.87, "A strictly contains B"
     ),
     "functional_map": SemanticRelationSpec(
         "functional_map", RelationType.POSITIVE, 0.90, 0.84, "f(x) maps to y"
@@ -361,6 +361,44 @@ def normalize_semantic_relation(value: str | None) -> str:
 def semantic_relation_spec(value: str | None) -> SemanticRelationSpec:
     """Return the score/axis mapping for a language relation label."""
     return SEMANTIC_RELATION_SPECS[normalize_semantic_relation(value)]
+
+
+# How a claim reads in plain language, source first: "<source> <phrase>
+# <target>".  Used by the compact projection render, the form an Agent's
+# prompt receives; one entry per canonical semantic relation.
+RELATION_PHRASES: dict[str, str] = {
+    "membership": "belongs to",
+    "inclusion": "contains",
+    "proper_inclusion": "strictly contains",
+    "functional_map": "maps to",
+    "co_creation": "co-creates",
+    "mutual_reinforcement": "reinforces",
+    "future_coupling": "is coupled in future with",
+    "enables": "enables",
+    "dependence": "depends on",
+    "disjointness": "is disjoint from",
+    "complement": "is the complement of",
+    "exclusion": "excludes",
+    "incompatible_ontology": "is incompatible with",
+    "violates_constraint": "violates",
+    "conflict": "conflicts with",
+    "instability": "destabilizes",
+    "adversarial_prediction": "predicts against",
+    "equivalence": "is equivalent to",
+    "quotient_map": "maps into the same class as",
+    "approximate_equivalence": "is roughly equivalent to",
+    "overlap": "overlaps with",
+    "similarity_kernel": "is similar to",
+    "recursive_co_modeling": "co-models",
+    "persistent_attention": "attends to",
+    "co_membership": "shares a group with",
+    "generic_relation": "is related to",
+}
+
+
+def relation_phrase(value: str | None) -> str:
+    """Plain-language phrase for a relation label (canonical or alias)."""
+    return RELATION_PHRASES[normalize_semantic_relation(value)]
 
 
 def semantic_relation_names(axis: RelationType | str | None = None) -> list[str]:

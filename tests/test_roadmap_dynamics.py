@@ -369,7 +369,7 @@ class TestRelativeCutAndEvidence:
     def test_render_exposes_evidence_next_to_confidence(self, world):
         for _ in range(3):
             world.ingest(Observation(concepts=["r", "q"], relations=[("r", "q", "depends_on")], source="s"))
-        text = world.project(["r"]).render()
+        text = world.project(["r"]).render(style="full")
         assert "confidence: " in text and "evidence: " in text
 
 
