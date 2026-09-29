@@ -10,9 +10,9 @@
   2400,
   4800
  ],
- "commit": "185a970",
+ "commit": "bd8c33d",
  "dirty_src_or_benchmarks": false,
- "seconds": 612.3,
+ "seconds": 571.1,
  "python": "3.11.15",
  "cpus": 4,
  "workers": 4
