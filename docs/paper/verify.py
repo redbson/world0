@@ -810,6 +810,48 @@ def check_opposition() -> None:
        f"E10,C10: dependence {e:.3f} vs conflict {c:.3f} (the later block leads)")
 
 
+def check_read_path() -> None:
+    section("§3.2 Corollary 3.2': activation reads settled values, so a view between uses ignores reflect")
+    outs = []
+    for reflect in (False, True):
+        w = World(store_path=tempfile.mkdtemp())
+        for _ in range(6):
+            w.ingest(Observation(concepts=["a", "b", "c"], relations=[("a", "b", "depends_on")]))
+        w.clock.advance(300)
+        if reflect:
+            w.reflect(light=True)
+        a = w.concepts.resolve("a")
+        act = ActivationEngine(w.concepts, w.relations, clock=w.clock).activate([a.id], record=False)
+        outs.append({w.concepts.get(k).name: v for k, v in act.items()})
+    assert outs[0].keys() == outs[1].keys()
+    assert all(abs(outs[0][k] - outs[1][k]) < 1e-9 for k in outs[0]), outs
+    ok("same stream, same tick, reflect vs none", f"seed score {outs[0]['a']:.4f} / {outs[1]['a']:.4f}")
+
+
+def check_task_vocabulary() -> None:
+    section("§7.3 Prop 7.7: a word every task label carries does not match another task")
+    from world0.schemas.concept import TaskVocabulary, task_match_score
+
+    labels = [f"domain{i} work" for i in range(8)]
+    vocab = TaskVocabulary()
+    for label in labels:
+        vocab.add(label)
+    assert vocab.weight("work") == 0.0
+    plain = task_match_score("domain1 work", "domain2 work")
+    weighted = task_match_score("domain1 work", "domain2 work", vocab)
+    assert plain == 0.5 and weighted == 0.0
+    ok("'domain1 work' vs 'domain2 work'", f"unweighted {plain:.2f} → weighted {weighted:.2f}")
+    w = World(store_path=tempfile.mkdtemp())
+    for i in range(20):
+        w.ingest(Observation(concepts=[f"x{i % 6}", f"y{i % 4}"], task=labels[i % 5]))
+    ref = TaskVocabulary()
+    for node in w.concepts.all():
+        for label in node.task_profile:
+            ref.add(label)
+    assert w.concepts.task_vocabulary._labels == ref._labels
+    ok("incremental vocabulary equals the one rebuilt from profiles", f"{len(ref)} labels")
+
+
 def main() -> None:
     check_clock()
     check_gain()
@@ -817,6 +859,7 @@ def main() -> None:
     check_fading_boundary()
     check_schedule_independence()
     check_maturity_schedule_independence()
+    check_read_path()
     check_noise_threshold()
     check_one_off()
     check_recurrence_bound()
@@ -833,6 +876,7 @@ def main() -> None:
     check_floor()
     check_seed_dominance_and_horizon()
     check_seed_first()
+    check_task_vocabulary()
     check_focus()
     check_prediction_calibration()
     check_prediction_per_companion()
