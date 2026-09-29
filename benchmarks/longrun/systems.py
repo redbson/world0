@@ -508,7 +508,9 @@ class World0(System):
         self.world.ingest(Observation(
             concepts=list(x.concepts),
             relations=[(c.src, c.tgt, c.rel) for c in x.claims],
-            contradicted_relations=[(c.src, c.tgt, c.rel) for c in x.retractions],
+            # "Correction: X no longer depends on Y" is a revision of the
+            # world, not evidence the claim was wrong: withdraw it.
+            retracted_relations=[(c.src, c.tgt, c.rel) for c in x.retractions],
             task=ev.task if self.ingest_task else "", source=f"step{ev.step}",
         ))
 

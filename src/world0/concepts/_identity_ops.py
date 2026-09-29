@@ -83,6 +83,7 @@ def merge_concepts(
     manager.mark_dirty(keeper.id)
 
     manager.remove(absorbed.id)
+    manager.invalidate_task_vocabulary()
     return keeper
 
 
@@ -141,6 +142,7 @@ def split_concept(
     manager._token_index.index_node(source)  # type: ignore[attr-defined]
     manager.mark_dirty(source.id)
     manager.mark_dirty(new_node.id)
+    manager.invalidate_task_vocabulary()
     return new_node
 
 

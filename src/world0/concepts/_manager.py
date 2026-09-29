@@ -22,6 +22,7 @@ from world0.schemas.clock import CognitiveClock
 from world0.schemas.concept import (
     ConceptNode,
     Maturity,
+    TaskVocabulary,
     build_concept_identity_key,
     normalize_identity_part,
     tokenize_signature,
@@ -71,6 +72,13 @@ class ConceptManager:
         ] = {}
         # Event hook wired by the owning ``World`` (see ``connect_lifecycle``).
         self._on_activation: Callable[[ConceptNode], None] | None = None
+        # Distinct task labels carried by concept profiles (for weighting
+        # task words by distinctiveness).  Maintained incrementally by
+        # ``reinforce`` / ``remove``; rebuilt from the profiles after
+        # identity operations and on load, so it is a function of the
+        # stored profiles.
+        self._task_vocabulary = TaskVocabulary()
+        self._vocabulary_stale = False
 
     def connect_lifecycle(
         self, *, on_activation: Callable[[ConceptNode], None] | None = None
@@ -97,6 +105,25 @@ class ConceptManager:
             self._identity_index[node.ensure_identity_key()] = node.id
             self._name_index.index_node(node)
             self._token_index.index_node(node)
+        self.invalidate_task_vocabulary()
+
+    # ── task vocabulary ───────────────────────────────────────────────
+
+    @property
+    def task_vocabulary(self) -> TaskVocabulary:
+        """Word document frequencies over the task labels concepts carry."""
+        if self._vocabulary_stale:
+            vocabulary = TaskVocabulary()
+            for node in self._concepts.values():
+                for label in node.task_profile:
+                    vocabulary.add(label)
+            self._task_vocabulary = vocabulary
+            self._vocabulary_stale = False
+        return self._task_vocabulary
+
+    def invalidate_task_vocabulary(self) -> None:
+        """Profiles changed outside ``reinforce`` / ``remove``: rebuild lazily."""
+        self._vocabulary_stale = True
 
     def save_all(self) -> None:
         """Persist all concepts to store (batch)."""
@@ -457,7 +484,14 @@ class ConceptManager:
         # Settle the decay owed since the last use first: activation moves
         # the decay reference to now (docs/paper, Theorem 3.2).
         settle_concept(node, self._clock.tick)
+        before = set(node.task_profile)
         node.activate(source=source, task=task, tick=self._clock.tick)
+        if not self._vocabulary_stale:
+            after = node.task_profile
+            for label in after.keys() - before:
+                self._task_vocabulary.add(label)
+            for label in before - after.keys():
+                self._task_vocabulary.discard(label)
         self._dirty.add(node.id)
         if self._on_activation is not None:
             self._on_activation(node)
@@ -563,6 +597,9 @@ class ConceptManager:
         node = self._concepts.pop(concept_id, None)
         if not node:
             return False
+        if not self._vocabulary_stale:
+            for label in node.task_profile:
+                self._task_vocabulary.discard(label)
         # Only clear index entries that still point at this concept.
         # `merge()` may have already re-mapped some of these names to
         # the keeper; those must survive the removal.

@@ -66,6 +66,10 @@ class Observation(BaseModel):
     contradicted_relations: list[tuple[str, str, str]] = Field(
         default_factory=list
     )
+    # Claims that *no longer hold* ("X no longer depends on Y"): a revision
+    # of the world, not evidence the claim was ever wrong.  The claim is
+    # withdrawn (``RelationEdge.retracted_tick``) rather than disconfirmed.
+    retracted_relations: list[tuple[str, str, str]] = Field(default_factory=list)
     extraction_metadata: dict[str, Any] = Field(default_factory=dict)
     domain: str = ""
     task: str = ""
@@ -108,6 +112,7 @@ class IngestResult(BaseModel):
     new_relations: list[str] = Field(default_factory=list)
     reinforced_relations: list[str] = Field(default_factory=list)
     weakened_relations: list[str] = Field(default_factory=list)
+    retracted_relations: list[str] = Field(default_factory=list)
     hebbian_relations: list[str] = Field(default_factory=list)
     prediction: PredictionError = Field(default_factory=PredictionError)
 
@@ -183,6 +188,15 @@ class Projection(BaseModel):
 
     concepts: list[ConceptNode] = Field(default_factory=list)
     relations: list[RelationEdge] = Field(default_factory=list)
+    # Claims about concepts in view that were observed only under other
+    # tasks while the concept also has claims in this task's context
+    # (projection ``CONTEXT_MATCH``): another sense or another setting.
+    other_contexts: list[RelationEdge] = Field(default_factory=list)
+    # Withdrawn claims about the seeds (``Observation.retracted_relations``),
+    # most recent first; ``outside_names`` names their endpoints that are
+    # not in view.
+    retracted: list[RelationEdge] = Field(default_factory=list)
+    outside_names: dict[str, str] = Field(default_factory=dict)
     activation_scores: dict[str, float] = Field(default_factory=dict)
     task: str = ""
     epistemic: EpistemicStatus = Field(default_factory=EpistemicStatus)
@@ -272,6 +286,27 @@ class Projection(BaseModel):
                     + f"structural: {r.structural_strength:.2f}, "
                     f"propagation: {r.propagation_strength:.2f}, "
                     f"reinforced {r.reinforcement_count}×)"
+                )
+            lines.append("")
+
+        if self.retracted:
+            lines.append("### No Longer Holds")
+            names = {**self.outside_names, **{c.id: c.name for c in self.concepts}}
+            for r in self.retracted[:10]:
+                lines.append(
+                    f"- {names.get(r.source_id, r.source_id)} → {r.semantic_relation} → "
+                    f"{names.get(r.target_id, r.target_id)} (withdrawn)"
+                )
+            lines.append("")
+
+        if self.other_contexts:
+            lines.append("### Seen in Other Tasks")
+            names = {c.id: c.name for c in self.concepts}
+            for r in self.other_contexts[:10]:
+                tasks = ", ".join(sorted({t for t in r.task_history if t})[:3])
+                lines.append(
+                    f"- {names.get(r.source_id, r.source_id)} → {r.semantic_relation} → "
+                    f"{names.get(r.target_id, r.target_id)} (under: {tasks})"
                 )
             lines.append("")
 

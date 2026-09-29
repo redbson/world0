@@ -36,6 +36,16 @@ MMR_LAMBDA: float = 0.5
 # 1.0 = no penalty, 0.0 = completely exclude non-matching concepts.
 TASK_AFFINITY_DISCOUNT: float = 0.6
 
+# A relation is *in the task's context* when it was observed under a task
+# matching the current one at least this well (distinctiveness-weighted,
+# ``TaskVocabulary``).  When a concept in view has claims in the current
+# context, its claims observed only under other tasks describe it in another
+# context (another sense of a polysemous name, another project's wiring):
+# they move to ``Projection.other_contexts`` instead of mixing into the view.
+# A concept with no claims in the current context keeps all of them — there
+# is no evidence that its other claims belong elsewhere (docs §7.24).
+CONTEXT_MATCH: float = 0.5
+
 # Temporal freshness weight in MMR relevance computation.
 # Controls how much temporal_relevance influences concept selection.
 # 0.0 = no time influence, 1.0 = freshness equally weighted as score.
@@ -151,6 +161,7 @@ class ProjectionEngine:
         # Pre-compute task affinity and temporal freshness for each
         # candidate.  Both are multiplied into the MMR relevance score.
         task_lower = task.strip().lower()
+        vocabulary = getattr(self._concepts, "task_vocabulary", None)
         # Grounded affinity: the concepts the task names and their direct
         # neighbours.  Without it a task never seen in an observation
         # (or any task in a world built from unlabelled observations)
@@ -183,7 +194,7 @@ class ProjectionEngine:
                 task_affinity[cid] = 1.0
                 task_mismatch[cid] = 0.0
             elif node:
-                history_affinity[cid] = node.task_affinity(task_lower)
+                history_affinity[cid] = node.task_affinity(task_lower, vocabulary)
                 affinity = max(history_affinity[cid], grounded.get(cid, 0.0))
                 task_affinity[cid] = (
                     TASK_AFFINITY_DISCOUNT
@@ -295,21 +306,44 @@ class ProjectionEngine:
 
         # Gather relations between selected concepts
         relations = []
+        retracted = []
         seen: set[str] = set()
         for cid in selected:
             for rel in self._relations.for_concept(cid):
                 if rel.id in seen:
                     continue
+                if rel.is_retracted:
+                    # Withdrawn claims are history, not part of the view;
+                    # those about a seed are reported so the Agent knows
+                    # what no longer holds.
+                    if rel.source_id in seed_set or rel.target_id in seed_set:
+                        retracted.append(rel)
+                        seen.add(rel.id)
+                    continue
                 if rel.source_id in selected_ids and rel.target_id in selected_ids:
                     relations.append(rel)
                     seen.add(rel.id)
+        retracted.sort(key=lambda r: (-(r.retracted_tick or 0), r.id))
+        outside_names = {}
+        for rel in retracted:
+            for end in (rel.source_id, rel.target_id):
+                if end not in selected_ids and end not in outside_names:
+                    node = self._concepts.get(end)
+                    if node is not None:
+                        outside_names[end] = node.name
         # Relation-index order depends on filesystem load order; sort so
         # the rendered projection is identical across processes.
         relations.sort(key=lambda r: (-r.weight, r.id))
+        relations, other_contexts = self._split_by_context(
+            relations, selected, task_lower, vocabulary
+        )
 
         return Projection(
             concepts=concepts,
             relations=relations,
+            other_contexts=other_contexts,
+            retracted=retracted,
+            outside_names=outside_names,
             activation_scores=selected_scores,
             task=task,
             epistemic=assess(concepts, relations),
@@ -324,6 +358,36 @@ class ProjectionEngine:
                 set(focus.items()) if focus is not None else set(),
             ),
         )
+
+    def _split_by_context(self, relations, selected, task_lower, vocabulary):
+        """(in-context relations, relations that describe a concept elsewhere).
+
+        See ``CONTEXT_MATCH``.  Without a task, or for relations never
+        observed under any task, nothing moves.
+        """
+        if not task_lower or not relations:
+            return relations, []
+
+        def context_of(rel) -> bool | None:
+            if not rel.task_history:
+                return None
+            return rel.task_affinity(task_lower, vocabulary) >= CONTEXT_MATCH
+
+        in_context: set[str] = set()
+        for cid in selected:
+            if any(context_of(rel) for rel in self._relations.for_concept(cid)):
+                in_context.add(cid)
+        if not in_context:
+            return relations, []
+        kept, moved = [], []
+        for rel in relations:
+            if context_of(rel) is False and (
+                rel.source_id in in_context or rel.target_id in in_context
+            ):
+                moved.append(rel)
+            else:
+                kept.append(rel)
+        return kept, moved
 
     def _attention(
         self,

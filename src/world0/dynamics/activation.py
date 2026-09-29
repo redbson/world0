@@ -54,7 +54,11 @@ from world0.dynamics.coefficients import (
     RELATION_TEMPORAL_HL,
     RELATION_TYPE_FACTOR,
 )
-from world0.dynamics.decay import settle_concept
+from world0.dynamics.decay import (
+    projected_relation_weight,
+    settle_concept,
+    settled_confidence,
+)
 from world0.schemas.clock import CognitiveClock
 from world0.schemas.context import Perspective
 from world0.schemas.relation import RelationType
@@ -203,6 +207,10 @@ class ActivationEngine:
         if perspective is None:
             perspective = Perspective(task=task)
         task_lower = (perspective.task or task).strip().lower()
+        # Task words are weighted by how distinctive they are among the
+        # world's task labels (``TaskVocabulary``); a store without one
+        # (test doubles) matches words unweighted.
+        vocabulary = getattr(self._concepts, "task_vocabulary", None)
         # One reference instant (both cognitive-time coordinates) for the
         # whole pass: freshness must not depend on iteration order.
         now_tick = self._clock.tick
@@ -219,11 +227,13 @@ class ActivationEngine:
             node = self._concepts.get(cid)
             if not node:
                 continue
-            score = node.confidence
+            # Settled, not stored: what a view shows must not depend on
+            # when a reflect last settled the record (docs/paper §3.5).
+            score = settled_confidence(node, now_tick, now)
             # Boost seeds that have task affinity
             if task_lower:
                 score = min(
-                    1.0, score * self._task_boost(node.task_affinity(task_lower))
+                    1.0, score * self._task_boost(node.task_affinity(task_lower, vocabulary))
                 )
             # Domain affinity stacks on top — a concept whose dominant
             # domain is "in focus" for the perspective is boosted too.
@@ -262,7 +272,7 @@ class ActivationEngine:
 
                 for rel in self._relations.for_concept(cid):
                     neighbor_id = rel.other_end(cid)
-                    if neighbor_id is None:
+                    if neighbor_id is None or rel.is_retracted:
                         continue
 
                     is_negative = rel.relation_type == RelationType.NEGATIVE
@@ -296,7 +306,11 @@ class ActivationEngine:
                         direction_factor = perspective.weight_for_direction(direction)
                     else:
                         direction_factor = 1.0
-                    edge_strength = rel.weight * type_factor * direction_factor
+                    edge_strength = (
+                        projected_relation_weight(rel, now_tick, now)
+                        * type_factor
+                        * direction_factor
+                    )
 
                     # Readiness = "is this a real concept worth visiting":
                     # the stronger of the current (decayed) confidence and
@@ -304,7 +318,7 @@ class ActivationEngine:
                     # well-confirmed neighbor is not charged for its age
                     # here as well as in the salience term below.
                     neighbor_readiness = max(
-                        neighbor.confidence,
+                        settled_confidence(neighbor, now_tick, now),
                         neighbor.evidence(),
                         PROPAGATION_FLOOR,
                     )
@@ -312,8 +326,8 @@ class ActivationEngine:
                     task_boost = 1.0
                     if task_lower:
                         affinity = max(
-                            rel.task_affinity(task_lower),
-                            neighbor.task_affinity(task_lower),
+                            rel.task_affinity(task_lower, vocabulary),
+                            neighbor.task_affinity(task_lower, vocabulary),
                         )
                         task_boost = self._task_boost(affinity)
 
@@ -387,6 +401,13 @@ class ActivationEngine:
                             self._on_activation(neighbor)
 
             frontier = list(layer.keys())
+
+        if record and task:
+            # Recorded activations add task labels to profiles behind the
+            # store's back; its task vocabulary is rebuilt on next use.
+            invalidate = getattr(self._concepts, "invalidate_task_vocabulary", None)
+            if invalidate is not None:
+                invalidate()
 
         # Subtract inhibition from excitation; drop concepts driven to
         # zero or below so they vanish from the projection entirely.

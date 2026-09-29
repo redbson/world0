@@ -135,6 +135,12 @@ class RelationManager:
             source_id, target_id, relation_type, directed=True
         )
         if existing:
+            if existing.is_retracted and is_explicit:
+                # Restated: the claim holds again.  Its weight relaxed toward
+                # zero while withdrawn; settle that first.
+                settle_relation(existing, self._clock.tick)
+                existing.retracted_tick = None
+                self._dirty.add(existing.id)
             if semantic_relation:
                 existing.semantic_relation = semantic_spec.name
                 existing.structural_strength = semantic_spec.structural_strength
@@ -292,6 +298,20 @@ class RelationManager:
         # an interval that started before it (Theorem 3.2).
         settle_relation(edge, self._clock.tick)
         edge.weaken(provenance=provenance)
+        self._dirty.add(edge.id)
+        return edge
+
+    def retract(self, relation_id: str) -> RelationEdge | None:
+        """Withdraw a claim: it no longer holds (``RelationEdge.retracted_tick``).
+
+        Unlike ``weaken`` this is not evidence the claim was wrong, so its
+        belief is untouched; the edge simply leaves the live world.
+        """
+        edge = self._relations.get(relation_id)
+        if not edge:
+            return None
+        settle_relation(edge, self._clock.tick)
+        edge.retracted_tick = self._clock.tick
         self._dirty.add(edge.id)
         return edge
 

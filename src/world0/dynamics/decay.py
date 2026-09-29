@@ -188,7 +188,7 @@ def relation_floor(
     seeded from the claim prior and never time-decayed — not on the edge's
     propagation / inhibition gain (``weight``).
     """
-    if not edge.is_explicit:
+    if not edge.is_explicit or edge.is_retracted:
         return 0.0
     floor = RELATION_FLOOR_SHARE * edge.probability
     elapsed = edge.elapsed_since_reinforced(now_tick, now)
@@ -254,6 +254,74 @@ def relax_confidence(
     return max(0.0, amp * math.exp(-mu * dt) + (confidence - amp) * math.exp(-lam * dt))
 
 
+def _settled_state(
+    node: ConceptNode, now_tick: int, now: datetime
+) -> tuple[float, Maturity, bool] | None:
+    """(confidence, maturity, entered_fading) that settling to ``now_tick``
+    leaves, without mutating ``node``; None when nothing is owed."""
+    if node.maturity == Maturity.FADING and node.confidence <= 0.0:
+        return None
+    elapsed = node.decay_elapsed(now_tick, now)
+    # Skip recently activated (or recently decayed) concepts; the
+    # un-applied interval is not lost — it is measured from the unchanged
+    # reference point on the next call.
+    if elapsed < DECAY_GRACE_TICKS:
+        return None
+    maturity = node.maturity
+    entered_fading = False
+    if node.confidence < FADING_THRESHOLD and maturity != Maturity.FADING:
+        maturity = Maturity.FADING
+        entered_fading = True
+    floor = evidence_floor(
+        node,
+        now_tick=node.decay_reference_tick(),
+        now=node.decay_reference_time(),
+    )
+    confidence = node.confidence
+    half_life = _half_life_for(node, maturity)
+    end = relax_confidence(confidence, floor, half_life, elapsed)
+    if maturity != Maturity.FADING and confidence >= FADING_THRESHOLD > end:
+        # Crossing inside the interval: bisect for t* with c(t*) = θ.
+        lo, hi = 0.0, elapsed
+        for _ in range(60):
+            mid = 0.5 * (lo + hi)
+            if relax_confidence(confidence, floor, half_life, mid) >= FADING_THRESHOLD:
+                lo = mid
+            else:
+                hi = mid
+        maturity = Maturity.FADING
+        entered_fading = True
+        era = EVIDENCE_FLOOR_ERA_HL
+        floor_at_cross = floor * math.pow(0.5, hi / era) if era > 0 else floor
+        end = relax_confidence(
+            FADING_THRESHOLD, floor_at_cross, _half_life_for(node, maturity), elapsed - hi
+        )
+    if end < FADING_THRESHOLD and maturity != Maturity.FADING:
+        maturity = Maturity.FADING
+        entered_fading = True
+    return end, maturity, entered_fading
+
+
+def _half_life_for(node: ConceptNode, maturity: Maturity) -> float:
+    if maturity == node.maturity:
+        return concept_half_life(node)
+    probe = node.model_copy(update={"maturity": maturity})
+    return concept_half_life(probe)
+
+
+def settled_confidence(
+    node: ConceptNode, now_tick: int, now: datetime | None = None
+) -> float:
+    """The confidence ``settle_concept`` would leave at ``now_tick``, read-only.
+
+    Readers (activation, projection) use it so that what a view shows does
+    not depend on when a reflect last settled the stored value (docs/paper
+    Theorem 3.7, read path).
+    """
+    state = _settled_state(node, now_tick, now or wall_now())
+    return node.confidence if state is None else state[0]
+
+
 def settle_concept(
     node: ConceptNode, now_tick: int, now: datetime | None = None
 ) -> bool:
@@ -273,48 +341,13 @@ def settle_concept(
     maturity's half-life governs up to it, the FADING half-life after.
     Whether or when settlement runs therefore cannot change the outcome.
     """
-    if node.maturity == Maturity.FADING and node.confidence <= 0.0:
-        return False
     now = now or wall_now()
-    elapsed = node.decay_elapsed(now_tick, now)
-    # Skip recently activated (or recently decayed) concepts; the
-    # un-applied interval is not lost — it is measured from the unchanged
-    # reference point on the next call.
-    if elapsed < DECAY_GRACE_TICKS:
+    state = _settled_state(node, now_tick, now)
+    if state is None:
         return False
-    entered_fading = False
-    if node.confidence < FADING_THRESHOLD and node.maturity != Maturity.FADING:
-        node.maturity = Maturity.FADING
-        entered_fading = True
-    floor = evidence_floor(
-        node,
-        now_tick=node.decay_reference_tick(),
-        now=node.decay_reference_time(),
-    )
-    confidence = node.confidence
-    end = relax_confidence(confidence, floor, concept_half_life(node), elapsed)
-    if node.maturity != Maturity.FADING and confidence >= FADING_THRESHOLD > end:
-        # Crossing inside the interval: bisect for t* with c(t*) = θ.
-        lo, hi = 0.0, elapsed
-        for _ in range(60):
-            mid = 0.5 * (lo + hi)
-            if relax_confidence(confidence, floor, concept_half_life(node), mid) >= FADING_THRESHOLD:
-                lo = mid
-            else:
-                hi = mid
-        node.maturity = Maturity.FADING
-        entered_fading = True
-        era = EVIDENCE_FLOOR_ERA_HL
-        floor_at_cross = floor * math.pow(0.5, hi / era) if era > 0 else floor
-        end = relax_confidence(
-            FADING_THRESHOLD, floor_at_cross, concept_half_life(node), elapsed - hi
-        )
-    node.confidence = end
+    node.confidence, node.maturity, entered_fading = state
     node.last_decayed_tick = now_tick
     node.last_decayed_at = now
-    if node.confidence < FADING_THRESHOLD and node.maturity != Maturity.FADING:
-        node.maturity = Maturity.FADING
-        entered_fading = True
     return entered_fading
 
 

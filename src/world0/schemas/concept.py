@@ -153,15 +153,21 @@ def normalize_task_label(task: str) -> str:
     return re.sub(r"\s+", " ", (task or "").strip().lower())
 
 
-def task_match_score(query: str, label: str) -> float:
+def task_match_score(
+    query: str, label: str, vocabulary: "TaskVocabulary | None" = None
+) -> float:
     """Graded match between a task query and a recorded task label.
 
     Returns a value in ``[0, 1]``:
 
     - ``1.0`` for an exact (normalized) match;
-    - otherwise the fraction of the query's signature tokens that appear
-      in the label (``"ml"`` vs ``"ml training"`` → 1.0, ``"ml serving"``
-      vs ``"ml training"`` → 0.5);
+    - otherwise the share of the query's signature tokens that appear in
+      the label (``"ml"`` vs ``"ml training"`` → 1.0, ``"ml serving"`` vs
+      ``"ml training"`` → 0.5).  With a ``vocabulary`` the tokens are
+      weighted by how distinctive they are among the world's task labels
+      (``TaskVocabulary.weight``): a word every task carries (``"work"``,
+      ``"fix"``, ``"bug"``) says nothing about *which* task, so
+      ``"login bug fix"`` no longer matches ``"payment bug fix"`` at 0.67;
     - when either side has no signature tokens (very short labels,
       CJK text), a whole-string containment fallback.
 
@@ -177,8 +183,62 @@ def task_match_score(query: str, label: str) -> float:
     q_tokens = tokenize_signature(q)
     l_tokens = tokenize_signature(lbl)
     if q_tokens and l_tokens:
+        if vocabulary is not None:
+            weights = {tok: vocabulary.weight(tok) for tok in q_tokens}
+            total = sum(weights.values())
+            if total > 0.0:
+                return sum(w for tok, w in weights.items() if tok in l_tokens) / total
         return len(q_tokens & l_tokens) / len(q_tokens)
     return 1.0 if q in lbl else 0.0
+
+
+class TaskVocabulary:
+    """Document frequencies of words over the distinct task labels of a world.
+
+    A label counts while at least one concept carries it in its
+    ``task_profile`` (``add`` / ``discard`` track how many do), so the
+    vocabulary is a function of the stored profiles and is the same after
+    a restart.  ``weight(token) = ln((N + 1) / (df + 1))`` with ``N``
+    distinct labels and ``df`` of them containing the token: 0 for a word
+    every label carries, largest for a word no label carries.
+    """
+
+    def __init__(self) -> None:
+        self._labels: dict[str, int] = {}
+        self._df: dict[str, int] = {}
+
+    def __len__(self) -> int:
+        return len(self._labels)
+
+    def add(self, label: str, count: int = 1) -> None:
+        label = normalize_task_label(label)
+        if not label or count <= 0:
+            return
+        if label not in self._labels:
+            for tok in tokenize_signature(label):
+                self._df[tok] = self._df.get(tok, 0) + 1
+            self._labels[label] = 0
+        self._labels[label] += count
+
+    def discard(self, label: str, count: int = 1) -> None:
+        label = normalize_task_label(label)
+        held = self._labels.get(label)
+        if held is None or count <= 0:
+            return
+        if held > count:
+            self._labels[label] = held - count
+            return
+        del self._labels[label]
+        for tok in tokenize_signature(label):
+            left = self._df.get(tok, 0) - 1
+            if left > 0:
+                self._df[tok] = left
+            else:
+                self._df.pop(tok, None)
+
+    def weight(self, token: str) -> float:
+        n = len(self._labels)
+        return math.log((n + 1) / (self._df.get(token, 0) + 1))
 
 
 class Maturity(str, Enum):
@@ -419,7 +479,9 @@ class ConceptNode(BaseModel):
             )[:MAX_TASK_PROFILE_ENTRIES]
             self.task_profile = dict(kept)
 
-    def task_affinity(self, task: str) -> float:
+    def task_affinity(
+        self, task: str, vocabulary: "TaskVocabulary | None" = None
+    ) -> float:
         """Graded association between this concept and ``task`` in [0, 1].
 
         ``1.0`` when the concept has been activated under exactly this
@@ -434,7 +496,7 @@ class ConceptNode(BaseModel):
             return 1.0
         best = 0.0
         for label in self.task_profile:
-            score = task_match_score(query, label)
+            score = task_match_score(query, label, vocabulary)
             if score > best:
                 best = score
                 if best >= 1.0:

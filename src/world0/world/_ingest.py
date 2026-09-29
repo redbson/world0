@@ -93,6 +93,7 @@ class IngestPipeline:
         self._step_hebbian(observation, resolved_ids, result)
         self._step_descriptions(observation, local_refs)
         self._step_disconfirmation(observation, result, local_refs)
+        self._step_retractions(observation, result, local_refs)
         self._step_color(observation, resolved_ids)
 
         return result
@@ -399,6 +400,30 @@ class IngestPipeline:
             self._relations.weaken(existing.id, provenance=observation.task)
             result.weakened_relations.append(
                 f"{src.name} → {semantic_relation} → {tgt.name}"
+            )
+
+    def _step_retractions(
+        self,
+        observation: Observation,
+        result: IngestResult,
+        local_refs: dict[str, str],
+    ) -> None:
+        """Withdraw claims that no longer hold (after this observation's own
+        statements, so "A now depends on C; A no longer depends on B" in one
+        observation leaves A→C live and A→B withdrawn)."""
+        for src_name, tgt_name, relation_name in observation.retracted_relations:
+            src = self._resolve_observation_ref(src_name, local_refs)
+            tgt = self._resolve_observation_ref(tgt_name, local_refs)
+            if not src or not tgt or src.id == tgt.id:
+                continue
+            semantic_relation = normalize_semantic_relation(relation_name)
+            rel_type = semantic_relation_spec(semantic_relation).axis
+            existing = self._relations.find_between(src.id, tgt.id, rel_type, directed=True)
+            if existing is None or existing.is_retracted:
+                continue
+            self._relations.retract(existing.id)
+            result.retracted_relations.append(
+                f"{src.name} → {existing.semantic_relation} → {tgt.name}"
             )
 
     def _step_color(

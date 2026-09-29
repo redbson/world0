@@ -527,6 +527,15 @@ class FakeRelationStore:
         self._record("reinforce", relation_id)
         return edge
 
+    def retract(self, relation_id: str) -> RelationEdge | None:
+        edge = self._edges.get(relation_id)
+        if not edge:
+            return None
+        edge.retracted_tick = 0
+        self._dirty.add(relation_id)
+        self._record("retract", relation_id)
+        return edge
+
     def weaken(
         self, relation_id: str, provenance: str = ""
     ) -> RelationEdge | None:

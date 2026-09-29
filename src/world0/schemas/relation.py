@@ -11,7 +11,7 @@ from enum import Enum
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from world0.schemas.clock import cognitive_elapsed, wall_now
-from world0.schemas.concept import task_match_score
+from world0.schemas.concept import TaskVocabulary, task_match_score
 
 
 class RelationType(str, Enum):
@@ -433,6 +433,12 @@ class RelationEdge(BaseModel):
     # Cognitive-time coordinates (see ``schemas/clock.py``).
     discovered_tick: int = 0
     last_reinforced_tick: int = 0
+    # Tick at which the claim was withdrawn (``Observation.retracted_relations``:
+    # "X no longer depends on Y").  A retracted claim is kept as history but
+    # is no longer part of the world: it carries no activation, is not a
+    # connection, is not in projections, and its weight relaxes toward zero.
+    # Restating the claim clears it.
+    retracted_tick: int | None = None
     # Instant (both coordinates) at which time decay was last applied (see
     # ``ConceptNode.last_decayed_at``).
     last_decayed_at: datetime | None = None
@@ -612,7 +618,7 @@ class RelationEdge(BaseModel):
             self.decay_reference_time(),
         )
 
-    def task_affinity(self, task: str) -> float:
+    def task_affinity(self, task: str, vocabulary: TaskVocabulary | None = None) -> float:
         """Graded association between this relation and ``task`` in [0, 1].
 
         Word-level match against the tasks under which the relation was
@@ -620,12 +626,16 @@ class RelationEdge(BaseModel):
         """
         best = 0.0
         for label in self.task_history:
-            score = task_match_score(task, label)
+            score = task_match_score(task, label, vocabulary)
             if score > best:
                 best = score
                 if best >= 1.0:
                     break
         return best
+
+    @property
+    def is_retracted(self) -> bool:
+        return self.retracted_tick is not None
 
     def other_end(self, concept_id: str) -> str | None:
         if self.source_id == concept_id:

@@ -245,6 +245,8 @@ class LifecycleEngine:
         now, tick = wall_now(), self._clock.tick
         live = 0
         for edge in edges:
+            if edge.is_retracted:
+                continue
             if projected_relation_weight(edge, tick, now) < RELATION_PRUNE_THRESHOLD:
                 continue
             other_id = edge.other_end(node.id)

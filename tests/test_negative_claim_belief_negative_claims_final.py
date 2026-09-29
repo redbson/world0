@@ -214,6 +214,10 @@ class TestInhibitionGainUnchanged:
             _state(w, "Y", "X", "enables", 3)
             edge = _claim(w, "conflict", "A", "X")
             edge.probability = belief
+            # Read at the instant of the statement: once time passes, the
+            # settled weight relaxes toward the belief-anchored floor
+            # (0.1 × belief) — by design, and the same for every axis.
+            edge.last_reinforced_tick, edge.last_decayed_tick = w.clock.tick, None
             engine = ActivationEngine(w.concepts, w.relations, clock=w.clock)
             out = engine.activate([w.concepts.resolve("A").id], min_activation=1e-6, record=False)
             scores.append(out.get(w.concepts.resolve("X").id, 0.0))

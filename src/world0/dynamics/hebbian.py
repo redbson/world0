@@ -224,7 +224,7 @@ class HebbianEngine:
             companions: set[str] = set()
             for rel in self._relations.for_concept(cid):
                 other = rel.other_end(cid)
-                if other is None or other == cid or other in companions:
+                if other is None or other == cid or other in companions or rel.is_retracted:
                     continue
                 companions.add(other)
                 p = min(1.0, self._linked.get(_pair_key(cid, other), 0) / support)
