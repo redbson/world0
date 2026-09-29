@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Task context** (analysis doc §7.24, paper §7.3) — task words are weighted
+  by how distinctive they are among the world's task labels
+  (`TaskVocabulary`: `ln((L+1)/(df+1)) + 0.01`), so shared boilerplate
+  ("… work", "fix … bug") no longer makes every task match every concept at
+  ≥ 0.5.  A claim's context is the tasks it was *stated* under
+  (`RelationEdge.claim_tasks`); when a concept in view has live claims in the
+  current task's context, its claims stated only under other tasks move to
+  `Projection.other_contexts` ("Seen in Other Tasks"), and the epistemic
+  status still sees both.  LongRun bridge probe (12 queries): 0.44 → 0.93
+  with the right task, unchanged without one.
+- **Withdrawn claims** (analysis doc §7.25, paper §4.4) —
+  `Observation.retracted_relations` withdraws a claim that no longer holds
+  (`RelationEdge.retracted_tick`, `RelationManager.retract`): belief
+  untouched, no activation, not a connection, not in views (listed under
+  "No Longer Holds" for seeds), weight relaxes to zero, co-occurrence
+  neither reinforces nor blocks the pair, restating restores it.
+- **Read-time settlement** (paper Corollary 3.2′) — activation and
+  projection read settled confidence and weights and treat dead edges and
+  expired concepts as absent, so a view between two uses no longer depends
+  on when a reflect ran (seed score 0.317 vs 0.489 before, 0.3165 both now).
 - **LongRun evaluation** (`benchmarks/longrun/`, `docs/eval/`) — a reproducible
   comparison of World 0 with raw context (window, full history) and traditional
   memory (BM25 RAG, Generative-Agents recipe, summaries, a Mem0-style fact
