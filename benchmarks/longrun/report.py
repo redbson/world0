@@ -114,7 +114,7 @@ def main(path: str) -> None:
                 bb = 0 if s == "full_context" else b
                 cells = [s]
                 for k in KINDS:
-                    vals = list(per_seed([r for r in sc if r["kind"] == k], "headline",
+                    vals = list(per_seed([r for r in sc if r.get("kind") == k], "headline",
                                          lambda r, s=s, bb=bb: r["system"] == s and r["horizon"] == 1000 and r["budget"] == bb,
                                          by_kind_equal=False).values())
                     cells.append(fmt(*ci(vals)))
@@ -129,7 +129,7 @@ def main(path: str) -> None:
             bb = 0 if s == "full_context" else 600
             cells = [s]
             for m in ("claim_p", "claim_r", "claim_f1", "wrong_rate", "tokens"):
-                vals = list(per_seed([r for r in sc if r["kind"] == "focus"], m,
+                vals = list(per_seed([r for r in sc if r.get("kind") == "focus"], m,
                                      lambda r, s=s, bb=bb: r["system"] == s and r["horizon"] == 1000 and r["budget"] == bb,
                                      by_kind_equal=False).values())
                 cells.append(fmt(*ci(vals), digits=2 if m != "tokens" else 0))
@@ -141,7 +141,7 @@ def main(path: str) -> None:
         body = []
         for s in systems_in(sc):
             bb = 0 if s == "full_context" else 600
-            rs = [r for r in sc if r["kind"] == "stale" and r["system"] == s and r["horizon"] == 1000 and r["budget"] == bb]
+            rs = [r for r in sc if r["type"] == "query" and r.get("kind") == "stale" and r["system"] == s and r["horizon"] == 1000 and r["budget"] == bb]
             n = len(rs) or 1
             body.append([s] + [f"{100 * sum(r['stale_cat'] == c for r in rs) / n:.0f}%" for c in cats] + [str(len(rs))])
         out.append(table(["system"] + cats + ["n"], body))
@@ -153,8 +153,8 @@ def main(path: str) -> None:
             bb = 0 if s == "full_context" else 600
             cells = [s]
             for lo, hi in bins:
-                vals = [r["headline"] for r in sc if r["system"] == s and r["horizon"] == 3000 and r["budget"] == bb
-                        and lo <= r["age"] < hi and r["kind"] in ("focus", "chain", "bridge")]
+                vals = [r["headline"] for r in sc if r["type"] == "query" and r["system"] == s and r["horizon"] == 3000 and r["budget"] == bb
+                        and lo <= r["age"] < hi and r.get("kind") in ("focus", "chain", "bridge")]
                 cells.append(f"{statistics.mean(vals):.2f} (n={len(vals)})" if vals else "-")
             body.append(cells)
         out.append(table(["system"] + [f"age {lo}-{hi if hi < 10**9 else '∞'}" for lo, hi in bins], body))
@@ -219,7 +219,7 @@ def main(path: str) -> None:
                 continue
             cells = [s, fmt(*ci(list(per_seed(ab, "headline", lambda r, s=s: r["system"] == s and r["budget"] == 600).values())))]
             for k in KINDS:
-                cells.append(fmt(*ci(list(per_seed([r for r in ab if r["kind"] == k], "headline",
+                cells.append(fmt(*ci(list(per_seed([r for r in ab if r.get("kind") == k], "headline",
                                                    lambda r, s=s: r["system"] == s and r["budget"] == 600, by_kind_equal=False).values()))))
             body.append(cells)
         out.append(table(["variant", "utility"] + KINDS, body))
