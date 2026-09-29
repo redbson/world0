@@ -13,7 +13,7 @@
 |---|---|
 | `README.md`（本文） | 实验设计、被比较的系统、指标、公平性措施、局限、复现 |
 | [`01-report.md`](01-report.md) | 结果与结论：区别在哪、哪种情形下谁占优、World 0 该改什么 |
-| `results/*.meta.json`、`results/tables.md` | 各研究的元数据（提交号、耗时、预算）与汇总表；原始行由代码重新生成 |
+| `results/*.meta.json`、`results/tables.md`、`results/readers.md` | 各研究的元数据（提交号、耗时、预算）、汇总表与真实 LLM 读者阶段的表；原始行由代码重新生成 |
 | `../../benchmarks/longrun/` | 生成器、系统适配器、打分、运行器、读者阶段、汇总 |
 | `../../tests/test_longrun_bench.py` | 评测台自身的测试：确定性、金标准只含已被告知的内容、预算强制、打分 |
 

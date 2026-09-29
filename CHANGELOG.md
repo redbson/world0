@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **LongRun evaluation** (`benchmarks/longrun/`, `docs/eval/`) — a reproducible
+  comparison of World 0 with raw context (window, full history) and traditional
+  memory (BM25 RAG, Generative-Agents recipe, summaries, a Mem0-style fact
+  store, temporal / static graphs, a state document) in a long-running Agent:
+  seeded hidden worlds with typed domain graphs, polysemous bridges, revisions
+  and episodic tickets; gold restricted to what the Agent was told and is
+  still true; extraction-error, task-label, chatter, verbosity, horizon,
+  window-limit and cost studies; per-seed paired tests with Holm correction;
+  World 0's depth / reflect chosen on dev seeds only; a real-LLM-reader stage
+  (one reader per query and condition) after an independent five-lens review
+  of the harness.  Findings (`docs/eval/01-report.md`): raw context is the most
+  accurate until the window or the per-query cost binds; a task-tagged fact
+  store reaches 0.82 in ~220 tokens and beats World 0 (0.59 in ~630 tokens,
+  0 / 10 seeds won) on this benchmark; World 0's retraction is soft (strict
+  stale ≈ 0) and its shipped `render()` is nearly unusable for a real reader
+  (compact render 0.80).  The benchmark does not exercise World 0's task
+  conditioning, forgetting, perspectives or identity handling.
 - **Formal paper** (`docs/paper/world0-formal.md`) — the current design
   written as a mathematical model with propositions and proofs: the
   exact semigroup property of the moving-floor decay, reflect-cadence

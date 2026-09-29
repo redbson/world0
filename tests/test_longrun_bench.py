@@ -147,3 +147,10 @@ class TestV2:
         import benchmarks.longrun.systems as m
 
         assert ".domain" not in inspect.getsource(m)
+
+
+def test_report_core_tables_include_the_tuned_world0_system():
+    from benchmarks.longrun import report
+
+    assert {"world0", "world0_compact", "world0_tuned", "fact_task", "full_context"} <= report.MAIN
+    assert not {"full_32k", "full_64k"} & report.MAIN

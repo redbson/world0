@@ -34,6 +34,7 @@ The current agent development priorities are tracked in [`TODO.md`](TODO.md).
 - [`docs/extraction-model-prompt-eval.md`](docs/extraction-model-prompt-eval.md) — model × prompt extraction-quality evaluation (why gpt-5.4-nano is the default) / 模型×prompt 提取质量评测（为何默认 gpt-5.4-nano）
 - [`docs/world0-cognitive-dynamics-analysis.md`](docs/world0-cognitive-dynamics-analysis.md) — mathematical review of the decay / activation / projection dynamics, probe evidence, calibration and roadmap / 认知动力学的数学分析、探针证据、参数标定与路线
 - [`docs/paper/world0-formal.md`](docs/paper/world0-formal.md) — formal model of the current design with propositions, proofs and a numerical verifier / 当前设计的形式化：命题、证明与数值验证
+- [`docs/eval/01-report.md`](docs/eval/01-report.md) — LongRun: World 0 vs. traditional memory vs. raw context in a long-running Agent (reproducible benchmark, real-LLM-reader stage, honest limits) / LongRun：长期运行 Agent 中 World 0 与传统记忆、直接上下文的对比（可复现评测、真实读者阶段、局限）
 - [`DesignPhilosophy.md`](DesignPhilosophy.md) — design rationale and framing / 设计哲学与边界
 - [`TODO.md`](TODO.md) — current implementation priorities / 当前实现优先级
 

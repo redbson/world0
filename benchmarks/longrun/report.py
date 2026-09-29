@@ -27,6 +27,11 @@ ORDER = ["none", "window", "full_32k", "full_64k", "full_context", "rag", "rag_r
          "factstore", "fact_task", "fact_task_s2", "kg_static", "kg_temporal", "state_doc",
          "world0", "world0_compact", "world0_tuned", "world0_tuned_s2",
          "world0_reflect", "world0_focus", "world0_notask", "world0_depth1", "world0_depth3"]
+# Systems of the core tables: everything except the window-limit and ablation variants,
+# which have their own tables.  (A positional slice of ORDER silently dropped
+# world0_tuned once the window-limit systems were inserted before it.)
+MAIN = set(ORDER) - {"full_32k", "full_64k", "world0_reflect", "world0_focus", "world0_notask",
+                     "world0_depth1", "world0_depth3"}
 LABEL = {"rag_recency": "rag_recency (GA recipe)", "summary_buffer": "summary_buffer (flat digest)",
          "kg_static": "kg_static (no retraction)", "full_context": "full_context (≤128k)"}
 BUDGETS = [150, 300, 600, 1200, 2400, 4800]
@@ -140,7 +145,7 @@ def main(path: str) -> None:
         out.append("## Main study: H=1000, 10 seeds\n")
         for b in (300, 600, 1200):
             body = []
-            for s in systems_in(main_rows, set(ORDER[:17])):
+            for s in systems_in(main_rows, MAIN):
                 cells = [name(s)]
                 for k in KINDS:
                     sel = qrows(main_rows, system=s, budget=bud(s, b), kind=k)
@@ -155,14 +160,14 @@ def main(path: str) -> None:
 
         out.append("## Utility vs token budget (H=1000)\n")
         body = []
-        for s in systems_in(main_rows, set(ORDER[:17])):
+        for s in systems_in(main_rows, MAIN):
             body.append([name(s)] + [f"{utility_cell(main_rows, s, b)} ({tokens_used(main_rows, s, b):.0f})" for b in BUDGETS])
         out.append(table(["system"] + [f"{b}" for b in BUDGETS], body))
         out.append("\n*cell = utility (mean tokens actually returned). Structured systems return what is relevant, not what the budget allows.*\n")
 
         out.append("## Focus queries: precision / recall / F1 and gold radius (H=1000, budget 1200)\n")
         body = []
-        for s in systems_in(main_rows, set(ORDER[:17])):
+        for s in systems_in(main_rows, MAIN):
             sel = qrows(main_rows, system=s, budget=bud(s, 1200), kind="focus")
             cells = [name(s)]
             for m in ("claim_p", "claim_r", "claim_f1", "wrong_rate", "claim_r_r1", "claim_r_r2", "claim_r_r3"):
@@ -173,7 +178,7 @@ def main(path: str) -> None:
         out.append("\n## Revisions (stale queries): what is shown when a claim was retracted (H=1000, budget 1200)\n")
         cats = ["current_only", "both_resolved", "both", "stale_only", "neither"]
         body = []
-        for s in systems_in(main_rows, set(ORDER[:17])):
+        for s in systems_in(main_rows, MAIN):
             rs = qrows(main_rows, system=s, budget=bud(s, 1200), kind="stale")
             n = len(rs) or 1
             body.append([name(s)] + [f"{100 * sum(r['stale_cat'] == c for r in rs) / n:.0f}%" for c in cats]
@@ -197,12 +202,12 @@ def main(path: str) -> None:
         out.append("## Scale: utility by horizon (budget 1200)\n")
         hs = sorted({r["horizon"] for r in sc if r["type"] == "query"})
         body = []
-        for s in systems_in(sc, set(ORDER[:17])):
+        for s in systems_in(sc, MAIN):
             body.append([name(s)] + [utility_cell([r for r in sc if r["horizon"] == h], s, 1200) for h in hs])
         out.append(table(["system"] + [f"H={h}" for h in hs], body))
         out.append("\n### Stale (strict) by horizon, budget 1200\n")
         body = []
-        for s in systems_in(sc, set(ORDER[:17])):
+        for s in systems_in(sc, MAIN):
             cells = [name(s)]
             for h in hs:
                 sel = qrows([r for r in sc if r["horizon"] == h], system=s, budget=bud(s, 1200), kind="stale")
@@ -212,7 +217,7 @@ def main(path: str) -> None:
         out.append("\n### Resources by horizon (state owners)\n")
         res = [r for r in sc if r["type"] == "resource"]
         body = []
-        for s in systems_in(res, set(ORDER[:17])):
+        for s in systems_in(res, MAIN):
             cells = [name(s)]
             for h in hs:
                 rr = [r for r in res if r["system"] == s and r["horizon"] == h]
@@ -229,7 +234,7 @@ def main(path: str) -> None:
     if bw:
         out.append("\n## Big growing world (40 domains × 40 concepts, H=6000): utility by budget\n")
         body = []
-        for s in systems_in(bw, set(ORDER[:17])):
+        for s in systems_in(bw, MAIN):
             body.append([name(s)] + [f"{utility_cell(bw, s, b)} ({tokens_used(bw, s, b):.0f})" for b in BUDGETS])
         out.append(table(["system"] + [f"{b}" for b in BUDGETS], body))
         r0 = [r for r in bw if r["type"] == "resource" and r["system"] == "none"]
@@ -237,7 +242,7 @@ def main(path: str) -> None:
             out.append(f"\nKnown state {statistics.mean(r['state_tokens'] for r in r0):.0f} tokens; stream {statistics.mean(r['stream_tokens'] for r in r0):.0f} tokens.")
         out.append("\n### per kind, budget 1200\n")
         body = []
-        for s in systems_in(bw, set(ORDER[:17])):
+        for s in systems_in(bw, MAIN):
             cells = [name(s)]
             for k in KINDS:
                 sel = qrows(bw, system=s, budget=bud(s, 1200), kind=k)
@@ -257,7 +262,7 @@ def main(path: str) -> None:
         vals = sorted({r[param] for r in st if r["type"] == "query"}, key=str)
         out.append(f"\n## Sensitivity: {label} (H=1000, budget 1200, utility)\n")
         body = []
-        for s in systems_in(st, set(ORDER[:17])):
+        for s in systems_in(st, MAIN):
             body.append([name(s)] + [utility_cell([r for r in st if r[param] == v], s, 1200) for v in vals])
         out.append(table(["system"] + [f"{param}={v}" for v in vals], body))
 
@@ -300,7 +305,7 @@ def timing(path: str) -> None:
     rows = load(path)
     print("## Cost: serial run without World 0's projection cache (H=1000, 4 seeds)\n")
     body = []
-    for s in systems_in(rows, set(ORDER[:17])):
+    for s in systems_in(rows, MAIN):
         lat = [r["latency_ms"] for r in qrows(rows, system=s, budget=bud(s, 1200))]
         res = [r for r in rows if r["type"] == "resource" and r["system"] == s]
         if not lat:
