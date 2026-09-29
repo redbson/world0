@@ -507,7 +507,7 @@ Writes use a dirty-flag mechanism: in-memory mutations are batched and flushed a
 
 ```bash
 pip install -e ".[dev]"
-pytest                        # 1 413 tests (1 403 passing, 10 skipped without an LLM key or browser), ~40s / 1 413 个测试（1 403 通过，10 个在无 LLM key 或浏览器时跳过），约 40 秒
+pytest                        # 1 414 tests (1 404 passing, 10 skipped without an LLM key or browser), ~40s / 1 414 个测试（1 404 通过，10 个在无 LLM key 或浏览器时跳过），约 40 秒
 pytest tests/test_benchmark.py -v   # cognitive quality benchmarks / 认知质量基准
 pytest tests/test_benchmark_e2e.py -v -s   # end-to-end scenario / 端到端场景
 ANTHROPIC_API_KEY=sk-... pytest tests/test_extraction_quality_llm.py -v   # real-LLM extraction quality / 真实 LLM 提取质量
@@ -522,7 +522,7 @@ ANTHROPIC_API_KEY=sk-... pytest tests/test_extraction_quality_llm.py -v   # real
 | `test_extraction_quality_llm.py` | 8 | Real-LLM extraction quality: synonym/acronym dedup, generic-noise filtering, relation direction, domain-sense split, contradiction handling, Chinese language preservation, cross-text identity (skipped without an LLM key) / 真实 LLM 提取质量：同义词/缩写去重、泛词噪声过滤、关系方向、领域义项拆分、矛盾处理、中文保持、跨文本身份（无 LLM key 时跳过） |
 | Other tests / 其他测试 | ~1 337 | Unit/integration tests for concepts, relations, dynamics (incl. color-field & communities), spaces, sources, metrics, projection, extraction, agents (PKM/CLI/web/external), LLM providers, persistence / 概念、关系、动力学（含色场与群落）、空间、来源、指标、投影、提取、Agent（PKM/CLI/web/外部）、LLM 提供者、持久化的单元与集成测试 |
 
-Total: 1 413 tests (1 403 passing, 10 skipped without an LLM provider or browser). / 共 1 413 个测试（1 403 通过，10 个在无 LLM provider 或浏览器时跳过）。
+Total: 1 414 tests (1 404 passing, 10 skipped without an LLM provider or browser). / 共 1 414 个测试（1 404 通过，10 个在无 LLM provider 或浏览器时跳过）。
 
 ## Requirements / 依赖
 
