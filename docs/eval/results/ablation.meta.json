@@ -1,0 +1,19 @@
+{
+ "study": "ablation",
+ "jobs": 6,
+ "seeds": 10,
+ "budgets": [
+  150,
+  300,
+  600,
+  1200,
+  2400,
+  4800
+ ],
+ "commit": "2aa9783",
+ "dirty_src_or_benchmarks": false,
+ "seconds": 93.0,
+ "python": "3.11.15",
+ "cpus": 4,
+ "workers": 4
+}

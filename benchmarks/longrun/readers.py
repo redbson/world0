@@ -57,8 +57,8 @@ def fnv(s: str) -> int:
     return h
 
 
-def fname(qid: int, cond: str) -> str:
-    return f"m{fnv(f'{SALT}|{qid}|{cond}'):08x}.txt"
+def fname(qid: int, cond: str, salt: str = SALT) -> str:
+    return f"m{fnv(f'{salt}|{qid}|{cond}'):08x}.txt"
 
 
 def question(q: Query) -> tuple[str, set[str]]:
@@ -86,8 +86,11 @@ def question(q: Query) -> tuple[str, set[str]]:
     return (f"{prefix}which ticket was raised when we noted that {claim.sentence()}? Give the ticket id.", {q.gold_ticket})
 
 
-def prepare(out: str, gold_path: str, seeds: list[int], horizon: int, every: int) -> None:
+def prepare(out: str, gold_path: str, seeds: list[int], horizon: int, every: int,
+            conds: list[str] | None = None, salt: str = SALT, caps: dict[str, int] | None = None) -> None:
     os.makedirs(out, exist_ok=True)
+    caps = caps or CAPS
+    conditions = [c for c in CONDITIONS if conds is None or c[0] in conds]
     manifest, qid = [], 0
     for seed in seeds:
         cfg = GenConfig(seed=seed, horizon=horizon, query_every=every)
@@ -97,10 +100,10 @@ def prepare(out: str, gold_path: str, seeds: list[int], horizon: int, every: int
             for q in qs:
                 by_kind[q.kind].append(q.step)
         rng = random.Random(seed)
-        keep = {(k, st) for k, steps in by_kind.items() for st in rng.sample(steps, min(CAPS[k], len(steps)))}
+        keep = {(k, st) for k, steps in by_kind.items() for st in rng.sample(steps, min(caps[k], len(steps)))}
         stream = Stream(cfg)
         systems: dict = {}
-        for _, sysname, _ in CONDITIONS:
+        for _, sysname, _ in conditions:
             if sysname not in systems:
                 systems[sysname] = make_system(sysname, systems)
         known: set[str] = set()
@@ -115,11 +118,11 @@ def prepare(out: str, gold_path: str, seeds: list[int], horizon: int, every: int
                 linked = link(known, q.text)
                 entry = {"qid": qid, "seed": seed, "step": q.step, "kind": q.kind, "gold": sorted(gold),
                          "stale": sorted(c.tgt for c in q.stale_claims), "tokens": {}}
-                for cond, sysname, budget in CONDITIONS:
+                for cond, sysname, budget in conditions:
                     ctx = systems[sysname].query(q, linked, budget or 10**9)
                     memory = ctx.text.strip() or "(nothing)"
                     body = f"MEMORY:\n{memory}\n\nQUESTION:\n{text}\n\nINSTRUCTIONS:\n{INSTRUCTIONS}\n"
-                    with open(os.path.join(out, fname(qid, cond)), "w") as fh:
+                    with open(os.path.join(out, fname(qid, cond, salt)), "w") as fh:
                         fh.write(body)
                     entry["tokens"][cond] = ctx.tokens
                 manifest.append(entry)
@@ -127,8 +130,8 @@ def prepare(out: str, gold_path: str, seeds: list[int], horizon: int, every: int
         for s in systems.values():
             s.close()
     with open(gold_path, "w") as fh:
-        json.dump({"salt": SALT, "conditions": [c for c, _, _ in CONDITIONS], "queries": manifest}, fh)
-    print(f"{qid} queries x {len(CONDITIONS)} conditions -> {out}")
+        json.dump({"salt": salt, "conditions": [c for c, _, _ in conditions], "queries": manifest}, fh)
+    print(f"{qid} queries x {len(conditions)} conditions -> {out}")
 
 
 def f1(pred: set[str], gold: set[str]) -> float:
@@ -181,12 +184,16 @@ def main() -> None:
     p.add_argument("--seeds", type=int, nargs="+", default=[0, 1, 2, 3])
     p.add_argument("--horizon", type=int, default=600)
     p.add_argument("--every", type=int, default=8)
+    p.add_argument("--conds", nargs="+", default=None)
+    p.add_argument("--salt", default=SALT)
+    p.add_argument("--cap", type=int, default=None, help="queries per kind per seed (default: the CAPS table)")
     g = sub.add_parser("grade")
     g.add_argument("--gold", required=True)
     g.add_argument("--answers", required=True)
     a = ap.parse_args()
     if a.cmd == "prepare":
-        prepare(a.out, a.gold, a.seeds, a.horizon, a.every)
+        caps = {k: a.cap for k in CAPS} if a.cap else None
+        prepare(a.out, a.gold, a.seeds, a.horizon, a.every, a.conds, a.salt, caps)
     else:
         grade(a.gold, a.answers)
 
