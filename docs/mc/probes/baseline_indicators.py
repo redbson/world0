@@ -64,7 +64,7 @@ def main() -> None:
         print("  reliability:", {by_id[k]: v for k, v in epistemic.reliability.items()})
         for claim in epistemic.contested:
             print(f"  {claim.status}: {[(s, b) for _, s, b in claim.claims]} margin={claim.margin}")
-    text = p.render()
+    text = p.render(style="full")
     print("  render has epistemic section:", "### Epistemic Status" in text)
 
     print("\nAST-1 attention schema — does the view record why each concept is in focus?")

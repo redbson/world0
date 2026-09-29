@@ -13,7 +13,11 @@ from typing import Any
 
 from world0.llm.base import LLMProvider
 from world0.prompts import PromptRegistry
-from world0.schemas.relation import normalize_semantic_relation, semantic_relation_names
+from world0.schemas.relation import (
+    normalize_semantic_relation,
+    orient_relation,
+    semantic_relation_names,
+)
 from world0.schemas.types import ConceptCandidate, Observation, RelationPrior
 
 # All valid relation language labels for prompt and validation.
@@ -420,20 +424,20 @@ class ConceptExtractor:
         item: Any,
     ) -> tuple[str, str, str, dict[str, Any]] | None:
         if isinstance(item, dict):
-            src = str(item.get("source", "")).strip()
-            tgt = str(item.get("target", "")).strip()
-            rel_type = normalize_semantic_relation(item.get("type", "generic_relation"))
+            src, tgt, rel_type = orient_relation(
+                str(item.get("source", "")).strip(),
+                str(item.get("target", "")).strip(),
+                item.get("type", "generic_relation"),
+            )
             return src, tgt, rel_type, {
                 "evidence": str(item.get("evidence", "")).strip(),
                 "rationale": str(item.get("rationale", "")).strip(),
             }
         if isinstance(item, (list, tuple)) and len(item) >= 3:
-            return (
-                str(item[0]).strip(),
-                str(item[1]).strip(),
-                normalize_semantic_relation(str(item[2]).strip()),
-                {},
+            src, tgt, rel_type = orient_relation(
+                str(item[0]).strip(), str(item[1]).strip(), str(item[2]).strip()
             )
+            return src, tgt, rel_type, {}
         return None
 
     @staticmethod

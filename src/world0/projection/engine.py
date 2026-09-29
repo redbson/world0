@@ -356,13 +356,15 @@ class ProjectionEngine:
                     relations.append(rel)
                     seen.add(rel.id)
         retracted.sort(key=lambda r: (-(r.retracted_tick or 0), r.id))
-        outside_names = {}
+        outside_names: dict[str, str] = {}
+        outside_senses: dict[str, str] = {}
         for rel in retracted:
             for end in (rel.source_id, rel.target_id):
                 if end not in selected_ids and end not in outside_names:
                     node = self._concepts.get(end)
                     if node is not None:
                         outside_names[end] = node.name
+                        outside_senses[end] = node.representation_feature()
         # Relation-index order depends on filesystem load order; sort so
         # the rendered projection is identical across processes.
         relations.sort(key=lambda r: (-live_weight(r), r.id))
@@ -376,6 +378,7 @@ class ProjectionEngine:
             other_contexts=other_contexts,
             retracted=retracted,
             outside_names=outside_names,
+            outside_senses=outside_senses,
             activation_scores=selected_scores,
             task=task,
             # Claims moved to other contexts still compete with the ones in

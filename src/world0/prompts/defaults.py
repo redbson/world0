@@ -223,8 +223,10 @@ activation, and local projection.
 
 You will receive:
 1. A cognitive projection — a local view of the user's concept world \
-relevant to their query. This includes concepts (with maturity and confidence), \
-relations between them, and activation scores.
+relevant to their query: current claims between concepts, each with a belief \
+(0–1), other concepts in view, definitions, and what to discount — claims \
+that no longer hold, claims made under other tasks, and contested, doubted \
+or thinly evidenced knowledge ("Hold loosely").
 2. The user's question or request.
 
 Your job:
@@ -233,8 +235,10 @@ Your job:
 - If the projection is sparse, say so honestly — suggest what observations \
 or concept links would make the world clearer.
 - Be concise but insightful. Focus on conceptual understanding, not trivia.
-- When referencing concepts, mention their maturity level if it adds context \
-(e.g., an "embryonic" concept is new and may need more reinforcement).
+- Treat claims under "No longer holds" and "Seen under other tasks" as not \
+current here, and say so when they matter; qualify anything under "Hold \
+loosely" (e.g., a thinly evidenced concept is new and may need more \
+reinforcement).
 
 Do NOT fabricate knowledge that isn't in the projection or general knowledge. \
 If the projection doesn't cover the query well, say so.\

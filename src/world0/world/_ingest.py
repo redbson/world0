@@ -15,6 +15,7 @@ from world0.schemas.clock import CognitiveClock, wall_now
 from world0.schemas.relation import (
     RelationType,
     normalize_semantic_relation,
+    orient_relation,
     semantic_relation_spec,
 )
 from world0.schemas.types import ConceptCandidate, IngestResult, Observation, PredictionError
@@ -221,7 +222,7 @@ class IngestPipeline:
             if src.id == tgt.id:
                 continue
 
-            semantic_relation = normalize_semantic_relation(relation_name)
+            src, tgt, semantic_relation = orient_relation(src, tgt, relation_name)
             rel_type = semantic_relation_spec(semantic_relation).axis
             key = (src_name, tgt_name, semantic_relation)
             meta = relation_meta.get(key, {})
@@ -376,7 +377,7 @@ class IngestPipeline:
             tgt = self._resolve_observation_ref(tgt_name, local_refs)
             if not src or not tgt:
                 continue
-            semantic_relation = normalize_semantic_relation(relation_name)
+            src, tgt, semantic_relation = orient_relation(src, tgt, relation_name)
             rel_type = semantic_relation_spec(semantic_relation).axis
             existing = self._relations.find_between(
                 src.id, tgt.id, rel_type, directed=True
@@ -416,7 +417,7 @@ class IngestPipeline:
             tgt = self._resolve_observation_ref(tgt_name, local_refs)
             if not src or not tgt or src.id == tgt.id:
                 continue
-            semantic_relation = normalize_semantic_relation(relation_name)
+            src, tgt, semantic_relation = orient_relation(src, tgt, relation_name)
             rel_type = semantic_relation_spec(semantic_relation).axis
             # A claim that is already dead is gone, whether or not a reflect
             # removed it: withdrawing it changes nothing (Theorem 3.7).

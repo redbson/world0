@@ -7,6 +7,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import Enum
+from typing import TypeVar
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -356,6 +357,24 @@ def normalize_semantic_relation(value: str | None) -> str:
         return "generic_relation"
     key = raw.replace(" ", "_")
     return _SEMANTIC_RELATION_ALIASES.get(key, "generic_relation")
+
+
+_T = TypeVar("_T")
+
+# Legacy labels phrased from the other end: "A precedes B" states that B
+# depends on A.  They are stored in the canonical direction, so a claim
+# reads the same whichever label stated it.
+_REVERSED_ALIASES: frozenset[str] = frozenset({"precedes"})
+
+
+def orient_relation(source: _T, target: _T, label: str | None) -> tuple[_T, _T, str]:
+    """``(source, target, canonical semantic relation)`` for a stated claim,
+    with the endpoints swapped for a label phrased from the other end."""
+    key = str(label or "").strip().lower().replace(" ", "_")
+    canonical = normalize_semantic_relation(label)
+    if key in _REVERSED_ALIASES:
+        return target, source, canonical
+    return source, target, canonical
 
 
 def semantic_relation_spec(value: str | None) -> SemanticRelationSpec:

@@ -11,6 +11,19 @@ from world0.schemas.concept import ConceptNode, Maturity
 from world0.schemas.relation import RelationEdge
 
 
+# Compact render: an explicit claim that disconfirmations brought below
+# even odds is listed under "Hold loosely" instead of among the current
+# claims; withdrawn and
+# other-task sections show at most this many lines.
+DOUBTED_BELIEF: float = 0.5
+COMPACT_SECTION_LIMIT: int = 10
+
+
+def _one_line(text: str) -> str:
+    """Collapse whitespace so user text cannot start a line of the render."""
+    return " ".join(str(text).split())
+
+
 class ConceptCandidate(BaseModel):
     """A pre-ingest concept sense, not yet a stable concept node.
 
@@ -197,6 +210,9 @@ class Projection(BaseModel):
     # not in view.
     retracted: list[RelationEdge] = Field(default_factory=list)
     outside_names: dict[str, str] = Field(default_factory=dict)
+    # Sense of each such endpoint (``ConceptNode.representation_feature``),
+    # so a render can tell it from a same-named concept in view.
+    outside_senses: dict[str, str] = Field(default_factory=dict)
     activation_scores: dict[str, float] = Field(default_factory=dict)
     task: str = ""
     epistemic: EpistemicStatus = Field(default_factory=EpistemicStatus)
@@ -232,26 +248,29 @@ class Projection(BaseModel):
         return self._render_full()
 
     def _display_names(self) -> dict[str, str]:
-        """Concept names, with the sense added where two in view share a name."""
-        seen: dict[str, int] = {}
-        for c in self.concepts:
-            seen[c.name.lower()] = seen.get(c.name.lower(), 0) + 1
-        names = dict(self.outside_names)
-        for c in self.concepts:
-            if seen[c.name.lower()] > 1:
-                names[c.id] = f"{c.name} ({c.representation_feature()})"
-            else:
-                names[c.id] = c.name
-        return names
+        """One line per name; the sense is added where two share a name."""
+        senses = {c.id: c.representation_feature() for c in self.concepts}
+        senses.update({k: v for k, v in self.outside_senses.items() if k not in senses})
+        base = {**{k: _one_line(v) for k, v in self.outside_names.items()},
+                **{c.id: _one_line(c.name) for c in self.concepts}}
+        counts: dict[str, int] = {}
+        for name in base.values():
+            counts[name.lower()] = counts.get(name.lower(), 0) + 1
+        return {
+            cid: f"{name} ({senses[cid]})" if counts[name.lower()] > 1 and cid in senses else name
+            for cid, name in base.items()
+        }
 
     def _render_compact(self) -> str:
         """Claims first, then what else is in view, then what to discount.
 
         Claim lines are the explicit relations in view, strongest belief
-        first; co-occurrence edges assert nothing and only put their
-        concepts under "Also relevant".  Withdrawn claims, claims from
-        other tasks and contested / thin knowledge follow in labelled
-        sections, so a reader never takes them for current claims.
+        first, except those that evidence against them has brought below
+        ``DOUBTED_BELIEF``;
+        co-occurrence edges assert nothing and only put their concepts under
+        "Also relevant".  Doubted, withdrawn, other-task and contested
+        claims and thin knowledge follow in labelled sections, so a reader
+        never takes them for current claims.
         """
         # Local import: the phrase table is a presentation concern of the
         # relation schema, kept next to the specs it covers.
@@ -263,15 +282,26 @@ class Projection(BaseModel):
             return f"{names.get(r.source_id, r.source_id)} {relation_phrase(r.semantic_relation)} " \
                    f"{names.get(r.target_id, r.target_id)}"
 
+        def capped(edges: list[RelationEdge], line) -> list[str]:
+            out = [line(r) for r in edges[:COMPACT_SECTION_LIMIT]]
+            if len(edges) > COMPACT_SECTION_LIMIT:
+                out.append(f"- … and {len(edges) - COMPACT_SECTION_LIMIT} more")
+            return out
+
         lines: list[str] = ["## Cognitive Context"]
         if self.task:
-            lines.append(f"Context for: {self.task}")
+            lines.append(f"Context for: {_one_line(self.task)}")
         if not self.concepts:
             lines.append("No concepts in view.")
             return "\n".join(lines)
-        claims = [r for r in self.relations if r.is_explicit]
+        explicit = sorted((r for r in self.relations if r.is_explicit), key=lambda r: -r.probability)
+        # Doubted: evidence against it brought it below even odds (a low
+        # starting prior alone, e.g. ``related_to``, is not doubt).
+        doubted = [r for r in explicit if r.disconfirmation_count > 0 and r.probability < DOUBTED_BELIEF]
+        doubted_ids = {r.id for r in doubted}
+        claims = [r for r in explicit if r.id not in doubted_ids]  # stable: engine order breaks ties
         mentioned: set[str] = set()
-        for r in sorted(claims, key=lambda r: -r.probability):  # stable: engine order breaks ties
+        for r in claims:
             lines.append(f"- {sentence(r)} (belief {r.probability:.2f})")
             mentioned |= {r.source_id, r.target_id}
         rest = [
@@ -281,29 +311,42 @@ class Projection(BaseModel):
         ]
         if rest:
             lines.append("Also relevant: " + ", ".join(rest) + ".")
-        described = [c for c in self.concepts if c.description]
+        described = [c for c in self.concepts if c.description.strip()]
         if described:
             lines.append("Definitions:")
-            lines.extend(f"- {names[c.id]}: {c.description}" for c in described)
+            lines.extend(f"- {names[c.id]}: {_one_line(c.description)}" for c in described)
         if self.retracted:
             lines.append("No longer holds:")
-            lines.extend(f"- {sentence(r)}" for r in self.retracted[:10])
+            lines.extend(capped(self.retracted, lambda r: f"- {sentence(r)}"))
         if self.other_contexts:
             lines.append("Seen under other tasks:")
-            for r in self.other_contexts[:10]:
-                tasks = ", ".join(sorted({t for t in r.claim_tasks if t})[:3])
-                lines.append(f"- {sentence(r)}" + (f" ({tasks})" if tasks else ""))
+
+            def other(r: RelationEdge) -> str:
+                tasks = ", ".join(sorted({_one_line(t) for t in r.claim_tasks if t.strip()})[:3])
+                return f"- {sentence(r)}" + (f" ({tasks})" if tasks else "")
+
+            lines.extend(capped(self.other_contexts, other))
         loose: list[str] = []
         rels = {r.id: r for r in (*self.relations, *self.other_contexts)}
         for claim in self.epistemic.contested:
-            parts = []
-            for rid, semantic, belief in claim.claims:
-                rel = rels.get(rid)
-                src = names.get(rel.source_id if rel else claim.source_id, "?")
-                tgt = names.get(rel.target_id if rel else claim.target_id, "?")
-                parts.append(f"{src} {relation_phrase(semantic)} {tgt} ({belief:.2f})")
+            lead = rels.get(claim.leading)
+            if lead is None:
+                continue
+            # The leader against the claims that contradict it; a claim not
+            # in this view (filtered out by the caller) is not guessed at.
+            opposing = [
+                (rels[rid], belief) for rid, _sem, belief in claim.claims
+                if rid in rels and rid != lead.id
+                and lead.opposes(rels[rid].relation_type, rels[rid].semantic_relation)
+            ]
+            if not opposing:
+                continue
+            lead_belief = next((b for rid, _s, b in claim.claims if rid == lead.id), lead.probability)
+            parts = [f"{sentence(r)} ({b:.2f})" for r, b in opposing]
             joiner = " vs " if claim.status == "contested" else " over "
-            loose.append(f"- {claim.status}: {joiner.join(parts)}")
+            loose.append(f"- {claim.status}: {sentence(lead)} ({lead_belief:.2f}){joiner}{' / '.join(parts)}")
+        for r in doubted:
+            loose.append(f"- doubted: {sentence(r)} (belief {r.probability:.2f})")
         tentative = [names[cid] for cid in self.epistemic.tentative_ids() if cid in names]
         if tentative:
             loose.append(f"- thin evidence: {', '.join(tentative)}")

@@ -78,6 +78,7 @@ from world0.schemas.relation import (
     RelationType,
     is_known_relation_type,
     normalize_semantic_relation,
+    orient_relation,
     semantic_relation_spec,
     semantic_relation_names,
 )
@@ -1724,7 +1725,7 @@ class PKMAgent:
                 f"Invalid relation type: '{relation_type}'.\n"
                 f"Valid relation labels: {valid}"
             )
-        semantic_relation = normalize_semantic_relation(relation_type)
+        source, target, semantic_relation = orient_relation(source, target, relation_type)
         rel_type = semantic_relation_spec(semantic_relation).axis
 
         obs = Observation(

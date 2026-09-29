@@ -79,7 +79,7 @@ def main() -> None:
     for cid, t in p.attention.items():
         print(f"   {names[cid]:18} kind={t.kind:7} via={names.get(t.via, t.via)!s:12} rel={t.relation:16}"
               f" named={t.task_named} hist={t.task_history} sustained={t.sustained} in_focus={t.in_focus} ignited={t.ignited}")
-    text = p.render()
+    text = p.render(style="full")
     print(text[text.index("### Why These Concepts"):] if "### Why These Concepts" in text else "(no attention section)")
 
 

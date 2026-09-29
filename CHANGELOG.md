@@ -7,16 +7,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
-- **Compact render is the default** (analysis doc §7.26) —
-  `Projection.render()` now returns the prompt form LongRun's readers did
-  best with (0.90 vs 0.57 for the full render at the same budget): current
-  claims as sentences with belief, strongest first
-  (`api depends on db (belief 0.82)`), other concepts in view, concept-card
-  definitions, and labelled sections for what to discount — withdrawn
-  claims, claims made under other tasks, contested or thin knowledge.
-  Homonyms carry their sense.  `render(style="full")` keeps the diagnostic
-  view.  `RELATION_PHRASES` / `relation_phrase()` phrase every semantic
-  relation.
 - **Task context** (analysis doc §7.24, paper §7.3) — task words are weighted
   by how distinctive they are among the world's task labels
   (`TaskVocabulary`: `ln((L+1)/(df+1)) + 0.01`), so shared boilerplate
@@ -208,6 +198,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`models/`, `prompts/`).
 
 ### Changed
+- **Compact render is the default** (analysis doc §7.26) —
+  `Projection.render()` now returns the prompt form LongRun's readers did
+  best with (0.90 vs 0.57 for the full render at the same budget): current
+  claims as sentences with belief, strongest first
+  (`api depends on db (belief 0.82)`), other concepts in view, concept-card
+  definitions, and labelled sections for what to discount — withdrawn
+  claims, claims made under other tasks, contested claims (the leader
+  against its opponents), claims disconfirmed below even odds, thin
+  evidence.  Homonyms (in view or endpoints of withdrawn claims) carry their
+  sense; user text is kept to one line.  `render(style="full")` keeps the
+  diagnostic view; the PKM agent's answer prompt describes the new form.
+  `RELATION_PHRASES` / `relation_phrase()` phrase every semantic relation.
 - **Temporal dynamics run on cognitive time, not the calendar.**  All
   half-lives (`CONCEPT_HALF_LIFE`, `RELATION_BASE_HALF_LIFE`,
   `CONCEPT_TEMPORAL_HL`, `RELATION_TEMPORAL_HL`, `PROJECTION_TEMPORAL_HL`)
@@ -349,7 +351,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`inclusion` direction** — the extraction prompt and the relation spec
   described `inclusion` as "A is contained in B" while the `contains` alias
   (and every stated `contains` claim) reads source-contains-target; both now
-  say "A contains B" (`proper_inclusion` likewise).
+  say "A contains B" (`proper_inclusion` likewise).  Stores built by the
+  LLM extractor under the old wording may hold `inclusion` edges pointing
+  from the part to the whole; they are not migrated (nothing records which
+  wording produced an edge).
+- **`precedes` direction** — "A precedes B" was stored as "A depends on B";
+  it is now stored as "B depends on A" (`orient_relation`, used by ingest,
+  the extractor and `PKMAgent.connect`), so statements, contradictions and
+  withdrawals with that label find the same edge.
 - **Maturity no longer depends on how often `reflect` runs** (`docs/paper/world0-formal.md`
   §3.5, F6, Theorem 3.7).  Promotion gates now contain only quantities that
   become true at events (confirmations, disconfirmations, spaced recurrence,

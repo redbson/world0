@@ -43,6 +43,10 @@ def parse_shipped(text: str) -> tuple[set[Claim], set[str], dict[Claim, float]]:
     return claims, set(names.values()), beliefs
 
 
+# Section labels of ``Projection.render(style="compact")`` after the claims.
+SECTION_LABELS = frozenset({"Definitions:", "No longer holds:", "Seen under other tasks:", "Hold loosely:"})
+
+
 def parse_compact(text: str) -> tuple[set[Claim], set[str], dict[Claim, float]]:
     """``Projection.render(style="compact")``: claim bullets before the first section.
 
@@ -58,8 +62,8 @@ def parse_compact(text: str) -> tuple[set[Claim], set[str], dict[Claim, float]]:
         if line.startswith("Also relevant: "):
             concepts |= {x.strip() for x in line[len("Also relevant: "):].rstrip(".").split(",") if x.strip()}
             continue
-        if line.endswith(":") and not line.startswith("- "):
-            in_claims = False  # "Definitions:", "No longer holds:", …
+        if line in SECTION_LABELS:
+            in_claims = False
             continue
         if not (in_claims and line.startswith("- ")):
             continue

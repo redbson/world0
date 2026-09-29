@@ -203,9 +203,9 @@ projection = w.project(
 print(projection.render())
 ```
 
-`render()` returns the compact prompt form: current claims in plain language with their belief, the other concepts in view, then what to discount — withdrawn claims, claims made under other tasks, contested or thin knowledge. `render(style="full")` is the diagnostic view (maturity, confidence, evidence, strengths, reinforcement counts, attention traces).
+`render()` returns the compact prompt form: current claims in plain language with their belief, the other concepts in view, then what to discount — withdrawn claims, claims made under other tasks, contested knowledge, claims disconfirmed below even odds, thin evidence. `render(style="full")` is the diagnostic view (maturity, confidence, evidence, strengths, reinforcement counts, attention traces).
 
-`render()` 返回紧凑的提示词形式：当前主张（自然语言 + 置信度）、视野中的其他概念，以及需要打折扣的内容——已撤回的主张、在其他任务下提出的主张、有争议或证据单薄的知识。`render(style="full")` 是诊断视图（成熟度、置信度、证据、强度、强化次数、注意力追踪）。
+`render()` 返回紧凑的提示词形式：当前主张（自然语言 + 信念）、视野中的其他概念，以及需要打折扣的内容——已撤回的主张、在其他任务下提出的主张、有争议、被否证到低于五成或证据单薄的知识。`render(style="full")` 是诊断视图（成熟度、置信度、证据、强度、强化次数、注意力追踪）。
 
 ```markdown
 ## Cognitive Context

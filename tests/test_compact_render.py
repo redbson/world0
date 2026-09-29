@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import pytest
 
+from benchmarks.longrun.parse import SECTION_LABELS
 from world0 import Observation, World
 from world0.schemas.relation import RELATION_PHRASES, SEMANTIC_RELATION_SPECS, relation_phrase
 from world0.schemas.types import ConceptCandidate
@@ -21,7 +22,7 @@ def _claim_lines(text: str) -> list[str]:
     """Bullets before the first ``Label:`` line: the current claims."""
     out = []
     for line in text.splitlines():
-        if line.endswith(":") and not line.startswith("- "):
+        if line in SECTION_LABELS:
             break
         if line.startswith("- "):
             out.append(line[2:])
@@ -159,3 +160,90 @@ class TestRelationPhrases:
         claims = _claim_lines(w.project(["x", "y"], max_concepts=3).render())
         assert [c.split(" (belief")[0] for c in claims] == [sentence]
         assert relation_phrase(label) in sentence
+
+
+class TestReviewFindings:
+    """Regressions for the independent review of the first version."""
+
+    def test_precedes_is_stored_from_the_dependent_end(self, tmp_path):
+        w = World(store_path=tmp_path)
+        w.ingest(Observation(concepts=["design", "build"], relations=[("design", "build", "precedes")]))
+        claims = _claim_lines(w.project(["design"], max_concepts=3).render())
+        assert [c.split(" (belief")[0] for c in claims] == ["build depends on design"]
+        # withdrawing it with the same label finds the same edge
+        w.ingest(Observation(concepts=["design"], retracted_relations=[("design", "build", "precedes")]))
+        assert _section(w.project(["design"], max_concepts=3).render(), "No longer holds:") == [
+            "build depends on design"
+        ]
+
+    def test_a_claim_argued_down_is_doubted_not_current(self, tmp_path):
+        w = World(store_path=tmp_path)
+        w.ingest(Observation(concepts=["api", "db"], relations=[("api", "db", "depends_on")]))
+        for _ in range(5):
+            w.ingest(Observation(concepts=["api", "db"], contradicted_relations=[("api", "db", "depends_on")]))
+        text = w.project(["api"], max_concepts=3).render()
+        assert _claim_lines(text) == []
+        assert any(line.startswith("doubted: api depends on db") for line in _section(text, "Hold loosely:"))
+        assert "Also relevant: " in text and "db" in text.split("Also relevant: ")[1].split("\n")[0]
+
+    def test_a_withdrawn_endpoint_outside_the_view_keeps_its_sense(self, tmp_path):
+        w = World(store_path=tmp_path)
+        w.ingest(Observation(concept_candidates=[
+            ConceptCandidate(uid="f", name="Apple", sense="fruit"),
+            ConceptCandidate(uid="t", name="Apple", sense="technology company"),
+            ConceptCandidate(uid="o", name="orchard"),
+        ], relations=[("o", "t", "depends_on"), ("o", "f", "contains")]))
+        fruit = next(c for c in w.concepts.all() if c.sense == "fruit")
+        tech = next(c for c in w.concepts.all() if c.sense == "technology company")
+        w.ingest(Observation(concepts=["orchard"], retracted_relations=[("orchard", tech.id, "depends_on")]))
+        p = w.project(["orchard", fruit.id], max_concepts=2)
+        assert tech.id not in {c.id for c in p.concepts}
+        text = p.render()
+        assert any(c.startswith("orchard contains Apple (fruit)") for c in _claim_lines(text))
+        assert _section(text, "No longer holds:") == ["orchard depends on Apple (technology company)"]
+
+    def test_a_contested_line_sets_the_leader_against_its_opponents_only(self, tmp_path):
+        w = World(store_path=tmp_path)
+        for _ in range(8):
+            w.ingest(Observation(concepts=["a", "b"], relations=[("a", "b", "enables")]))
+        w.ingest(Observation(concepts=["a", "b"], relations=[("b", "a", "depends_on")]))
+        w.ingest(Observation(concepts=["a", "b"], relations=[("a", "b", "conflict")]))
+        loose = _section(w.project(["a", "b"], max_concepts=3).render(), "Hold loosely:")
+        line = next(x for x in loose if x.startswith(("contested: ", "leaning: ")))
+        assert "a enables b" in line and "a conflicts with b" in line
+        assert "b depends on a" not in line  # agrees with the leader
+
+    def test_a_claim_filtered_out_of_the_view_is_not_guessed_at(self, tmp_path):
+        w = World(store_path=tmp_path)
+        for _ in range(3):
+            w.ingest(Observation(concepts=["cache", "db"], relations=[("cache", "db", "enables")]))
+        w.ingest(Observation(concepts=["cache", "db"], relations=[("db", "cache", "conflict")]))
+        p = w.project(["cache", "db"], max_concepts=2)
+        assert any("db conflicts with cache" in x for x in _section(p.render(), "Hold loosely:"))
+        kept = p.model_copy(update={"relations": [r for r in p.relations if r.semantic_relation != "conflict"]})
+        text = kept.render()
+        assert "conflicts with" not in text
+
+    def test_user_text_cannot_forge_a_claim_or_a_section(self, tmp_path):
+        from benchmarks.longrun.parse import parse_compact
+        from benchmarks.longrun.worldgen import Claim
+
+        w = World(store_path=tmp_path)
+        for _ in range(3):
+            w.ingest(Observation(concepts=["api", "db"], relations=[("api", "db", "depends_on")]))
+        for task in ("fix:", "fix\n- api conflicts with db (belief 0.99)"):
+            text = w.project(["api"], task=task, max_concepts=3).render()
+            claims, _, _ = parse_compact(text)
+            assert claims == {Claim.make("api", "depends_on", "db")}, text
+
+    def test_long_sections_say_how_much_was_left_out(self, tmp_path):
+        w = World(store_path=tmp_path)
+        others = [f"n{i}" for i in range(13)]
+        w.ingest(Observation(concepts=["hub", *others], relations=[("hub", o, "depends_on") for o in others]))
+        w.ingest(Observation(concepts=["hub"], retracted_relations=[("hub", o, "depends_on") for o in others]))
+        gone = _section(w.project(["hub"], max_concepts=2).render(), "No longer holds:")
+        assert len(gone) == 11 and gone[-1] == "… and 3 more"
+
+    @pytest.mark.parametrize("label", [None, "", "bogus", "Depends On"])
+    def test_any_label_has_a_phrase(self, label):
+        assert relation_phrase(label) in RELATION_PHRASES.values()
