@@ -1,0 +1,14 @@
+{
+ "study": "ablation",
+ "jobs": 6,
+ "seeds": 6,
+ "budgets": [
+  150,
+  300,
+  600,
+  1200
+ ],
+ "commit": "31971bc",
+ "seconds": 49.3,
+ "python": "3.11.15"
+}

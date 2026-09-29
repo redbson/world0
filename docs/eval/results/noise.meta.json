@@ -1,0 +1,14 @@
+{
+ "study": "noise",
+ "jobs": 24,
+ "seeds": 6,
+ "budgets": [
+  150,
+  300,
+  600,
+  1200
+ ],
+ "commit": "31971bc",
+ "seconds": 94.5,
+ "python": "3.11.15"
+}
