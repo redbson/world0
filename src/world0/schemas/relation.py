@@ -83,6 +83,57 @@ _LEGACY_RELATION_TYPE_MAP: dict[str, RelationType] = {
 # relation without an attached probability (see ``RelationEdge.confirm``).
 EXPLICIT_CONFIRMATION_GAIN: float = 0.05
 
+# Belief that a *negative-axis* claim is correct at the moment it is first
+# stated and the extractor attached no probability of its own.
+#
+# ``SemanticRelationSpec.propagation_strength`` is how strongly activation
+# flows along an edge.  On the negative axis it is the gain of the
+# *inhibition* channel and is deliberately small (0.05-0.12); reading it as
+# a belief made a stated conflict start with a seventh of the belief of a
+# stated dependence, lose every contested pair, and — because the relation
+# floor is ``RELATION_FLOOR_SHARE x belief`` — fall under the prune
+# threshold from the first tick (docs/paper §4.2, note after Proposition
+# 4.3).  0.70 is the belief a once-stated ``dependence`` (the paper's
+# reference relation, and the weakest positive-axis claim) already carries,
+# so a stated claim has the same standing on either axis.  It is a belief
+# only: the inhibition gain (``weight``) is untouched.
+NEGATIVE_CLAIM_PRIOR: float = 0.70
+
+# A stored negative claim is rebased onto ``NEGATIVE_CLAIM_PRIOR`` only if its
+# belief is explained (within this tolerance) by the legacy default seed and
+# its own confirm / weaken counters; anything else was set by an extractor or
+# by feedback and is kept as stored (``RelationEdge.adopt_claim_prior``).
+LEGACY_BELIEF_TOLERANCE: float = 0.02
+
+
+def disconfirmation_penalty(count: int) -> float:
+    """Absolute penalty of the ``count``-th disconfirmation (diminishing)."""
+    return 0.06 * (1.0 / (1.0 + count * 0.10))
+
+
+def _replay_belief(
+    seed: float, confirms: int, weakens: int, *, weakens_first: bool = False
+) -> float:
+    """Belief reached from ``seed`` after bare confirmations / disconfirmations.
+
+    Mirrors ``RelationEdge.confirm`` (closed form) and ``RelationEdge.weaken``
+    (with its 0.01 clamp); the order in which they happened is not stored, so
+    callers bound it with both orderings.
+    """
+
+    def confirm(p: float) -> float:
+        return 1.0 - (1.0 - p) * (1.0 - EXPLICIT_CONFIRMATION_GAIN) ** max(0, confirms)
+
+    def weaken(p: float) -> float:
+        for i in range(1, max(0, weakens) + 1):
+            if p <= 0.01:
+                break
+            p = max(0.01, p - disconfirmation_penalty(i))
+        return p
+
+    p = min(1.0, max(0.0, seed))
+    return confirm(weaken(p)) if weakens_first else weaken(confirm(p))
+
 
 @dataclass(frozen=True)
 class SemanticRelationSpec:
@@ -93,6 +144,20 @@ class SemanticRelationSpec:
     structural_strength: float
     propagation_strength: float
     description: str
+
+    @property
+    def claim_prior(self) -> float:
+        """Belief that one explicit statement of this relation is correct.
+
+        ``propagation_strength`` for positive and parallel relations (the
+        long-standing default, unchanged); ``NEGATIVE_CLAIM_PRIOR`` for the
+        negative axis, whose propagation strength is an inhibition gain and
+        not a belief.  Belief and gain are separate quantities: this one
+        seeds ``RelationEdge.probability``, the other ``weight``.
+        """
+        if self.axis == RelationType.NEGATIVE:
+            return NEGATIVE_CLAIM_PRIOR
+        return self.propagation_strength
 
 
 SEMANTIC_RELATION_SPECS: dict[str, SemanticRelationSpec] = {
@@ -349,6 +414,12 @@ class RelationEdge(BaseModel):
     propagation_strength: float = Field(default=0.45, ge=0.0, le=1.0)
     probability: float = Field(default=0.3, ge=0.0, le=1.0)
     probability_observation_count: int = 0
+    # Belief an explicit claim started from: ``SemanticRelationSpec.claim_prior``
+    # or the extractor's own prior.  ``None`` marks an edge stored before belief
+    # was separated from the propagation gain (a legacy negative claim is
+    # rebased once on load, see ``adopt_claim_prior``); it also stays ``None``
+    # for co-occurrence edges, which assert nothing.
+    belief_prior: float | None = Field(default=None, ge=0.0, le=1.0)
     weight: float = Field(default=0.3, ge=0.0, le=1.0)
     is_explicit: bool = False  # True if declared by Agent, False if Hebbian
 
@@ -402,8 +473,18 @@ class RelationEdge(BaseModel):
             and self.probability == 0.3
             and self.weight == 0.3
             and self.confidence == 0.3
+            # A stamped edge was initialised on purpose (an extractor prior
+            # of exactly 0.3 is not "unset").
+            and self.belief_prior is None
         ):
-            self.probability = spec.propagation_strength
+            # Belief and operational strength are separate quantities: the
+            # weight is the propagation (or inhibition) gain of the label; the
+            # belief is its claim prior for an explicit statement.
+            self.probability = (
+                spec.claim_prior if self.is_explicit else spec.propagation_strength
+            )
+            if self.is_explicit:
+                self.belief_prior = self.probability
             self.weight = spec.propagation_strength
             self.confidence = spec.structural_strength
         return self
@@ -414,8 +495,57 @@ class RelationEdge(BaseModel):
             self.probability_observation_count == 0
             and self.probability == 0.3
             and self.confidence != 0.3
+            # Stamped edges postdate the probability field: a belief of
+            # exactly 0.3 (an extractor's prior) is a belief, not "missing".
+            and self.belief_prior is None
         ):
             self.probability = self.confidence
+
+    def adopt_claim_prior(self) -> bool:
+        """Migrate an explicit negative claim stored before belief and gain
+        were separated.
+
+        Such an edge started at its inhibition gain (0.05-0.12) as *belief*,
+        so a stated conflict carried a seventh of the standing of a stated
+        dependence.  If the stored belief is what that legacy seed and the
+        edge's own ``confirm`` / ``weaken`` counters explain (within
+        ``LEGACY_BELIEF_TOLERANCE``, for either order of the two), the belief
+        is rebased: the same counters are replayed from the label's claim
+        prior instead (confirmations first, then disconfirmations), and the
+        result is kept only if it is higher.  A belief the legacy seed does
+        not explain came from an extractor's own probability or from
+        feedback, and is kept as stored.  ``weight`` (the inhibition gain) is
+        never touched, and neither is any positive, parallel or co-occurrence
+        edge.  The edge is stamped with ``belief_prior`` so this runs once.
+        Returns True when the edge was stamped (and so should be persisted).
+        """
+        if (
+            self.belief_prior is not None
+            or not self.is_explicit
+            or self.relation_type != RelationType.NEGATIVE
+        ):
+            return False
+        confirms = self.probability_observation_count
+        weakens = self.disconfirmation_count
+        seed = self.propagation_strength  # what the legacy code seeded belief from
+        ends = (
+            _replay_belief(seed, confirms, weakens),
+            _replay_belief(seed, confirms, weakens, weakens_first=True),
+        )
+        explained = (
+            min(ends) - LEGACY_BELIEF_TOLERANCE
+            <= self.probability
+            <= max(ends) + LEGACY_BELIEF_TOLERANCE
+        )
+        if explained:
+            prior = semantic_relation_spec(self.semantic_relation).claim_prior
+            self.probability = max(
+                self.probability, _replay_belief(prior, confirms, weakens)
+            )
+            self.belief_prior = prior
+        else:
+            self.belief_prior = self.probability
+        return True
 
     def involves(self, concept_id: str) -> bool:
         return self.source_id == concept_id or self.target_id == concept_id
@@ -568,7 +698,7 @@ class RelationEdge(BaseModel):
         """
         self.disconfirmation_count += 1
         self.last_weakened = datetime.now(timezone.utc)
-        penalty = 0.06 * (1.0 / (1.0 + self.disconfirmation_count * 0.10))
+        penalty = disconfirmation_penalty(self.disconfirmation_count)
         self.weight = max(0.01, self.weight - penalty)
         self.confidence = max(0.01, self.confidence - penalty)
         # Disconfirmation is semantic evidence, so the belief that the
@@ -628,8 +758,15 @@ class RelationEdge(BaseModel):
         if total_strength <= 0:
             return
         self.probability = min(1.0, max(0.0, total / total_strength))
-        self.weight = self.probability
-        self.confidence = self.probability
+        # Evidence about the claim re-scales the operational strengths of a
+        # positive / parallel edge.  On the negative axis ``weight`` is the
+        # inhibition gain (0.05-0.12 by design), not a belief: writing a
+        # belief of ~0.7 into it would multiply the inhibition of an
+        # extractor-restated conflict by ~3 now that stated negative claims
+        # carry a real belief, so the gain is left alone.
+        if self.relation_type != RelationType.NEGATIVE:
+            self.weight = self.probability
+            self.confidence = self.probability
         if provenance:
             self.provenance = provenance
             if provenance not in self.task_history:

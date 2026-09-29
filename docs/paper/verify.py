@@ -236,29 +236,44 @@ def check_confirm() -> None:
 
 
 def check_relation_survival() -> None:
-    section("§4.2 explicit relation survival ≥ E·log2(p/0.2·…) = E·log2(5p)")
-    for restate in (0, 5):
-        w = World(store_path=tempfile.mkdtemp())
-        for _ in range(1 + restate):
-            w.ingest(Observation(concepts=["a", "b"], relations=[("a", "b", "depends_on")]))
-        a, b = w.concepts.resolve("a"), w.concepts.resolve("b")
-        edge = w.relations.find_any_between(a.id, b.id)[0]
-        p = edge.probability
-        bound = E * math.log2(p / (0.02 / RELATION_FLOOR_SHARE))
-        dec = DecayEngine(w.concepts, w.relations, clock=w.clock)
-        start = w.clock.tick
-        pruned_at = None
-        step = 50
-        while pruned_at is None and w.clock.tick - start < 20_000:
-            w.clock.advance(step)
-            for node in (a, b):  # keep the concepts alive, relations idle
-                node.last_activated_tick = w.clock.tick
-                node.last_activated = datetime.now(timezone.utc)
-            dec.decay_relations()
-            if edge.id in dec.prune_relations():
-                pruned_at = w.clock.tick - start
-        assert pruned_at is not None and pruned_at >= bound - step, (pruned_at, bound)
-        ok(f"p={p:.3f}", f"bound {bound:.0f}, pruned after {pruned_at} idle observations")
+    section("§4.2 explicit relation survival ≥ E·log2(p/0.2·…) = E·log2(5p), both axes")
+    survived: dict[tuple[str, int], int] = {}
+    # ``depends_on`` is the reference relation; ``conflict`` and ``disjointness``
+    # are negative-axis claims whose propagation strength is an inhibition gain
+    # (0.10 / 0.05), not a belief: they are seeded from NEGATIVE_CLAIM_PRIOR and
+    # must live exactly as long as the dependence (before: 450 / 350 vs 8100).
+    for rel in ("depends_on", "conflict", "disjointness"):
+        for restate in (0, 5):
+            w = World(store_path=tempfile.mkdtemp())
+            for _ in range(1 + restate):
+                w.ingest(Observation(concepts=["a", "b"], relations=[("a", "b", rel)]))
+            a, b = w.concepts.resolve("a"), w.concepts.resolve("b")
+            edge = w.relations.find_any_between(a.id, b.id)[0]
+            p = edge.probability
+            gain = edge.propagation_strength
+            bound = E * math.log2(p / (0.02 / RELATION_FLOOR_SHARE))
+            dec = DecayEngine(w.concepts, w.relations, clock=w.clock)
+            start = w.clock.tick
+            pruned_at = None
+            step = 50
+            while pruned_at is None and w.clock.tick - start < 20_000:
+                w.clock.advance(step)
+                for node in (a, b):  # keep the concepts alive, relations idle
+                    node.last_activated_tick = w.clock.tick
+                    node.last_activated = datetime.now(timezone.utc)
+                dec.decay_relations()
+                if edge.id in dec.prune_relations():
+                    pruned_at = w.clock.tick - start
+            assert pruned_at is not None and pruned_at >= bound - step, (rel, pruned_at, bound)
+            survived[(rel, restate)] = pruned_at
+            ok(f"{rel:12s} restated x{restate} p={p:.3f} gain={gain:.2f}",
+               f"bound {bound:.0f}, pruned after {pruned_at} idle observations")
+    for rel in ("conflict", "disjointness"):
+        for restate in (0, 5):
+            assert survived[(rel, restate)] == survived[("depends_on", restate)], (rel, restate)
+    ok("negative claims live exactly as long as a dependence",
+       f"{survived[('conflict', 0)]} = {survived[('depends_on', 0)]} (stated once), "
+       f"{survived[('conflict', 5)]} = {survived[('depends_on', 5)]} (x5)")
 
 
 # ── §5 Hebbian ─────────────────────────────────────────────────────────
@@ -473,6 +488,31 @@ def check_opposition() -> None:
             eb = RelationEdge(source_id="x", target_id="y", semantic_relation=b, is_explicit=True)
             assert ea.opposes(eb.relation_type, eb.semantic_relation) == eb.opposes(ea.relation_type, ea.semantic_relation)
     ok(f"all {len(SEMANTIC_RELATION_SPECS) ** 2} ordered pairs of semantic relations")
+
+    # A stated claim has the same standing on either axis: `dependence` and every
+    # negative claim are seeded at 0.70, so swapping which side of a contested pair
+    # is the negative one swaps the two beliefs exactly.  (Before, "enables x10 then
+    # conflict x10" gave 0.45 vs 0.43 and its mirror 0.85 vs 0.03.)
+    def beliefs(seq: str) -> tuple[float, float]:
+        w = World(store_path=tempfile.mkdtemp())
+        for ch in seq:
+            rel = "depends_on" if ch == "E" else "conflict"
+            w.ingest(Observation(concepts=["A", "B"], relations=[("A", "B", rel)]))
+        ids = {w.concepts.resolve(n).id for n in "AB"}
+        edges = [e for e in w.relations.all() if {e.source_id, e.target_id} == ids and e.is_explicit]
+        pos = next(e for e in edges if e.relation_type.value != "negative")
+        neg = next(e for e in edges if e.relation_type.value == "negative")
+        return pos.probability, neg.probability
+
+    swap = str.maketrans("EC", "CE")
+    seqs = ["EC", "EEECCC", "E" * 10 + "C" * 10, "EC" * 10, "EEEC" * 5]
+    for seq in seqs:
+        e1, c1 = beliefs(seq)
+        e2, c2 = beliefs(seq.translate(swap))
+        assert abs(e1 - c2) < 1e-12 and abs(c1 - e2) < 1e-12, (seq, (e1, c1), (e2, c2))
+    e, c = beliefs("E" * 10 + "C" * 10)
+    ok(f"axis swap is an exact mirror for {len(seqs)} contested sequences",
+       f"E10,C10: dependence {e:.3f} vs conflict {c:.3f} (the later block leads)")
 
 
 def main() -> None:

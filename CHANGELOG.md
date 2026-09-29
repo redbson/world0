@@ -291,6 +291,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   projection unchanged.  `RelationEdge.is_directed` exposes the rule.
 
 ### Fixed
+- **A stated negative claim carries a belief, not an inhibition gain**
+  (paper §4.2 note, analysis doc §7.21).  `RelationManager.discover` seeded an
+  explicit edge's `probability` from `propagation_strength`, which on the
+  negative axis is the gain of the inhibition channel (0.05-0.12).  A once-
+  stated `conflict` therefore started at belief 0.10, its relation floor
+  (`0.1 × probability`) sat under the 0.02 prune threshold, and with both
+  concepts kept alive it was pruned after 450 idle observations
+  (`disjointness` 350) against 8 100 for a `depends_on` stated the same way;
+  in a contested pair it started 0.76 vs 0.10, so `assess()` called one
+  `enables` plus one `conflict` "leaning" (0.705 vs 0.100).  The default
+  belief of a negative-axis claim is now `NEGATIVE_CLAIM_PRIOR` = 0.70 (what
+  a once-stated `dependence` carries), via `SemanticRelationSpec.claim_prior`
+  (positive / parallel unchanged, bit for bit); the inhibition gain
+  (`weight`) and activation are untouched.  Stated-once negative claims now
+  live 8 100 observations like a dependence (restated x5: 9 200), a contested
+  pair started at equal belief is symmetric under swapping the axes
+  (`enables x10` then `conflict x10`: 0.447 / 0.811, mirror 0.849 / 0.410;
+  before 0.447 / 0.433 and 0.849 / 0.032), and beliefs below 0.2 (an
+  extractor's "probably not", a claim disconfirmed that far) are still
+  forgotten.  Stores written earlier are migrated once on load
+  (`RelationEdge.adopt_claim_prior`, new field `belief_prior`; a belief that
+  the legacy seed and the edge's own counters do not explain is kept).
+  Side effects: negative claims now count by belief in the network entropy
+  (toy world: negative mass 0.09 → 0.84); an extractor prior of exactly 0.3
+  is no longer replaced by the label default (nor, on reload, by the
+  structural confidence); restating a negative edge
+  through `relation_priors` no longer writes the belief into its inhibition
+  gain.
 - **Forgetting no longer depends on how often `reflect()` runs** (paper
   Theorem 3.2).  Activation moved the decay reference point to "now" and
   the decay owed for the interval before it was dropped: a concept used

@@ -804,6 +804,10 @@ $\text{floor} = 0.1\cdot p\cdot 2^{-\Delta/4380}$ 回归而不是向 0（`RELATI
 成立（0.8 → 0.435）。`TestRelationEvidenceFloor`：3 000 次闲置后显式关系仍在、Hebbian
 边仍消失、12 000 次后显式关系按纪元遗忘、复述过的关系地板更高。
 
+**后记（§7.21）：** 上表的地板 $0.1\cdot p$ 锚定的是信念。negative 轴的显式主张当时是用抑制增益
+（0.05–0.12）而不是信念播种的，所以对它们地板低于剪枝阈值，一次陈述的 conflict 450 次观察就被剪；
+§7.21 把信念与增益分开后，它们与 depends_on 同样存续 8 100 次。
+
 ### 7.15 学习状态的持久化成本 ✅
 
 **探针**（100 个主题 × 20 个概念，3 000 次观察，SQLite）：轻量 reflect 0.31 s、完整
@@ -900,7 +904,7 @@ names)` 以概念签名同样的词级粒度计算任务提到了概念名（或
 | 场景 | 修复前 | 修复后 |
 |---|---|---|
 | `X depends_on Y` ×10，再 `Y depends_on X` ×1 | 只有一条边 X→Y，**反向主张被当成对 X→Y 的确认** | 两条边：X→Y p=0.81 不变，Y→X p=0.70 |
-| `A enables B` ×10，再 `A conflict B` ×10 | enables p=0.85 **不变**，conflict p=0.43——两个相反主张同时"可信" | enables p=0.45，conflict p=0.43：相互竞争 |
+| `A enables B` ×10，再 `A conflict B` ×10 | enables p=0.85 **不变**，conflict p=0.43——两个相反主张同时"可信" | enables p=0.45，conflict p=0.43：相互竞争（其中"势均力敌"部分是先验 0.76 对 0.10 不等的产物，见 §7.21） |
 | `A conflict B`，再 `B conflict A` | 同一条边（碰巧对：查找本来就不看方向） | 同一条边（对称语义，按设计） |
 
 `find_between` 只看"两端是否是这两个概念"，所以 `discover()` 把反向的有向主张合并进
@@ -920,12 +924,11 @@ names)` 以概念签名同样的词级粒度计算任务提到了概念名（或
   边与 `generic_relation` 不断言任何东西，不受影响；同轴主张（enables 与 dependence）
   互相兼容，也不受影响。
 
-**未改（记录）：** 显式关系的初始 `probability` 取语义规格的 `propagation_strength`
-（`tests/test_relation_axes_deep.py` 明确断言这一点），所以只说一次的负向主张信念很低
-（conflict 0.10、disjointness 0.05），关系地板（§7.14）也随之很低——负向知识比正向知识
-忘得快。传播强度（激活流多少）与信念（主张是否为真）是两个量；是否把初值改成与类型无关的
-先验，涉及已有契约，留作后续决定。同轴改标签（dependence ×10 后说一次 inclusion，边的标签
-直接被覆盖）同样保留。
+**当时未改（记录），后来在 §7.21 处理：** 显式关系的初始 `probability` 取语义规格的
+`propagation_strength`，所以只说一次的负向主张信念很低（conflict 0.10、disjointness 0.05），
+关系地板（§7.14）也随之很低——负向知识比正向知识忘得快。传播强度（激活流多少）与信念
+（主张是否为真）是两个量，§7.21 把它们分开。同轴改标签（dependence ×10 后说一次
+inclusion，边的标签直接被覆盖）仍然保留。
 
 全部既有测试不变（1 141 通过）。`tests/test_relation_claims.py`（11 个）。
 
@@ -945,6 +948,106 @@ names)` 以概念签名同样的词级粒度计算任务提到了概念名（或
 每次都 reflect 时置信度为 0.31，从不 reflect 时为 0.93）。现在每次强化之前先结算欠下的
 衰减，四种调用频率下都是 0.31。§5 的标定脚本恰好一直在每次使用前做衰减，因此标定
 出的常数本来就对应修复后的动力学。
+
+### 7.21 显式负向主张：信念与抑制增益是两个量 ✅
+
+**问题.** `RelationManager.discover()` 用 `SemanticRelationSpec.propagation_strength` 播种显式边的
+`probability`（"这条主张是对的"的信念）。在 negative 轴上这个数是**抑制通道的增益**
+（0.05–0.12，`tests/test_relation_axes*.py` 断言），不是信念。后果一（存续）：地板
+$0.1\,p$ 低于剪枝阈值 0.02，一次陈述的负向主张不受保护。后果二（对立）：一对对立主张
+的先验是 0.76 对 0.10。后果三（元认知）：`assess()` 读的就是这个概率，一次 `enables`
+加一次 `conflict` 被报告为 `leaning`（0.705 对 0.100，差 0.61）。后果四：`confirm()` 每次只
+消除 5% 的疑虑，五次重述才把 0.10 推到 0.30，`weaken()` 两次就把它压到 0.01 的下限。
+
+**探针一：存续**（真实的 `World.ingest` + `DecayEngine`，两个概念一直保持活跃，关系不重述，
+时钟每次前进 50，`docs/paper/verify.py §4.2` 同款）：
+
+| 陈述一次 | 修复前 p / 闲置多少次后被剪 | 修复后 |
+|---|---|---|
+| depends_on（对照） | 0.70 / 8 100 | 不变 |
+| enables / part_of / similar_to / related_to（对照） | 0.76 / 8 600，0.88 / 9 500，0.64 / 7 500，0.45 / 5 300 | 不变 |
+| conflict | 0.10 / **450** | 0.70 / **8 100** |
+| disjointness | 0.05 / **350** | 0.70 / **8 100** |
+| exclusion、violates_constraint、incompatible_ontology | 0.08 / 400，0.08 / 400，0.06 / 350 | 0.70 / 8 100 |
+| instability、complement、adversarial_prediction | 0.12 / 500，0.10 / 450，0.10 / 450 | 0.70 / 8 100 |
+| 重述 5 次：depends_on / conflict / disjointness | 0.768 / 9 200；0.304 / 4 000；0.265 / 3 650 | 0.768 / 9 200 三者相同 |
+
+结算步长 10 / 50 / 200 / 1 000 下 conflict 的存续为 8 070 / 8 100 / 8 000 / 8 000（修复前
+440 / 450 / 600 / 1 000），与 reflect 频率无关的性质对负向主张同样成立。真实
+`World.reflect(light=True)`：闲置 500 / 3 000 / 7 000 次时 conflict 与 disjointness 都还在
+（修复前 500 次就没了），9 000 次后按纪元遗忘，与 depends_on 逐点一致；共现边照旧消失。
+
+**修复.** 传播强度与信念分开。`SemanticRelationSpec.claim_prior`：positive / parallel 仍是
+传播强度（逐位不变），negative 轴是 `NEGATIVE_CLAIM_PRIOR = 0.70`。`discover()` 用它播种显式边的
+信念，`weight`（= 抑制增益）与 `confidence`（= 结构强度）不动；抽取器给出的先验照旧优先。
+地板公式不变，仍是 `0.1 × probability`——它锚定的是信念，只是现在负向边的信念是真的信念。
+**为什么是 0.70：** 它是一次陈述的 `dependence`（论文的参照关系，也是 positive 轴上最弱的
+主张）所带的信念。扫描（`NEGATIVE_CLAIM_PRIOR` 取 0.30 / 0.50 / 0.60 / 0.70 / 0.76 / 0.88）：
+一次陈述的 conflict 存续 2 700 / 5 950 / 7 100 / **8 100** / 8 600 / 9 500，只有 0.70 与 dependence
+的 8 100 相等；低于它，3 : 1 的对立竞争里负向一方被压得太低（0.50 时 0.19，0.70 时 0.36）。
+
+**探针二：对立主张**（`enables` 对 `conflict`，真实摄入 + `assess()`；E = enables，C = conflict）：
+
+| 序列 | 修复前 enables / conflict | 修复后 |
+|---|---|---|
+| E C | 0.705 / 0.100 leaning 0.61 | 0.705 / 0.700 **contested** 0.005 |
+| C E | 0.760 / 0.045 leaning 0.72 | 0.760 / 0.645 contested 0.115 |
+| E×10 再 C×10 | 0.447 / 0.433 contested | 0.447 / 0.811 leaning 0.36（后一块领先） |
+| C×10 再 E×10（镜像） | 0.849 / 0.032 leaning 0.82 | 0.849 / 0.410 leaning 0.44 |
+| (E C)×10 交替均等 | 0.536 / 0.150 leaning 0.39 | 0.536 / 0.528 **contested** 0.008 |
+| (E E E C)×5 | 0.711 / 0.060 leaning 0.65 | 0.711 / 0.358 leaning 0.35 |
+| (C C C E)×5 | 0.407 / 0.389 contested | 0.407 / 0.682 leaning 0.28 |
+
+文档里的"`enables` ×10 再 `conflict` ×10 → 0.45 对 0.43"是先验不等的产物：修复前交换两条主张的
+角色得到 0.03 对 0.85；`dependence` 与 conflict 现在以同样的 0.70 起步，交换轴是**精确镜像**
+（0.410 / 0.811 ↔ 0.811 / 0.410，5 个序列由 `verify.py §4.3` 逐位检验）。成块重述时后一块
+领先，因为 `confirm()` 是相对的 5% 步长，`weaken()` 是绝对的 0.06/(1+0.1δ) 步长（首次 0.0545，
+约抵 3–4 次确认）；这对两条轴一样，本轮**不改**该校准。
+
+**不变的部分.** 抑制强度：创建时 conflict / disjointness 的 `weight` 为 0.176 / 0.126，一次陈述后
+从 A 抑制 X 的净分数 0.00605，修复前后逐位相同；重述 5 次后的增益 0.7815 → 0.7824（地板
+减慢了两次重述之间那 1 个 tick 的衰减）。闲置的一次陈述 conflict 增益松弛到地板而不是 0：
+300 / 1 000 / 3 000 次闲置后 0.033 / 0.009 / 0.006 → 0.083 / 0.061 / 0.044（这正是"受保护"的含义，
+与正向边的 0.07 地板一致；对 X 的净分数的影响约 0.0002）。共现边仍无地板，概率仍不随时间衰减。
+
+**已存的存储.** `RelationEdge.belief_prior`（新字段，`None` = 修复前存的边）标记信念的起点。
+`RelationManager.load()` 对修复前的显式 negative 边一次性重定基（`adopt_claim_prior`，
+与 `ensure_probability` 同一个钩子）：存储的信念若恰是"旧种子（增益）加上边自己的确认 / 否证
+计数"所能解释的（容差 0.02，两种先后次序取包络），就以 0.70 为起点重放同样的计数，且只升不降；
+否则那是抽取器或反馈给出的信念，原样保留。用**修复前的代码**写出的真实存储（JSON 与 SQLite
+各一份）载入后：
+
+| 修复前存的边 | 载入前 | 载入后（= 新代码同样历史下的值） |
+|---|---|---|
+| conflict 陈述一次 | 0.100 | 0.700 |
+| conflict 陈述 6 次 | 0.304 | 0.768 |
+| disjointness 陈述 3 次 | 0.143 | 0.729 |
+| conflict，`contradicted_relations` 4 次 | 0.010（下限） | 0.506 |
+| E×10 再 C×3 中的 conflict | 0.188，`leaning` 0.51 | 0.729，`contested` 0.03 |
+| 抽取器先验 0.9 / 0.05 的 conflict | 0.9 / 0.05 | 0.9 / 0.05（保留） |
+| depends_on、part_of（对照） | 0.729、0.880 | 不变 |
+
+第二次载入与第一次逐位相同（幂等）；`weight` 从不改动。旧存储里已经被剪掉的边找不回来。
+
+**副作用（已测）.** ① 网络熵（`metrics/entropy.py` 用 `probability × 轴系数`）现在把负向主张
+按信念计入：玩具世界（enables、depends_on、conflict、similar_to、disjointness 各一条）的
+负向质量 0.09 → 0.84，`avg_network_entropy` 0.724 → 0.973，`relation_type_entropy`
+0.652 → 0.913。② 抽取器给出的先验恰为 0.3 时，模型校验器曾把它当成"未设置"而替换成语义
+默认值（depends_on 0.70，conflict 0.10），重新载入时 `ensure_probability` 又把它换成结构置信度（0.3 → 0.376）；播种过的边现在带 `belief_prior`，两处都不再替换它。
+③ 用 `relation_priors` 重述 negative 边时，`update_probability` 不再把混合后的信念写进抑制
+增益（否则 0.25 → 0.72）；修复前是 0.272，现在 0.248。
+
+**未改（记录）.** ① `weaken()` 从操作权重里减去绝对量，negative 轴的增益（0.05–0.2）几次否证
+就到 0.01：端点不共现、`contradicted_relations` 连续 6 次时 conflict 信念 0.43 而权重
+0.010，下一次 reflect 即被剪，同样处境的 depends_on 权重 0.505、还能存续 4 950 次观察。
+共现强化通常抵消这一点，所以只出现在纯否证序列里。② 抽取器路径首次陈述时仍把信念写进
+操作权重（conflict 先验 0.9 → 权重 0.976，修复前后相同）。③ `confirm` / `weaken` 的
+步长校准（成块重述时后一块领先）不变。④ 投影的"Key Relations"按 `weight` 排序，抑制增益
+小的负向边仍排在后面。
+
+`tests/test_negative_claim_belief_negative_claims_final.py`（93 个；在修复前的代码上 77 个失败——
+其中约 30 个是数值断言，如 `350 > 3000`、轴交换镜像，其余是新接口不存在——16 个是对照）。
+既有的 1 190 个测试一个都没改：全套 1 283 通过、8 跳过。
 
 ---
 

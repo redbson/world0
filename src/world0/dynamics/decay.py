@@ -140,6 +140,14 @@ PRUNE_MIN_IDLE_TICKS: float = 720.0
 # above the prune threshold for ~7 900 / ~8 400 observations, after which
 # era forgetting lets it go.  Auto-discovered (Hebbian) edges get no
 # floor: they live on reinforcement and are revalidated by reflect.
+#
+# The anchor is a *belief* on every axis.  A stated negative claim used to
+# be seeded from its inhibition gain (0.05-0.12), so its floor (0.005-0.012)
+# sat below the 0.02 prune threshold and it was forgotten ~18x faster than
+# a stated dependence; it is now seeded from ``NEGATIVE_CLAIM_PRIOR`` (0.70,
+# ``schemas/relation.py``) and gets the same floor.  A claim whose belief
+# is below 0.2 (an extractor's "probably not", or one disconfirmed that far)
+# still has a floor under the threshold and is not protected.
 RELATION_FLOOR_SHARE: float = 0.1
 
 
@@ -160,7 +168,12 @@ def relation_floor(
     now_tick: int | None = None,
     now: datetime | None = None,
 ) -> float:
-    """Weight floor an explicit relation relaxes toward (0 for Hebbian edges)."""
+    """Weight floor an explicit relation relaxes toward (0 for Hebbian edges).
+
+    Anchored on ``edge.probability`` — the belief that the claim is correct,
+    seeded from the claim prior and never time-decayed — not on the edge's
+    propagation / inhibition gain (``weight``).
+    """
     if not edge.is_explicit:
         return 0.0
     floor = RELATION_FLOOR_SHARE * edge.probability

@@ -34,6 +34,10 @@ class RelationManager:
         self._by_concept.clear()
         for edge in self._store.load_all_relations():
             edge.ensure_probability()
+            # Stores written before belief was separated from the inhibition
+            # gain: rebase legacy explicit negative claims once.
+            if edge.adopt_claim_prior():
+                self._dirty.add(edge.id)
             self._relations[edge.id] = edge
             self._index(edge)
 
@@ -113,8 +117,12 @@ class RelationManager:
         # Explicit relations start stronger than Hebbian (auto-discovered)
         init_weight = semantic_spec.propagation_strength if is_explicit else 0.15
         init_confidence = semantic_spec.structural_strength if is_explicit else 0.15
+        # Belief that the statement is correct is not the gain of the channel
+        # it travels on: ``init_weight`` (operational strength; the
+        # inhibition gain on the negative axis) is unchanged, the default
+        # belief is the label's claim prior.
         init_probability = self._initial_probability(
-            default=init_weight,
+            default=semantic_spec.claim_prior if is_explicit else init_weight,
             probability=probability,
             prior_probability=prior_probability,
             prior_strength=prior_strength,
@@ -130,6 +138,7 @@ class RelationManager:
             structural_strength=semantic_spec.structural_strength,
             propagation_strength=semantic_spec.propagation_strength,
             probability=init_probability,
+            belief_prior=init_probability if is_explicit else None,
             probability_observation_count=1 if probability is not None else 0,
             weight=init_probability if has_probability_input else init_weight,
             confidence=init_probability if has_probability_input else init_confidence,
