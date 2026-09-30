@@ -23,6 +23,7 @@ EVIDENCE = CORE + ["fact_task_s2", "world0_tuned_s2"]   # + 'show only claims st
 ABLATION = CORE + ["world0_reflect", "world0_focus", "world0_notask", "world0_depth1", "world0_depth3"]
 TUNE = ["w0-d1-r0", "w0-d2-r0", "w0-d3-r0", "w0-d1-r25", "w0-d2-r25", "w0-d3-r25"]
 DEV_SEEDS = range(100, 105)
+LLM_SEEDS = [0]  # seeds with a cached LLM extraction (benchmarks/longrun/llm_cache)
 
 
 def studies(seeds: int) -> dict[str, list[dict]]:
@@ -43,6 +44,10 @@ def studies(seeds: int) -> dict[str, list[dict]]:
                              list(range(min(seeds, 4))), horizon=6000, query_every=40),
         "ablation": jobs(ABLATION, list(range(min(seeds, 6))), horizon=1000),
         "tune": jobs(TUNE, list(DEV_SEEDS), horizon=1000),
+        # Real LLM extraction (production prompt, cached by llm_extract.py) against
+        # the gold-reading extractor on the same streams.
+        "llm": [dict(seed=s, horizon=600, systems=CORE, jitter=False, extract_mode=m)
+                for s in LLM_SEEDS for m in ("sim", "llm")],
         "smoke": [dict(horizon=200, seed=0, systems=CORE)],
     }
     return out
@@ -84,7 +89,7 @@ def run_one(job: dict) -> list[dict]:
     rows: list[dict] = []
     key = {"horizon": cfg.horizon, "noise_rate": cfg.noise_rate, "task_mode": cfg.task_mode,
            "verbosity": cfg.verbosity, "extract_p": cfg.extract_p, "n_domains": cfg.n_domains,
-           "growth": cfg.growth, "seed": cfg.seed}
+           "growth": cfg.growth, "seed": cfg.seed, "extract_mode": cfg.extract_mode}
     stream_tokens = 0
     for ev, qs in stream.events():
         known |= set(ev.concepts)

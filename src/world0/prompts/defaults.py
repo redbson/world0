@@ -114,6 +114,9 @@ Respond with ONLY a JSON object:
   "weakened": ["concept that the text makes less relevant or likely"],
   "contradicted_relations": [
     {"source": "c1", "target": "c2", "type": "relation label"}
+  ],
+  "retracted_relations": [
+    {"source": "c1", "target": "c2", "type": "relation label"}
   ]
 }
 
@@ -121,7 +124,7 @@ Rules:
 - Extract 3-15 concepts depending on text length and density.
 - Prefer fewer high-quality concepts over broad coverage.
 - Give every concept a local uid (`c1`, `c2`, ...). Use these uids in
-  relations and contradicted_relations whenever possible.
+  relations, contradicted_relations and retracted_relations whenever possible.
 - A concept's identity is uid + sense + boundary, not its surface name.
 - Do not merge two concepts only because their names are the same; merge only
   when the same sense and boundary are intended.
@@ -147,7 +150,12 @@ Rules:
   and below 0.40 for background mentions.
 - Do not use outside knowledge to invent concepts or relations.
 - Use weakened/contradicted_relations only when the input explicitly rejects,
-  narrows, or disconfirms a concept or relation.
+  narrows, or disconfirms a concept or relation: it is or was wrong.
+- Use retracted_relations when the input says a relation that held no longer
+  holds: it was removed, replaced or changed ("X no longer depends on Y",
+  "we moved X off Y", "X now uses Z instead of Y"). Keep the label and
+  direction of the relation being withdrawn; a replacement goes in relations.
+  Never list the same relation as both contradicted and retracted.
 - Respond ONLY with the JSON object, no markdown fences, no explanation.\
 """
 

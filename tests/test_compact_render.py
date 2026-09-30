@@ -204,10 +204,12 @@ class TestReviewFindings:
 
     def test_a_contested_line_sets_the_leader_against_its_opponents_only(self, tmp_path):
         w = World(store_path=tmp_path)
-        for _ in range(8):
+        for _ in range(4):
             w.ingest(Observation(concepts=["a", "b"], relations=[("a", "b", "enables")]))
         w.ingest(Observation(concepts=["a", "b"], relations=[("b", "a", "depends_on")]))
         w.ingest(Observation(concepts=["a", "b"], relations=[("a", "b", "conflict")]))
+        for _ in range(2):  # close enough to stay contested (not outvoted)
+            w.ingest(Observation(concepts=["a", "b"], relations=[("a", "b", "conflict")]))
         loose = _section(w.project(["a", "b"], max_concepts=3).render(), "Hold loosely:")
         line = next(x for x in loose if x.startswith(("contested: ", "leaning: ")))
         assert "a enables b" in line and "a conflicts with b" in line
@@ -247,3 +249,36 @@ class TestReviewFindings:
     @pytest.mark.parametrize("label", [None, "", "bogus", "Depends On"])
     def test_any_label_has_a_phrase(self, label):
         assert relation_phrase(label) in RELATION_PHRASES.values()
+
+
+class TestSupport:
+    """A claim outvoted by an opposing claim about the same pair (round 25)."""
+
+    def test_a_rarely_stated_opposite_claim_is_outvoted(self, tmp_path):
+        w = World(store_path=tmp_path)
+        for _ in range(9):
+            w.ingest(Observation(concepts=["api", "db"], relations=[("api", "db", "depends_on")]))
+        w.ingest(Observation(concepts=["api", "db"], relations=[("api", "db", "conflict")]))
+        text = w.project(["api", "db"], max_concepts=3).render()
+        assert [c.split(" (")[0] for c in _claim_lines(text)] == ["api depends on db"]
+        assert "outvoted: api conflicts with db (1 vs 9 statements)" in _section(text, "Hold loosely:")
+        assert not any(x.startswith(("contested", "leaning")) for x in _section(text, "Hold loosely:"))
+
+    def test_a_close_vote_stays_contested(self, tmp_path):
+        w = World(store_path=tmp_path)
+        for _ in range(3):
+            w.ingest(Observation(concepts=["api", "db"], relations=[("api", "db", "depends_on")]))
+        for _ in range(2):
+            w.ingest(Observation(concepts=["api", "db"], relations=[("api", "db", "conflict")]))
+        text = w.project(["api", "db"], max_concepts=3).render()
+        assert len(_claim_lines(text)) == 2
+        assert any(x.startswith(("contested", "leaning")) for x in _section(text, "Hold loosely:"))
+
+    def test_a_stray_label_is_not_a_current_claim(self, tmp_path):
+        w = World(store_path=tmp_path)
+        for _ in range(6):
+            w.ingest(Observation(concepts=["api", "db"], relations=[("api", "db", "depends_on")]))
+        w.ingest(Observation(concepts=["api", "db"], relations=[("api", "db", "contains")]))
+        text = w.project(["api"], max_concepts=3).render()
+        assert [c.split(" (")[0] for c in _claim_lines(text)] == ["api depends on db"]
+        assert "also stated as: api contains db (1 vs 6 statements)" in _section(text, "Hold loosely:")

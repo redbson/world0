@@ -132,27 +132,39 @@ class RelationManager:
         # must not confirm it (docs §7.18).
         self.reap_dead_between(source_id, target_id)
         existing = self.find_between(
-            source_id, target_id, relation_type, directed=True
+            source_id, target_id, relation_type, directed=True,
+            semantic=semantic_spec.name if is_explicit and semantic_relation else None,
         )
         if existing and existing.is_retracted and not is_explicit:
             # Co-occurrence cannot restore a withdrawn claim; a withdrawn
             # co-occurrence edge is replaced by a fresh one.
             self.remove(existing.id)
             existing = None
+        promoted = False
         if existing:
             if is_explicit:
                 existing.record_claim(provenance)
                 self._dirty.add(existing.id)
+                if not existing.is_explicit:
+                    # A co-occurrence edge the Agent now states as a typed
+                    # claim becomes that claim (it was left a co-occurrence
+                    # edge with a new label, so the claim never showed).
+                    settle_relation(existing, self._clock.tick)
+                    existing.is_explicit = True
+                    existing.belief_prior = semantic_spec.claim_prior
+                    existing.probability = max(existing.probability, semantic_spec.claim_prior)
+                    existing.weight = max(existing.weight, semantic_spec.propagation_strength)
+                    existing.confidence = max(existing.confidence, semantic_spec.structural_strength)
+                    existing.semantic_relation = semantic_spec.name
+                    existing.structural_strength = semantic_spec.structural_strength
+                    existing.propagation_strength = semantic_spec.propagation_strength
+                    promoted = True
             if existing.is_retracted and is_explicit:
                 # Restated: the claim holds again.  Its weight relaxed toward
                 # zero while withdrawn; settle that first.
                 settle_relation(existing, self._clock.tick)
                 existing.retracted_tick = None
                 self._dirty.add(existing.id)
-            if semantic_relation:
-                existing.semantic_relation = semantic_spec.name
-                existing.structural_strength = semantic_spec.structural_strength
-                existing.propagation_strength = semantic_spec.propagation_strength
             if probability is not None or prior_probability is not None:
                 # Owed decay first, then the restatement (Theorem 3.2).
                 settle_relation(existing, self._clock.tick)
@@ -167,7 +179,9 @@ class RelationManager:
                 self._dirty.add(existing.id)
                 if self._on_connection is not None:
                     self._on_connection(existing.source_id, existing.target_id)
-            return existing, False
+            # A promoted edge is a new claim: the caller treats it as stated
+            # once, not as a restatement.
+            return existing, promoted
 
         # Explicit relations start stronger than Hebbian (auto-discovered)
         init_weight = semantic_spec.propagation_strength if is_explicit else 0.15
@@ -269,18 +283,28 @@ class RelationManager:
         relation_type: RelationType | None = None,
         *,
         directed: bool = False,
+        semantic: str | None = None,
     ) -> RelationEdge | None:
         """Find a specific relation between two concepts.
 
         ``directed=True`` matches a directed edge only in the
         ``id_a → id_b`` orientation (see ``RelationEdge.connects``).
+        With ``semantic`` the claim is identified by its label too: "A
+        contains B" and "A depends on B" are different claims, so only an
+        edge with that label matches, or else a co-occurrence edge on the
+        axis (which asserts no label and becomes the claim when stated).
         """
+        fallback = None
         for rel in self.for_concept(id_a):
             if not rel.connects(id_a, id_b, directed=directed):
                 continue
-            if relation_type is None or rel.relation_type == relation_type:
+            if relation_type is not None and rel.relation_type != relation_type:
+                continue
+            if semantic is None or rel.semantic_relation == semantic:
                 return rel
-        return None
+            if not rel.is_explicit and fallback is None:
+                fallback = rel
+        return fallback
 
     def find_any_between(self, id_a: str, id_b: str) -> list[RelationEdge]:
         return [r for r in self.for_concept(id_a) if r.involves(id_b)]
@@ -403,7 +427,7 @@ class RelationManager:
                 continue
 
             duplicate = self._find_directed(
-                new_src, new_tgt, rel.relation_type
+                new_src, new_tgt, rel.relation_type, rel.semantic_relation
             )
             if duplicate is not None and duplicate.id != rel.id:
                 # Absorb into the existing edge
@@ -458,12 +482,15 @@ class RelationManager:
         source_id: str,
         target_id: str,
         relation_type: RelationType,
+        semantic: str = "",
     ) -> RelationEdge | None:
+        """The edge a migrated edge merges into: same direction, axis and label."""
         for rel in self.for_concept(source_id):
             if (
                 rel.source_id == source_id
                 and rel.target_id == target_id
                 and rel.relation_type == relation_type
+                and rel.semantic_relation == semantic
             ):
                 return rel
         return None

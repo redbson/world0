@@ -444,12 +444,17 @@ class FakeRelationStore:
         relation_type: RelationType | None = None,
         *,
         directed: bool = False,
+        semantic: str | None = None,
     ) -> RelationEdge | None:
+        fallback = None
         for e in self._edges.values():
             if e.connects(id_a, id_b, directed=directed):
                 if relation_type is None or e.relation_type == relation_type:
-                    return e
-        return None
+                    if semantic is None or e.semantic_relation == semantic:
+                        return e
+                    if not e.is_explicit and fallback is None:
+                        fallback = e
+        return fallback
 
     def find_any_between(
         self, id_a: str, id_b: str

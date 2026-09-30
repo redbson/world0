@@ -177,6 +177,7 @@ class RelationStoreReader(Protocol):
         relation_type: RelationType | None = ...,
         *,
         directed: bool = ...,
+        semantic: str | None = ...,
     ) -> RelationEdge | None: ...
     def find_any_between(
         self, id_a: str, id_b: str

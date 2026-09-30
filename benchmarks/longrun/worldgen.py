@@ -58,7 +58,8 @@ class Claim(NamedTuple):
         return Claim(src, rel, tgt)
 
     def sentence(self) -> str:
-        return f"{self.src} {REL_PHRASE[self.rel]} {self.tgt}"
+        # A real extractor may choose a label outside the benchmark's four.
+        return f"{self.src} {REL_PHRASE.get(self.rel, self.rel.replace('_', ' '))} {self.tgt}"
 
 
 @dataclass
@@ -79,7 +80,8 @@ class GenConfig:
     task_mode: str = "exact"        # how the query names its task: exact | none | wrong
     growth: bool = False            # domains appear over time instead of all existing from the start
     extract_p: float = 0.0          # extractor error level (drop p, wrong p/2, spurious p, missed retraction p)
-    allow_pair_collision: bool = False  # two typed claims on one ordered pair (World 0 keys one edge per axis)
+    extract_mode: str = "sim"       # "sim": gold + injected errors (extract_p); "llm": cached real LLM output (llm_extract.py)
+    allow_pair_collision: bool = False  # two typed claims on one ordered pair (revisions can still create one)
     popularity_skew: float = 0.8    # Zipf exponent over claims: rarely-stated claims exist
     verbosity: int = 30             # filler words per event (real transcripts are mostly not concepts)
 
@@ -239,6 +241,7 @@ class Stream:
 
     def __init__(self, cfg: GenConfig) -> None:
         self.cfg = cfg
+        self._known: dict[str, str] | None = None  # normalised → world concept name (llm extraction)
         self.rng = random.Random(cfg.seed)
         self.world = HiddenWorld(cfg, self.rng)
         self.stated_at: dict[Claim, list[int]] = {}
@@ -410,6 +413,13 @@ class Stream:
 
     def _extract(self, ev: Event) -> Extraction:
         """The extractor's view of the event; error rate ``extract_p`` (own rng stream)."""
+        if self.cfg.extract_mode == "llm":
+            from benchmarks.longrun import llm_extract
+
+            raw = llm_extract.load_cache(self.cfg.seed, self.cfg.horizon)[str(ev.step)]
+            if self._known is None:
+                self._known = {llm_extract._key(c): c for c in self.world.all_concepts}
+            return llm_extract.to_extraction(raw, ev, self._known)
         p = self.cfg.extract_p
         if p <= 0 or ev.kind != "task":
             return Extraction(list(ev.concepts), list(ev.claims), list(ev.retractions), ev.ticket, ev.ticket_claim)

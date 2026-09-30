@@ -710,6 +710,11 @@ class RelationEdge(BaseModel):
             if len(self.claim_tasks) > MAX_CLAIM_TASKS:
                 del self.claim_tasks[: len(self.claim_tasks) - MAX_CLAIM_TASKS]
 
+    @property
+    def support(self) -> int:
+        """Explicit statements of this claim (0 for a co-occurrence edge)."""
+        return self.probability_observation_count + 1 if self.is_explicit else 0
+
     def claim_affinity(self, task: str, vocabulary: TaskVocabulary | None = None) -> float | None:
         """Best match of ``task`` against the tasks the claim was stated under;
         None when the claim was never stated under a task (neutral)."""

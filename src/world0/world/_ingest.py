@@ -380,7 +380,7 @@ class IngestPipeline:
             src, tgt, semantic_relation = orient_relation(src, tgt, relation_name)
             rel_type = semantic_relation_spec(semantic_relation).axis
             existing = self._relations.find_between(
-                src.id, tgt.id, rel_type, directed=True
+                src.id, tgt.id, rel_type, directed=True, semantic=semantic_relation
             )
             if existing is None:
                 # Contradiction without an existing edge weakens both
@@ -422,7 +422,9 @@ class IngestPipeline:
             # A claim that is already dead is gone, whether or not a reflect
             # removed it: withdrawing it changes nothing (Theorem 3.7).
             self._relations.reap_dead_between(src.id, tgt.id)
-            existing = self._relations.find_between(src.id, tgt.id, rel_type, directed=True)
+            existing = self._relations.find_between(
+                src.id, tgt.id, rel_type, directed=True, semantic=semantic_relation
+            )
             if existing is None or existing.is_retracted:
                 continue
             self._relations.retract(existing.id)

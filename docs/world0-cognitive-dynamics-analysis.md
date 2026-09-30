@@ -1257,6 +1257,40 @@ fading 发作。）认知基准的精确度 / 召回 / 覆盖 / Jaccard 距离�
 提示词仍描述成熟度与激活分数。仍未处理（记入关系身份一项）：`contrasts` → conflict、`mutual_understanding` → equivalence、
 轴名 → 该轴的默认语义，这些别名读出来比原话更强；同一对概念、同一轴上的重述会覆盖标签。
 
+### 7.27 真实 LLM 抽取、主张身份与按支持度呈现 ✅
+
+**LLM 抽取进入评测**。World 0 的抽取一直是 LLM（`ConceptExtractor` + 生产 prompt），但 LongRun 用的是"读标准答案 + 注入
+误差"的模拟抽取器。`benchmarks/longrun/llm_extract.py` 把每个事件的原文按生产 prompt 交给 LLM，用生产解析器
+（`ConceptExtractor._parse_response`）解析，原始输出按 (seed, horizon) 缓存（`benchmarks/longrun/llm_cache/`），
+`GenConfig(extract_mode="llm")` 回放；`answer` 子命令可直接调用 World 0 的 provider（需 API key）。本环境无 key，
+seed 0 / 600 个事件由 Claude Haiku（与生产默认 `gpt-5.4-nano` 同档）逐条抽取；第一次尝试中有子代理写了正则脚本
+"抽取"，结果作废，重跑时只允许读写文件、禁止代码，并核查了没有脚本产生。
+
+**真实错误分布**（`profile`）：959 条标准主张全部抽对（漏抽 0、错标 0、虚构 0），6 次撤回全部识别，每事件
+0.2 个多余概念。在 LLM 抽取的流上，各系统得分与理想抽取器相同（`world0_tuned` 0.92 vs 0.91，`fact_task` 0.90 /
+0.90）。结论：LongRun 的事件文本句式明确，真实 LLM 几乎不出错；报告里 p = 0.3 的模拟噪声远比真实情况严苛。要压测
+抽取，需要不那么模板化的文本（同义改写、隐含关系、指代），这记入待办。
+
+**抽取 prompt 缺撤回**。生产 prompt 只能输出 `contradicted_relations`（否证），第 23 轮的撤回机制在真实抽取下永远
+不会被触发。现在 prompt 与解析器支持 `retracted_relations`（"曾成立、现在不成立"：不再依赖、被替换），与否证
+（"本来就错"）区分。
+
+**主张身份**。按误差类型逐一注入（p = 0.3，4 个 seed）：错标对 World 0 伤害最大（0.79 → 0.52，事实库 0.93 → 0.76）。
+两个原因：(1) 同一对、同一轴上的第二个标签覆盖第一个，一次误标的 "contains" 替换了陈述多次的 "depends on"；
+(2) 错标产生的额外主张、争议行挤占 token 预算——预算放宽到 4 800 时 World 0 与事实库持平（0.75 / 0.76），差距全在
+1 200 预算下的挤占。修复：
+- 主张身份为 (源, 目标, 轴, 语义标签)：不同标签是不同主张，互不覆盖（一次修订确实可能让 "A contains B" 与
+  "A depends on B" 同时成立——先试的"标签投票"方案因此在 stale 上回退 0.97 → 0.91，已放弃）；撤回、否证按标签
+  查找；合并只合并同标签的孪生边。
+- 呈现按支持度（`RelationEdge.support`：显式陈述次数）：与同一对上一个相反主张或同轴另一标签相比支持度少
+  `OUTVOTE_RATIO = 2` 倍（1.5 / 2 / 3 中最优）的主张，不列为当前主张，改列 "Hold loosely"（"outvoted" / "also stated as"，带次数）；
+  势均力敌的仍是 contested；"Hold loosely" 最多 10 行。
+- 顺带修复：对共现边做显式平行主张（如 `similar_to`）时，边被改了标签却仍是共现边，主张永远不显示；现在升级为显式
+  主张。
+
+**效果**（与第 24 轮代码在同一口径下比较，1 200 token）：只注入错标（p = 0.3）0.52 → 0.65；混合误差 p = 0.1 / 0.3：0.79 / 0.53 → 0.82 / 0.60（事实库 0.81 / 0.65）；主研究 `world0_tuned` 0.95 → 0.96（stale 0.97）；真实 LLM 抽取下各系统不变。`tests/test_relation_identity.py`、
+`tests/test_llm_extract.py`、`tests/test_compact_render.py::TestSupport`、`tests/test_extraction.py::TestRetractedRelations`。
+
 ---
 
 ## 8. 复现

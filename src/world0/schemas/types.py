@@ -17,6 +17,12 @@ from world0.schemas.relation import RelationEdge
 # other-task sections show at most this many lines.
 DOUBTED_BELIEF: float = 0.5
 COMPACT_SECTION_LIMIT: int = 10
+# A claim with this many times less support (explicit statements) than an
+# opposing claim, or than another label for the same pair, is listed under
+# "Hold loosely" ("outvoted" / "also stated as"), not as current: a
+# once-misread "conflicts with" does not stand beside a "depends on" stated
+# nine times.  2 was best of 1.5 / 2 / 3 on LongRun extraction noise.
+OUTVOTE_RATIO: float = 2.0
 
 
 def _one_line(text: str) -> str:
@@ -266,7 +272,8 @@ class Projection(BaseModel):
 
         Claim lines are the explicit relations in view, strongest belief
         first, except those that evidence against them has brought below
-        ``DOUBTED_BELIEF``;
+        ``DOUBTED_BELIEF`` and those with ``OUTVOTE_RATIO`` times less support
+        than an opposing claim or another label for the same pair;
         co-occurrence edges assert nothing and only put their concepts under
         "Also relevant".  Doubted, withdrawn, other-task and contested
         claims and thin knowledge follow in labelled sections, so a reader
@@ -299,7 +306,32 @@ class Projection(BaseModel):
         # starting prior alone, e.g. ``related_to``, is not doubt).
         doubted = [r for r in explicit if r.disconfirmation_count > 0 and r.probability < DOUBTED_BELIEF]
         doubted_ids = {r.id for r in doubted}
-        claims = [r for r in explicit if r.id not in doubted_ids]  # stable: engine order breaks ties
+
+        def support(r: RelationEdge) -> int:
+            return r.support
+
+        # Support against a claim about the same pair, stated OUTVOTE_RATIO
+        # times as often: an opposing claim ("outvoted"), or another label
+        # for the same ordered pair on the same axis ("also stated as") —
+        # both are how extraction noise looks; two well-stated labels are
+        # two claims and both stay.
+        outvoted: dict[str, tuple[RelationEdge, RelationEdge]] = {}
+        minority: dict[str, tuple[RelationEdge, RelationEdge]] = {}
+        for r in explicit:
+            for o in explicit:
+                if o.id == r.id or {o.source_id, o.target_id} != {r.source_id, r.target_id}:
+                    continue
+                if support(o) < OUTVOTE_RATIO * support(r):
+                    continue
+                if r.opposes(o.relation_type, o.semantic_relation):
+                    outvoted[r.id] = (r, o)
+                    break
+                if (o.source_id == r.source_id and o.relation_type == r.relation_type
+                        and "generic_relation" not in (o.semantic_relation, r.semantic_relation)):
+                    minority[r.id] = (r, o)
+                    break
+        claims = [r for r in explicit
+                  if r.id not in doubted_ids and r.id not in outvoted and r.id not in minority]  # stable
         mentioned: set[str] = set()
         for r in claims:
             lines.append(f"- {sentence(r)} (belief {r.probability:.2f})")
@@ -334,9 +366,11 @@ class Projection(BaseModel):
                 continue
             # The leader against the claims that contradict it; a claim not
             # in this view (filtered out by the caller) is not guessed at.
+            if lead.id in outvoted:
+                continue  # settled by support: listed as outvoted below
             opposing = [
                 (rels[rid], belief) for rid, _sem, belief in claim.claims
-                if rid in rels and rid != lead.id
+                if rid in rels and rid != lead.id and rid not in outvoted
                 and lead.opposes(rels[rid].relation_type, rels[rid].semantic_relation)
             ]
             if not opposing:
@@ -345,8 +379,14 @@ class Projection(BaseModel):
             parts = [f"{sentence(r)} ({b:.2f})" for r, b in opposing]
             joiner = " vs " if claim.status == "contested" else " over "
             loose.append(f"- {claim.status}: {sentence(lead)} ({lead_belief:.2f}){joiner}{' / '.join(parts)}")
+        for r, o in outvoted.values():
+            loose.append(f"- outvoted: {sentence(r)} ({support(r)} vs {support(o)} statements)")
         for r in doubted:
             loose.append(f"- doubted: {sentence(r)} (belief {r.probability:.2f})")
+        for r, o in minority.values():
+            loose.append(f"- also stated as: {sentence(r)} ({support(r)} vs {support(o)} statements)")
+        if len(loose) > COMPACT_SECTION_LIMIT:
+            loose[COMPACT_SECTION_LIMIT:] = [f"- … and {len(loose) - COMPACT_SECTION_LIMIT} more"]
         tentative = [names[cid] for cid in self.epistemic.tentative_ids() if cid in names]
         if tentative:
             loose.append(f"- thin evidence: {', '.join(tentative)}")

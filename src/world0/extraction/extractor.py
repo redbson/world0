@@ -224,6 +224,12 @@ class ConceptExtractor:
             canonical,
             parse_warnings,
         )
+        retracted_relations = self._parse_relation_list(
+            data.get("retracted_relations"),
+            canonical,
+            parse_warnings,
+            kind="retracted",
+        )
 
         return Observation(
             concepts=concept_names,
@@ -232,6 +238,7 @@ class ConceptExtractor:
             descriptions=descriptions,
             weakened=weakened,
             contradicted_relations=contradicted_relations,
+            retracted_relations=retracted_relations,
             domain=str(data.get("domain", "")).strip(),
             task=task,
             source=source,
@@ -399,6 +406,8 @@ class ConceptExtractor:
         value: Any,
         canonical: dict[str, str],
         parse_warnings: list[str],
+        *,
+        kind: str = "contradicted",
     ) -> list[tuple[str, str, str]]:
         result: list[tuple[str, str, str]] = []
         if not isinstance(value, list):
@@ -412,7 +421,7 @@ class ConceptExtractor:
             resolved_tgt = canonical.get(self._normalize_key(tgt))
             if not resolved_src or not resolved_tgt:
                 parse_warnings.append(
-                    f"contradicted relation endpoint not found: {src} -> {tgt}"
+                    f"{kind} relation endpoint not found: {src} -> {tgt}"
                 )
                 continue
             rel_type = normalize_semantic_relation(rel_type)

@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Withdrawn relations from the LLM extractor** (analysis doc §7.27) — the
+  extraction prompt and `ConceptExtractor` emit `retracted_relations`
+  (a relation that held and no longer holds: removed, replaced, changed),
+  distinct from `contradicted_relations` (it is or was wrong).  Before, the
+  withdrawal mechanism of round 23 could never be triggered by real
+  extraction.
+- **LongRun with real LLM extraction** (`benchmarks/longrun/llm_extract.py`,
+  `GenConfig(extract_mode="llm")`, `run.py --study llm`) — every event's text
+  through the production prompt and parser, raw answers cached per
+  (seed, horizon); `profile` measures the extractor against gold.  Seed 0
+  (600 events, Claude Haiku as the extractor): 959/959 claims and 6/6
+  withdrawals right; every system scores as with gold extraction.
 - **Task context** (analysis doc §7.24, paper §7.3) — task words are weighted
   by how distinctive they are among the world's task labels
   (`TaskVocabulary`: `ln((L+1)/(df+1)) + 0.01`), so shared boilerplate
@@ -198,6 +210,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`models/`, `prompts/`).
 
 ### Changed
+- **A claim is (source, target, label)** (analysis doc §7.27) — a second
+  label on the same pair and axis is a second claim instead of overwriting
+  the first (one misread "contains" replaced a "depends on" stated many
+  times; a revision can make both true).  Withdrawal, contradiction and
+  merge match by label.  The compact render weighs support
+  (`RelationEdge.support`): a claim stated `OUTVOTE_RATIO` (2) times less
+  often than an opposing claim or another label for the same pair is
+  listed under "Hold loosely" ("outvoted" / "also stated as"), not as
+  current; "Hold loosely" is capped at ten lines.  LongRun at 1 200 tokens:
+  wrong labels only (p = 0.3) 0.52 → 0.65; mixed extraction error p = 0.1 /
+  0.3: 0.79 / 0.53 → 0.82 / 0.60; main study `world0_tuned` 0.95 → 0.96.
 - **Compact render is the default** (analysis doc §7.26) —
   `Projection.render()` now returns the prompt form LongRun's readers did
   best with (0.90 vs 0.57 for the full render at the same budget): current
@@ -348,6 +371,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   projection unchanged.  `RelationEdge.is_directed` exposes the rule.
 
 ### Fixed
+- **A typed claim stated on a co-occurrence edge** (e.g. `similar_to` on a
+  pair already linked by co-occurrence) relabelled the edge but left it a
+  co-occurrence edge, so the claim never showed; it now becomes the claim.
 - **`inclusion` direction** — the extraction prompt and the relation spec
   described `inclusion` as "A is contained in B" while the `contains` alias
   (and every stated `contains` claim) reads source-contains-target; both now
