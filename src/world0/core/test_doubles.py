@@ -445,6 +445,7 @@ class FakeRelationStore:
         *,
         directed: bool = False,
         semantic: str | None = None,
+        cooccurrence_fallback: bool = True,
     ) -> RelationEdge | None:
         fallback = None
         for e in self._edges.values():
@@ -452,7 +453,7 @@ class FakeRelationStore:
                 if relation_type is None or e.relation_type == relation_type:
                     if semantic is None or e.semantic_relation == semantic:
                         return e
-                    if not e.is_explicit and fallback is None:
+                    if cooccurrence_fallback and not e.is_explicit and fallback is None:
                         fallback = e
         return fallback
 
@@ -486,7 +487,8 @@ class FakeRelationStore:
         evidence_strength: float = 2.0,
     ) -> tuple[RelationEdge, bool]:
         existing = self.find_between(
-            source_id, target_id, relation_type, directed=True
+            source_id, target_id, relation_type, directed=True,
+            semantic=semantic_relation or None,
         )
         if existing:
             if probability is not None or prior_probability is not None:

@@ -326,12 +326,15 @@ class Projection(BaseModel):
                 if r.opposes(o.relation_type, o.semantic_relation):
                     outvoted[r.id] = (r, o)
                     break
-                if (o.source_id == r.source_id and o.relation_type == r.relation_type
+                same_way = o.source_id == r.source_id or not (r.is_directed and o.is_directed)
+                if (same_way and o.relation_type == r.relation_type
                         and "generic_relation" not in (o.semantic_relation, r.semantic_relation)):
                     minority[r.id] = (r, o)
                     break
-        claims = [r for r in explicit
-                  if r.id not in doubted_ids and r.id not in outvoted and r.id not in minority]  # stable
+        hidden = set(outvoted) | set(minority)
+        doubted = [r for r in doubted if r.id not in hidden]  # listed once, as outvoted / minority
+        doubted_ids = {r.id for r in doubted}
+        claims = [r for r in explicit if r.id not in doubted_ids and r.id not in hidden]  # stable
         mentioned: set[str] = set()
         for r in claims:
             lines.append(f"- {sentence(r)} (belief {r.probability:.2f})")
@@ -360,34 +363,38 @@ class Projection(BaseModel):
             lines.extend(capped(self.other_contexts, other))
         loose: list[str] = []
         rels = {r.id: r for r in (*self.relations, *self.other_contexts)}
+        # Contested pairs among what is shown: the claims set aside above
+        # neither lead nor oppose here, and the status is recomputed on the
+        # shown claims (``CONTEST_MARGIN``, projection/metacognition.py).
+        from world0.projection.metacognition import CONTEST_MARGIN
+
         for claim in self.epistemic.contested:
-            lead = rels.get(claim.leading)
-            if lead is None:
-                continue
-            # The leader against the claims that contradict it; a claim not
-            # in this view (filtered out by the caller) is not guessed at.
-            if lead.id in outvoted:
-                continue  # settled by support: listed as outvoted below
-            opposing = [
+            shown = [
                 (rels[rid], belief) for rid, _sem, belief in claim.claims
-                if rid in rels and rid != lead.id and rid not in outvoted
-                and lead.opposes(rels[rid].relation_type, rels[rid].semantic_relation)
+                if rid in rels and rid not in hidden and rid not in doubted_ids
             ]
+            if len(shown) < 2:
+                continue
+            lead, lead_belief = max(shown, key=lambda rb: (rb[1], rb[0].id))
+            opposing = [(r, b) for r, b in shown
+                        if r.id != lead.id and lead.opposes(r.relation_type, r.semantic_relation)]
             if not opposing:
                 continue
-            lead_belief = next((b for rid, _s, b in claim.claims if rid == lead.id), lead.probability)
+            margin = lead_belief - max(b for _, b in opposing)
+            status = "contested" if margin < CONTEST_MARGIN else "leaning"
             parts = [f"{sentence(r)} ({b:.2f})" for r, b in opposing]
-            joiner = " vs " if claim.status == "contested" else " over "
-            loose.append(f"- {claim.status}: {sentence(lead)} ({lead_belief:.2f}){joiner}{' / '.join(parts)}")
+            joiner = " vs " if status == "contested" else " over "
+            loose.append(f"- {status}: {sentence(lead)} ({lead_belief:.2f}){joiner}{' / '.join(parts)}")
         for r, o in outvoted.values():
             loose.append(f"- outvoted: {sentence(r)} ({support(r)} vs {support(o)} statements)")
         for r in doubted:
             loose.append(f"- doubted: {sentence(r)} (belief {r.probability:.2f})")
         for r, o in minority.values():
             loose.append(f"- also stated as: {sentence(r)} ({support(r)} vs {support(o)} statements)")
-        if len(loose) > COMPACT_SECTION_LIMIT:
-            loose[COMPACT_SECTION_LIMIT:] = [f"- … and {len(loose) - COMPACT_SECTION_LIMIT} more"]
         tentative = [names[cid] for cid in self.epistemic.tentative_ids() if cid in names]
+        room = COMPACT_SECTION_LIMIT - (1 if tentative else 0)
+        if len(loose) > room:
+            loose[room - 1:] = [f"- … and {len(loose) - room + 1} more"]
         if tentative:
             loose.append(f"- thin evidence: {', '.join(tentative)}")
         if loose:

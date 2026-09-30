@@ -168,21 +168,31 @@ def profile(seed: int, horizon: int) -> dict:
     """The extractor measured against gold, in the simulator's error categories."""
     cfg = GenConfig(seed=seed, horizon=horizon, extract_mode="llm")
     s = Stream(cfg)
-    n = Counter({k: 0 for k in ("kept", "relabelled", "dropped", "spurious", "retraction_kept",
+    n = Counter({k: 0 for k in ("kept", "relabelled", "reversed", "dropped", "spurious", "extra_label",
+                                 "retraction_kept",
                                  "retraction_missed", "retraction_spurious")})
     for ev, _ in s.events():
         x = ev.extracted
         gold = set(ev.claims)
-        pairs = {frozenset((c.src, c.tgt)): c for c in gold}
+        pairs = {(c.src, c.tgt) for c in gold} | {(c.tgt, c.src) for c in gold}
         for c in gold:
             if c in x.claims:
                 n["kept"] += 1
-            elif any(frozenset((y.src, y.tgt)) == frozenset((c.src, c.tgt)) for y in x.claims):
-                n["relabelled"] += 1
+            elif any((y.src, y.tgt) == (c.src, c.tgt) for y in x.claims):
+                n["relabelled"] += 1          # same pair, same direction, another label
+            elif any((y.src, y.tgt) == (c.tgt, c.src) for y in x.claims):
+                n["reversed"] += 1
             else:
                 n["dropped"] += 1
         for y in x.claims:
-            if y not in gold and frozenset((y.src, y.tgt)) not in pairs:
+            if y in gold:
+                continue
+            if (y.src, y.tgt) in pairs:
+                # a wrong label or direction on a gold pair; counted above
+                # unless the gold claim was also extracted (an extra label)
+                if any(c in x.claims and {c.src, c.tgt} == {y.src, y.tgt} for c in gold):
+                    n["extra_label"] += 1
+            else:
                 n["spurious"] += 1
         for r in ev.retractions:
             n["retraction_kept" if r in x.retractions else "retraction_missed"] += 1
@@ -193,12 +203,14 @@ def profile(seed: int, horizon: int) -> dict:
         n["events_task" if ev.kind == "task" else "events_noise"] += 1
         n["concepts_extracted"] += len(x.concepts)
         n["concepts_unknown"] += sum(1 for c in x.concepts if c not in s.world.all_concepts)
-    g = n["kept"] + n["relabelled"] + n["dropped"]
+    g = n["kept"] + n["relabelled"] + n["reversed"] + n["dropped"]
     r = n["retraction_kept"] + n["retraction_missed"]
     rates = {
         "claims_gold": g,
         "drop": n["dropped"] / max(g, 1),
         "relabel": n["relabelled"] / max(g, 1),
+        "reverse": n["reversed"] / max(g, 1),
+        "extra_labels_per_event": n["extra_label"] / max(n["events"], 1),
         "spurious_per_event": n["spurious"] / max(n["events"], 1),
         "retractions_gold": r,
         "missed_retraction": n["retraction_missed"] / max(r, 1),

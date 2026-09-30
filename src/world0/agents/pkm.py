@@ -2337,20 +2337,23 @@ class PKMAgent:
         )
         relation = None
         if semantic_relation:
-            for candidate in self._world.relations.find_any_between(
+            # A claim is (source, target, label): match all three, in the
+            # stated direction (either way for an undirected relation).
+            relation = self._world.relations.find_between(
                 source.id,
                 target.id,
-            ):
-                if candidate.semantic_relation == semantic_relation:
-                    relation = candidate
-                    break
-        if relation is None:
+                rel_type,
+                directed=True,
+                semantic=semantic_relation,
+                cooccurrence_fallback=False,
+            )
+        if relation is None and not semantic_relation:
             relation = self._world.relations.find_between(
                 source.id,
                 target.id,
                 rel_type,
             )
-        if relation is None and rel_type is not None:
+        if relation is None and rel_type is None:
             relation = self._world.relations.find_between(source.id, target.id, None)
         return relation.id if relation else None
 

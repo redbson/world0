@@ -170,6 +170,7 @@ print(reflect_result.promoted_concepts)
 | `descriptions` | `dict[str, str]` | 可选的概念描述 |
 | `weakened` | `list[str]` | 负向证据：本次任务里被证伪/不相关的概念 |
 | `contradicted_relations` | `list[tuple]` | 负向证据：未成立的关系 |
+| `retracted_relations` | `list[tuple]` | 撤回：曾经成立、现在不再成立的关系（信念不变，退出当前视图，列在 "No longer holds"） |
 | `domain` | `str` | 领域标签，驱动色彩场扩散 |
 | `task` | `str` | 任务上下文 |
 | `source` | `str` | 来源标识（会话、工单、文档名等） |

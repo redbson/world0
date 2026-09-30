@@ -136,29 +136,24 @@ class RelationManager:
             semantic=semantic_spec.name if is_explicit and semantic_relation else None,
         )
         if existing and existing.is_retracted and not is_explicit:
-            # Co-occurrence cannot restore a withdrawn claim; a withdrawn
-            # co-occurrence edge is replaced by a fresh one.
+            # Co-occurrence cannot restore a withdrawn claim.  A withdrawn
+            # co-occurrence edge is replaced by a fresh one; a withdrawn
+            # claim stays (as history) beside the new co-occurrence edge.
+            if not existing.is_explicit:
+                self.remove(existing.id)
+            existing = None
+        if existing and is_explicit and not existing.is_explicit:
+            # A co-occurrence edge the Agent now states as a typed claim
+            # gives way to that claim, created fresh: the claim's state must
+            # not depend on whether co-occurrence (or a reflect that
+            # revalidated it away) came first (Theorem 3.7).
             self.remove(existing.id)
             existing = None
-        promoted = False
         if existing:
             if is_explicit:
                 existing.record_claim(provenance)
+                existing.statements = existing.support + 1
                 self._dirty.add(existing.id)
-                if not existing.is_explicit:
-                    # A co-occurrence edge the Agent now states as a typed
-                    # claim becomes that claim (it was left a co-occurrence
-                    # edge with a new label, so the claim never showed).
-                    settle_relation(existing, self._clock.tick)
-                    existing.is_explicit = True
-                    existing.belief_prior = semantic_spec.claim_prior
-                    existing.probability = max(existing.probability, semantic_spec.claim_prior)
-                    existing.weight = max(existing.weight, semantic_spec.propagation_strength)
-                    existing.confidence = max(existing.confidence, semantic_spec.structural_strength)
-                    existing.semantic_relation = semantic_spec.name
-                    existing.structural_strength = semantic_spec.structural_strength
-                    existing.propagation_strength = semantic_spec.propagation_strength
-                    promoted = True
             if existing.is_retracted and is_explicit:
                 # Restated: the claim holds again.  Its weight relaxed toward
                 # zero while withdrawn; settle that first.
@@ -179,9 +174,7 @@ class RelationManager:
                 self._dirty.add(existing.id)
                 if self._on_connection is not None:
                     self._on_connection(existing.source_id, existing.target_id)
-            # A promoted edge is a new claim: the caller treats it as stated
-            # once, not as a restatement.
-            return existing, promoted
+            return existing, False
 
         # Explicit relations start stronger than Hebbian (auto-discovered)
         init_weight = semantic_spec.propagation_strength if is_explicit else 0.15
@@ -228,6 +221,7 @@ class RelationManager:
         )
         if is_explicit:
             edge.record_claim(provenance)
+            edge.statements = 1
         self._relations[edge.id] = edge
         self._index(edge)
         self._dirty.add(edge.id)
@@ -284,6 +278,7 @@ class RelationManager:
         *,
         directed: bool = False,
         semantic: str | None = None,
+        cooccurrence_fallback: bool = True,
     ) -> RelationEdge | None:
         """Find a specific relation between two concepts.
 
@@ -302,7 +297,7 @@ class RelationManager:
                 continue
             if semantic is None or rel.semantic_relation == semantic:
                 return rel
-            if not rel.is_explicit and fallback is None:
+            if cooccurrence_fallback and not rel.is_explicit and fallback is None:
                 fallback = rel
         return fallback
 
@@ -438,6 +433,13 @@ class RelationManager:
                 duplicate.probability = min(
                     1.0, max(duplicate.probability, rel.probability)
                 )
+                if rel.is_explicit and duplicate.is_explicit:
+                    duplicate.statements = duplicate.support + rel.support
+                elif rel.is_explicit:
+                    # A claim merged into its co-occurrence twin stays a claim.
+                    duplicate.is_explicit = True
+                    duplicate.belief_prior = rel.belief_prior
+                    duplicate.statements = rel.support
                 duplicate.probability_observation_count += (
                     rel.probability_observation_count
                 )

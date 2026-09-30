@@ -1284,9 +1284,17 @@ seed 0 / 600 个事件由 Claude Haiku（与生产默认 `gpt-5.4-nano` 同档�
   查找；合并只合并同标签的孪生边。
 - 呈现按支持度（`RelationEdge.support`：显式陈述次数）：与同一对上一个相反主张或同轴另一标签相比支持度少
   `OUTVOTE_RATIO = 2` 倍（1.5 / 2 / 3 中最优）的主张，不列为当前主张，改列 "Hold loosely"（"outvoted" / "also stated as"，带次数）；
-  势均力敌的仍是 contested；"Hold loosely" 最多 10 行。
+  势均力敌的仍是 contested（在实际列出的主张之间重新判定）；"Hold loosely" 最多 10 行。
 - 顺带修复：对共现边做显式平行主张（如 `similar_to`）时，边被改了标签却仍是共现边，主张永远不显示；现在升级为显式
   主张。
+
+**独立评审**找到第一版的十二处问题，均已修复并有回归测试（`tests/test_relation_identity.py::TestReviewFindings`）：
+一个误标让真实的争议不再显示（争议现在只在列出的主张之间判定）；合并少算一次陈述、把主张并进共现孪生边时丢掉主张；
+对共现边的声明原地升级使主张状态取决于共现是否先出现、reflect 是否已把共现边判掉（现在删掉共现边、新建主张，与
+定理 3.7 一致）；带先验的重述不计入支持度（新增 `statements` 计数）；无向关系的少数标签依赖存储方向；撤回 / 否证
+会落到共现边上（现在只找主张，找不到同标签时取该有序对该轴上唯一的主张，兼容抽取器改写标签）；同一对的两个标签
+成为两条激活通道（现在每个邻居、轴、方向只取最强一条）；CORE 的连接数按边而非邻居计；PKM 反馈按旧身份查找；
+共现重新联结会删掉已撤回的显式主张。
 
 **效果**（与第 24 轮代码在同一口径下比较，1 200 token）：只注入错标（p = 0.3）0.52 → 0.65；混合误差 p = 0.1 / 0.3：0.79 / 0.53 → 0.82 / 0.60（事实库 0.81 / 0.65）；主研究 `world0_tuned` 0.95 → 0.96（stale 0.97）；真实 LLM 抽取下各系统不变。`tests/test_relation_identity.py`、
 `tests/test_llm_extract.py`、`tests/test_compact_render.py::TestSupport`、`tests/test_extraction.py::TestRetractedRelations`。

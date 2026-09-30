@@ -99,3 +99,113 @@ class TestClaimOnCooccurrence:
         for _ in range(6):
             w.ingest(Observation(concepts=["a", "b"]))
         assert _edge(w, "a", "b").semantic_relation == "similarity_kernel"
+
+
+class TestReviewFindings:
+    """Regressions for the independent review of round 25."""
+
+    def test_a_mislabel_does_not_hide_a_real_contest(self, tmp_path):
+        w = World(store_path=tmp_path)
+        for _ in range(2):
+            w.ingest(Observation(concepts=["api", "db"], relations=[("api", "db", "depends_on")]))
+        for _ in range(2):
+            w.ingest(Observation(concepts=["api", "db"], relations=[("api", "db", "conflict")]))
+        w.ingest(Observation(concepts=["api", "db"], relations=[("api", "db", "contains")]))
+        loose = w.project(["api"], max_concepts=3).render().split("Hold loosely:")[1]
+        assert "contested: " in loose and "conflicts with db" in loose and "depends on db" in loose
+
+    def test_merging_adds_statements(self, tmp_path):
+        w = World(store_path=tmp_path)
+        w.ingest(Observation(concepts=["auth svc", "db"], relations=[("auth svc", "db", "depends_on")]))
+        w.ingest(Observation(concepts=["auth service", "db"], relations=[("auth service", "db", "depends_on")]))
+        a, b = w.concepts.resolve("auth svc"), w.concepts.resolve("auth service")
+        w.concepts.merge(a.id, b.id, w.relations)
+        (edge,) = [e for e in w.relations.for_concept(a.id) if e.is_explicit]
+        assert edge.support == 2
+
+    def test_a_claim_merged_into_its_cooccurrence_twin_stays_a_claim(self, tmp_path):
+        w = World(store_path=tmp_path)
+        for _ in range(4):
+            w.ingest(Observation(concepts=["svc b", "db"]))
+        for _ in range(2):
+            w.ingest(Observation(concepts=["svc a", "db"], relations=[("svc a", "db", "related_to")]))
+        a, b = w.concepts.resolve("svc a"), w.concepts.resolve("svc b")
+        w.concepts.merge(a.id, b.id, w.relations)
+        edges = [e for e in w.relations.for_concept(a.id) if w.concepts.get(e.other_end(a.id)).name == "db"]
+        assert len(edges) == 1 and edges[0].is_explicit and edges[0].support == 2
+
+    def test_a_claim_on_a_cooccurrence_edge_does_not_depend_on_what_came_first(self, tmp_path):
+        from world0.schemas.types import RelationPrior
+
+        states = []
+        for i, cooccur in enumerate((0, 6)):
+            w = World(store_path=tmp_path / str(i))
+            for _ in range(cooccur):
+                w.ingest(Observation(concepts=["a", "b"]))
+            w.ingest(Observation(concepts=["a", "b"], relations=[("a", "b", "equivalence")],
+                                 relation_priors=[RelationPrior(source="a", target="b",
+                                                                relation_type="equivalence", probability=0.3)]))
+            e = _edge(w, "a", "b")
+            states.append((round(e.probability, 6), e.belief_prior, e.support,
+                           len([r for r in w.relations.all() if r.relation_type == e.relation_type])))
+        assert states[0] == states[1]
+
+    def test_restatements_with_a_prior_add_support(self, tmp_path):
+        from world0.schemas.types import RelationPrior
+
+        w = World(store_path=tmp_path)
+        for _ in range(3):
+            w.ingest(Observation(concepts=["a", "b"], relations=[("a", "b", "depends_on")],
+                                 relation_priors=[RelationPrior(source="a", target="b",
+                                                                relation_type="depends_on", probability=0.8)]))
+        assert _edge(w, "a", "b").support == 3
+
+    def test_an_undirected_minority_label_is_found_either_way(self, tmp_path):
+        w = World(store_path=tmp_path)
+        for _ in range(4):
+            w.ingest(Observation(concepts=["a", "b"], relations=[("a", "b", "similar_to")]))
+        w.ingest(Observation(concepts=["a", "b"], relations=[("b", "a", "equivalence")]))
+        text = w.project(["a"], max_concepts=3).render()
+        assert "equivalent" not in text.split("Hold loosely:")[0]
+
+    def test_withdrawal_never_takes_a_cooccurrence_edge(self, tmp_path):
+        w = World(store_path=tmp_path)
+        for _ in range(6):
+            w.ingest(Observation(concepts=["a", "b"]))
+        r = w.ingest(Observation(concepts=["a"], retracted_relations=[("a", "b", "equivalence")]))
+        assert r.retracted_relations == [] and not any(e.is_retracted for e in w.relations.all())
+
+    def test_a_paraphrased_withdrawal_takes_the_only_claim(self, tmp_path):
+        w = World(store_path=tmp_path)
+        for _ in range(3):
+            w.ingest(Observation(concepts=["api", "db"], relations=[("api", "db", "supports")]))
+        w.ingest(Observation(concepts=["api"], retracted_relations=[("api", "db", "depends_on")]))
+        assert _edge(w, "api", "db").is_retracted
+
+    def test_two_labels_are_one_activation_channel(self, tmp_path):
+        from world0.dynamics.activation import ActivationEngine
+
+        scores = []
+        for i, extra in enumerate((("api", "db", "depends_on"), ("api", "db", "contains"))):
+            w = World(store_path=tmp_path / str(i))
+            for _ in range(3):
+                w.ingest(Observation(concepts=["api", "db"], relations=[("api", "db", "depends_on")]))
+            w.ingest(Observation(concepts=["api", "db"], relations=[extra]))
+            api, db = w.concepts.resolve("api"), w.concepts.resolve("db")
+            out = ActivationEngine(w.concepts, w.relations, clock=w.clock).activate([api.id], record=False)
+            scores.append(out[db.id])
+        assert scores[1] <= scores[0] * 1.2  # a misread label does not double the signal
+
+    def test_core_counts_neighbours_not_claims(self, tmp_path):
+        w = World(store_path=tmp_path)
+        w.ingest(Observation(concepts=["api", "db"],
+                             relations=[("api", "db", "depends_on"), ("api", "db", "contains"), ("api", "db", "enables")]))
+        assert w._lifecycle._connections(w.concepts.resolve("api")) == 1
+
+    def test_cooccurrence_keeps_a_withdrawn_claim_as_history(self, tmp_path):
+        w = World(store_path=tmp_path)
+        w.ingest(Observation(concepts=["a", "b"], relations=[("a", "b", "similar_to")]))
+        w.ingest(Observation(concepts=["a"], retracted_relations=[("a", "b", "similar_to")]))
+        for _ in range(3):
+            w.ingest(Observation(concepts=["a", "b"]))
+        assert any(e.is_explicit and e.is_retracted for e in w.relations.all())

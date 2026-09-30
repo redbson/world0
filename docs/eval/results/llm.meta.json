@@ -1,7 +1,9 @@
 {
  "study": "llm",
  "jobs": 2,
- "seeds": 10,
+ "seeds": [
+  0
+ ],
  "budgets": [
   150,
   300,
@@ -10,9 +12,9 @@
   2400,
   4800
  ],
- "commit": "2e5eb62",
+ "commit": "1eb1282",
  "dirty_src_or_benchmarks": true,
- "seconds": 16.7,
+ "seconds": 17.0,
  "python": "3.11.15",
  "cpus": 4,
  "workers": 4

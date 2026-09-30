@@ -146,7 +146,7 @@ def main() -> None:
             fh.flush()
             print(f"  done {n} rows  ({time.time() - t0:.0f}s)", flush=True)
     with open(os.path.join(args.out, f"{args.study}.meta.json"), "w") as fh:
-        json.dump({"study": args.study, "jobs": len(jobs), "seeds": args.seeds, "budgets": BUDGETS,
+        json.dump({"study": args.study, "jobs": len(jobs), "seeds": sorted({j["seed"] for j in jobs}), "budgets": BUDGETS,
                    "commit": commit, "dirty_src_or_benchmarks": dirty, "seconds": round(time.time() - t0, 1),
                    "python": sys.version.split()[0], "cpus": os.cpu_count(), "workers": args.workers}, fh, indent=1)
 

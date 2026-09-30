@@ -287,10 +287,21 @@ class ActivationEngine:
                 if source_score < cut:
                     continue
 
+                # One channel per neighbour, axis and direction: several
+                # labels for one pair ("depends on" and a misread "contains")
+                # are several claims, not several paths — the strongest one
+                # carries the signal (as when one edge held one label).
+                excite: dict[tuple, float] = {}
+                inhibit: dict[tuple, float] = {}
                 for rel in self._relations.for_concept(cid):
                     neighbor_id = rel.other_end(cid)
                     if neighbor_id is None or rel.is_retracted:
                         continue
+                    channel = (
+                        neighbor_id,
+                        rel.relation_type,
+                        (rel.source_id == cid) if rel.is_directed else None,
+                    )
 
                     is_negative = rel.relation_type == RelationType.NEGATIVE
                     # Excitation only flows outward: a concept settled at
@@ -387,11 +398,7 @@ class ActivationEngine:
                         inhibition = raw * CONTRASTS_INHIBITION_FACTOR
                         if inhibition < min_activation:
                             continue
-                        inhibitions[neighbor_id] = _accumulate(
-                            inhibitions.get(neighbor_id, 0.0),
-                            inhibition,
-                            seed_score_max,
-                        )
+                        inhibit[channel] = max(inhibit.get(channel, 0.0), inhibition)
                         continue
 
                     # Rank-preserving floor — ensures distant but
@@ -401,7 +408,13 @@ class ActivationEngine:
                     propagated = self._apply_floor(raw, prop_floor)
                     if propagated < cut:
                         continue
+                    excite[channel] = max(excite.get(channel, 0.0), propagated)
 
+                for (neighbor_id, _axis, _dir), inhibition in inhibit.items():
+                    inhibitions[neighbor_id] = _accumulate(
+                        inhibitions.get(neighbor_id, 0.0), inhibition, seed_score_max
+                    )
+                for (neighbor_id, _axis, _dir), propagated in excite.items():
                     layer[neighbor_id] = _accumulate(
                         layer.get(neighbor_id, 0.0), propagated, seed_score_max
                     )

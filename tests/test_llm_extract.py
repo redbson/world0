@@ -60,7 +60,7 @@ def test_invalid_json_extracts_nothing():
 def test_the_cached_stream_replays_and_is_profiled():
     p = llm_extract.profile(0, 600)
     assert p["events"] == 600 and p["claims_gold"] > 0
-    assert 0.0 <= p["drop"] <= 1.0 and p["kept"] + p["relabelled"] + p["dropped"] == p["claims_gold"]
+    assert 0.0 <= p["drop"] <= 1.0 and p["kept"] + p["relabelled"] + p["reversed"] + p["dropped"] == p["claims_gold"]
 
 
 def test_a_missing_cache_is_reported(tmp_path, monkeypatch):

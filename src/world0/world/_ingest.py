@@ -254,6 +254,27 @@ class IngestPipeline:
                 edge, src, tgt, rel_type, semantic_relation, observation, result
             )
 
+    def _stated_claim(self, src_id: str, tgt_id: str, rel_type, semantic_relation: str):
+        """The claim a withdrawal or contradiction names.
+
+        The claim with that label; failing that, the only live claim on that
+        ordered pair and axis (an extractor may paraphrase the label it
+        withdraws: "X no longer depends on Y" for a stored "enables").  A
+        co-occurrence edge is never a claim to withdraw or contradict.
+        """
+        exact = self._relations.find_between(
+            src_id, tgt_id, rel_type, directed=True,
+            semantic=semantic_relation, cooccurrence_fallback=False,
+        )
+        if exact is not None:
+            return exact
+        live = [
+            r for r in self._relations.find_any_between(src_id, tgt_id)
+            if r.is_explicit and not r.is_retracted and r.relation_type == rel_type
+            and r.connects(src_id, tgt_id, directed=True)
+        ]
+        return live[0] if len(live) == 1 else None
+
     def _weaken_opposing(
         self, edge, src, tgt, rel_type, semantic_relation, observation, result
     ) -> None:
@@ -379,9 +400,7 @@ class IngestPipeline:
                 continue
             src, tgt, semantic_relation = orient_relation(src, tgt, relation_name)
             rel_type = semantic_relation_spec(semantic_relation).axis
-            existing = self._relations.find_between(
-                src.id, tgt.id, rel_type, directed=True, semantic=semantic_relation
-            )
+            existing = self._stated_claim(src.id, tgt.id, rel_type, semantic_relation)
             if existing is None:
                 # Contradiction without an existing edge weakens both
                 # endpoint concepts instead — there is nothing else to
@@ -422,9 +441,7 @@ class IngestPipeline:
             # A claim that is already dead is gone, whether or not a reflect
             # removed it: withdrawing it changes nothing (Theorem 3.7).
             self._relations.reap_dead_between(src.id, tgt.id)
-            existing = self._relations.find_between(
-                src.id, tgt.id, rel_type, directed=True, semantic=semantic_relation
-            )
+            existing = self._stated_claim(src.id, tgt.id, rel_type, semantic_relation)
             if existing is None or existing.is_retracted:
                 continue
             self._relations.retract(existing.id)

@@ -243,7 +243,7 @@ class LifecycleEngine:
         if self._clock is None:
             return len(edges)
         now, tick = wall_now(), self._clock.tick
-        live = 0
+        live: set[str] = set()
         for edge in edges:
             if edge.is_retracted:
                 continue
@@ -253,8 +253,8 @@ class LifecycleEngine:
             other = self._concepts.get(other_id) if other_id else None
             if other is None or concept_expired(other, tick, now):
                 continue
-            live += 1
-        return live
+            live.add(other_id)  # a neighbour counts once, however many claims link it
+        return len(live)
 
     def _evaluate_one(self, node: ConceptNode) -> Maturity | None:
         """The maturity ``node`` is eligible to rise to next, if any."""

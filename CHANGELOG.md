@@ -218,7 +218,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`RelationEdge.support`): a claim stated `OUTVOTE_RATIO` (2) times less
   often than an opposing claim or another label for the same pair is
   listed under "Hold loosely" ("outvoted" / "also stated as"), not as
-  current; "Hold loosely" is capped at ten lines.  LongRun at 1 200 tokens:
+  current; "Hold loosely" is capped at ten lines.  Activation takes one
+  channel per neighbour, axis and direction (the strongest claim), and the
+  CORE gate counts distinct neighbours.  LongRun at 1 200 tokens:
   wrong labels only (p = 0.3) 0.52 → 0.65; mixed extraction error p = 0.1 /
   0.3: 0.79 / 0.53 → 0.82 / 0.60; main study `world0_tuned` 0.95 → 0.96.
 - **Compact render is the default** (analysis doc §7.26) —
@@ -373,7 +375,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - **A typed claim stated on a co-occurrence edge** (e.g. `similar_to` on a
   pair already linked by co-occurrence) relabelled the edge but left it a
-  co-occurrence edge, so the claim never showed; it now becomes the claim.
+  co-occurrence edge, so the claim never showed; the co-occurrence edge now
+  gives way to a fresh claim (the same state whether co-occurrence came
+  first or not).  Withdrawal and contradiction never take a co-occurrence
+  edge, and co-occurrence no longer deletes a withdrawn claim.
 - **`inclusion` direction** — the extraction prompt and the relation spec
   described `inclusion` as "A is contained in B" while the `contains` alias
   (and every stated `contains` claim) reads source-contains-target; both now

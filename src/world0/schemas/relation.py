@@ -513,6 +513,10 @@ class RelationEdge(BaseModel):
     # ``task_history`` also collects co-occurrence provenance).  The context
     # of a claim is decided by these (projection ``CONTEXT_MATCH``).
     claim_tasks: list[str] = Field(default_factory=list)
+    # Explicit statements of this claim (every statement, with or without
+    # an extractor prior); 0 on co-occurrence edges and on edges stored
+    # before it was counted (``support`` then falls back to confirmations).
+    statements: int = 0
 
     @field_validator("relation_type", mode="before")
     @classmethod
@@ -713,7 +717,9 @@ class RelationEdge(BaseModel):
     @property
     def support(self) -> int:
         """Explicit statements of this claim (0 for a co-occurrence edge)."""
-        return self.probability_observation_count + 1 if self.is_explicit else 0
+        if not self.is_explicit:
+            return 0
+        return self.statements or self.probability_observation_count + 1
 
     def claim_affinity(self, task: str, vocabulary: TaskVocabulary | None = None) -> float | None:
         """Best match of ``task`` against the tasks the claim was stated under;
