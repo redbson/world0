@@ -48,6 +48,8 @@
 
 ## 推迟到 0.4
 
+- **统一 API**（`docs/world0-api.md`）：`world0.api` 的 `Statement` / `ConceptCard` / `Claim`，`World.card()` / `claims()` / `find()`，
+  `Observation` 的 `statements` / `withdrawals` / `denials`，`Projection` 的按状态分组的主张；0.5 加 `world0` CLI、HTTP `/v1`、MCP 服务端。
 - `confidence` 完全成为导出量（`evidence × g(salience)`）；只追加的事件日志与快照。
 - 对立读法互相支持（`A depends on B` / `B enables A`；`inclusion` / `membership`）——是否视为同一事实。
 - 抽取压测用与 prompt 例句无关的改写句式（目前 seed 1–2 是新事件、不是新措辞）。

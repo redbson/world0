@@ -184,6 +184,8 @@ Positive + negative channels: `concepts`/`relations` give positive evidence; `we
 
 ## 5. 核心 API / Core API
 
+> 长期稳定的统一接口（动词表、数据形状、四个入口的映射、稳定性分级）见 [`world0-api.md`](world0-api.md)；本节描述 0.3.0 现有的方法。
+
 ### `World(store_path=".world0", llm=None)`
 
 构造时会自动：

@@ -45,6 +45,7 @@ The 0.3.0 scope, release checklist and what is deferred to 0.4 are in [`docs/ROA
 ## Documentation / 文档
 
 - [`docs/world0-usage.md`](docs/world0-usage.md) — operational usage guide for World 0 / World 0 操作与使用文档
+- [`docs/world0-api.md`](docs/world0-api.md) — the unified long-term API: one verb set and one set of data shapes across Python, CLI, HTTP and MCP, stability tiers, evolution plan / 统一的长期 API 设计：四个入口同一套动词与数据形状、稳定性分级、演化路线
 - [`docs/world0-color-field-dynamics.md`](docs/world0-color-field-dynamics.md) — dynamics-first design for community-born color fields / 基于动力学的群落生色与褪色设计
 - [`docs/extraction-model-prompt-eval.md`](docs/extraction-model-prompt-eval.md) — model × prompt extraction-quality evaluation (why gpt-5.4-nano is the default) / 模型×prompt 提取质量评测（为何默认 gpt-5.4-nano）
 - [`docs/world0-cognitive-dynamics-analysis.md`](docs/world0-cognitive-dynamics-analysis.md) — mathematical review of the decay / activation / projection dynamics, probe evidence, calibration and roadmap / 认知动力学的数学分析、探针证据、参数标定与路线
