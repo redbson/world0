@@ -71,6 +71,8 @@ Negative / repulsion labels:
 - violates_constraint: a concept violates a constraint or validity region
 - conflict: concepts conflict or contradict; two components, settings or
   practices that cannot be used or run together
+- contrast: concepts differ in a way worth keeping apart (alternatives,
+  opposite approaches) without conflicting
 - instability: one concept destabilizes another
 - adversarial_prediction: one concept predicts against another
 

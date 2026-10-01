@@ -108,23 +108,23 @@ def test_normalize_relation_type_passthrough_for_enum():
         ("supports", "enables"),
         ("depends_on", "dependence"),
         ("contains", "inclusion"),
-        ("part_of", "membership"),
+        ("part_of", "inclusion"),  # seen from the part; orient_relation stores it from the whole
         ("activates", "enables"),
         ("precedes", "dependence"),
         ("derived_from", "dependence"),
-        ("contrasts", "conflict"),
+        ("contrasts", "contrast"),
         ("similar_to", "similarity_kernel"),
         ("related_to", "generic_relation"),
         # Axis words.
         ("positive", "mutual_reinforcement"),
         ("attraction", "mutual_reinforcement"),
-        ("negative", "conflict"),
-        ("repulsion", "conflict"),
+        ("negative", "contrast"),
+        ("repulsion", "contrast"),
         ("parallel", "generic_relation"),
         ("resonance", "overlap"),
         # Prior semantic labels.
         ("trust", "mutual_reinforcement"),
-        ("mutual_understanding", "equivalence"),
+        ("mutual_understanding", "recursive_co_modeling"),
         ("deep_conceptual_overlap", "overlap"),
         ("persistent_attention_allocation", "persistent_attention"),
         # Canonical names map to themselves.

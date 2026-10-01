@@ -108,7 +108,7 @@ class TestExtractionParsing:
             ("retrieval augmented generation", "vector search", "dependence")
         ]
         assert obs.contradicted_relations == [
-            ("retrieval augmented generation", "vector search", "conflict")
+            ("retrieval augmented generation", "vector search", "contrast")
         ]
         assert obs.weakened == ["old keyword search"]
         concept_meta = obs.extraction_metadata["concepts"][
@@ -188,7 +188,7 @@ class TestExtractionParsing:
         assert [c.uid for c in obs.concept_candidates] == ["c1", "c2"]
         assert obs.concept_candidates[0].sense == "technology company"
         assert obs.concept_candidates[1].sense == "fruit"
-        assert obs.relations == [("c1", "c2", "conflict")]
+        assert obs.relations == [("c1", "c2", "contrast")]
 
     def test_parses_json_in_markdown_fences(self):
         response = '```json\n{"concepts": [{"name": "python"}], "relations": []}\n```'

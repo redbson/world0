@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- **A stated contrast makes its partner visible, as a terminal** (analysis
+  doc §7.30, paper Prop. 6.6) — "A conflicts with B" is knowledge about the
+  pair, so B now appears in A's view at the strength of the contrast
+  (`max(visibility, excitation − inhibition)`), while activation does not
+  spread on through B and B's excitation through other paths is still
+  inhibited.  Before, the partner of a contrast was only ever *suppressed*:
+  on LongRun focus queries 16 % of gold conflict claims were missing because
+  their adjacent partner was not selected.  Conflict recall 0.84 → 0.99;
+  `main` utility 0.956 → 0.987 (focus 0.92 → 0.99, bridge 0.95 → 1.00).
+- **Relation semantics: `contrast`, honest axis-word aliases, `part_of` is
+  inclusion** — new semantic relation `contrast` (negative axis, seeded at
+  0.70 / 0.06, symmetric: "differ in a way worth keeping apart, without
+  conflicting"); the bare axis words `contrasts` / `negative` / `repulsion`
+  now map to it instead of to `conflict` (a bare axis word asserts only the
+  axis: the weakest claim on it), `mutual_understanding` maps to
+  `recursive_co_modeling`, and `part_of` is `inclusion` read from the part —
+  `(wheel, car, "part_of")` is stored and rendered as "car contains wheel"
+  (before it was stored as `membership` in the wrong direction).  The
+  extraction prompt lists `contrast` under the negative labels.
+- **A task-conditioned projection is not filled with another task's
+  concepts** (analysis doc §7.29) — `max_concepts` is a ceiling, not a
+  target.  A candidate whose known context is another task (task-profile
+  affinity for the current task below `CONTEXT_MATCH`) and whose activation
+  sits in the floor band (kept for horizon completeness, not on the strength
+  of its evidence) is filler and never selected; off-task concepts the seeds
+  reach strongly still compete on merit, and with no task or no candidate in
+  the task's context nothing changes.  LongRun focus precision 0.57 → 0.63 at
+  the same utility (0.956), 17 % fewer tokens; wrong task label 0.71 → 0.77.
+  `PROPAGATION_MIN_RATIO` moved to `dynamics.coefficients`.
 - **Extraction prompt: direction convention and label scope** (analysis doc
   §7.28) — every relation reads as "<source> <label> <target>"; direction
   follows what the text asserts, not word order, with examples for passive,

@@ -69,4 +69,5 @@ def test_world_ingest_stores_axis_links(tmp_path):
     semantic_relations = {r.semantic_relation for r in world.relations.all()}
 
     assert relation_types == {"positive", "negative", "parallel"}
-    assert semantic_relations == {"mutual_reinforcement", "conflict", "generic_relation"}
+    # a bare axis word asserts only the axis: the weakest claim on it (round 28)
+    assert semantic_relations == {"mutual_reinforcement", "contrast", "generic_relation"}

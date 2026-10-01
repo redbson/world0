@@ -290,13 +290,22 @@ Identity operations flush immediately, matching `ingest`/`reflect` semantics.
 `relations=[(src, tgt, type)]` 里 `type` 支持下列枚举（字符串/枚举值均可）：
 
 ```
-contains · part_of · depends_on · supports · contrasts ·
+contains · part_of · depends_on · supports · contrasts · contrast · conflict ·
 similar_to · activates · precedes · derived_from · related_to
 ```
 
 `related_to` 是默认/回退类型。Agent 后续可用 `RelationManager.refine_type()` 细化类型。
+两个方向约定：`(wheel, car, "part_of")` 与 `(car, wheel, "contains")` 是同一条 inclusion 关系，
+存储和渲染都是 "car contains wheel"；`contrasts` / `contrast` 是 negative 轴上最弱的主张
+（"值得区分，但不冲突"），`conflict` 才是冲突。对比的另一端会出现在投影里（以对比的强度），
+但激活不会穿过它继续扩散。
 
 `related_to` is the default / fallback. Agents can refine types later via `RelationManager.refine_type()`.
+Two conventions: `part_of` is inclusion seen from the part — `(wheel, car, "part_of")` is stored and
+rendered as "car contains wheel"; `contrasts` / `contrast` is the weakest negative-axis claim
+("worth keeping apart, not in conflict"), `conflict` is the strong one.  The partner of a stated
+contrast is visible in a projection at the strength of the contrast, but activation does not spread
+on through it.
 
 ---
 

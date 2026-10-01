@@ -36,12 +36,17 @@ Floor:
   constant, so distant concepts stay in the candidate pool *and* keep
   their relative order (closer / stronger still ranks first).
 
-Inhibition:
+Inhibition and visibility:
   Negative-axis edges spread *negative* activation that accumulates on a
-  separate inhibition channel.  The final score returned for each
-  concept is ``max(0, activation - inhibition)``, so an aggressively
-  repelled neighbor can disappear from projections even if it is
-  also weakly activated through other paths.
+  separate inhibition channel, and the same stated contrast gives its
+  partner *visibility*: the claim "A conflicts with B" is knowledge about
+  the pair, so B appears in A's view at the strength of the contrast, as a
+  terminal — activation does not spread onward from a concept reached
+  only this way.  The final score returned for each concept is
+  ``max(visibility, excitation - inhibition)``: a concept the seeds
+  contrast with is at least as visible as the contrast is strong, while
+  the excitation it receives through other paths is suppressed by it
+  (docs §7.30).
 """
 
 from __future__ import annotations
@@ -186,10 +191,11 @@ class ActivationEngine:
 
         Contributions arriving at the same concept in the same layer are
         combined with a bounded noisy-OR (see module docstring).
-        Negative-axis edges use the same multiplicative chain but feed an
-        independent inhibition channel multiplied by
-        CONTRASTS_INHIBITION_FACTOR.  The returned score for each
-        concept is ``max(0, activation - inhibition)``.
+        Negative-axis edges use the same multiplicative chain but feed two
+        channels: the inhibition channel (multiplied by
+        CONTRASTS_INHIBITION_FACTOR) and a visibility channel (the stated
+        contrast itself, a terminal that is not expanded).  The returned
+        score for each concept is ``max(visibility, activation - inhibition)``.
 
         Args:
             record: If True, touched concepts get their activation_count
@@ -218,6 +224,9 @@ class ActivationEngine:
         activations: dict[str, float] = {}
         depth_of: dict[str, int] = {}
         inhibitions: dict[str, float] = {}
+        # What a stated contrast makes visible: the partner of a negative
+        # edge, at the strength of the claim.  Not a path — never expanded.
+        visibility: dict[str, float] = {}
         # Settled reads, once per concept per pass (docs/paper Corollary 3.2').
         settled: dict[str, float] = {}
         expired: dict[str, bool] = {}
@@ -290,6 +299,7 @@ class ActivationEngine:
                 # carries the signal (as when one edge held one label).
                 excite: dict[tuple, float] = {}
                 inhibit: dict[tuple, float] = {}
+                see: dict[tuple, float] = {}
                 for rel in self._relations.for_concept(cid):
                     neighbor_id = rel.other_end(cid)
                     if neighbor_id is None or rel.is_retracted:
@@ -390,8 +400,13 @@ class ActivationEngine:
                     )
 
                     if is_negative:
-                        # Inhibitory channel: negative-axis links spread negative
-                        # activation instead of weak excitation.
+                        # The stated contrast makes its partner visible (a
+                        # terminal: the partner's own neighbourhood is not
+                        # pulled in through it) and inhibits the excitation
+                        # the partner receives through other paths.
+                        visible = self._apply_floor(raw, prop_floor)
+                        if visible >= cut:
+                            see[channel] = max(see.get(channel, 0.0), visible)
                         inhibition = raw * CONTRASTS_INHIBITION_FACTOR
                         if inhibition < min_activation:
                             continue
@@ -410,6 +425,10 @@ class ActivationEngine:
                 for (neighbor_id, _axis, _dir), inhibition in inhibit.items():
                     inhibitions[neighbor_id] = _accumulate(
                         inhibitions.get(neighbor_id, 0.0), inhibition, seed_score_max
+                    )
+                for (neighbor_id, _axis, _dir), visible in see.items():
+                    visibility[neighbor_id] = _accumulate(
+                        visibility.get(neighbor_id, 0.0), visible, seed_score_max
                     )
                 for (neighbor_id, _axis, _dir), propagated in excite.items():
                     layer[neighbor_id] = _accumulate(
@@ -441,22 +460,27 @@ class ActivationEngine:
             if invalidate is not None:
                 invalidate()
 
-        # Subtract inhibition from excitation; drop concepts driven to
-        # zero or below so they vanish from the projection entirely.
+        # Subtract inhibition from excitation; a concept driven to zero or
+        # below vanishes from the projection unless a stated contrast keeps
+        # it visible: ``max(visibility, excitation − inhibition)``.
         # Seeds are the exception: what the Agent asked about is always
         # returned (at a net score of at least 0), so the projection's
         # seeds-first rule can hold for a faded or inhibited seed too
         # (docs/paper, Proposition 7.1).
-        # Iterate ``activations`` in insertion order (layer order) so
-        # projection selection is deterministic across process runs.
+        # Iterate ``activations`` in insertion order (layer order), then the
+        # visibility-only concepts, so projection selection is deterministic
+        # across process runs.
         seeds = set(frontier_seeds)
         net: dict[str, float] = {}
         for cid, excitation in activations.items():
-            score = excitation - inhibitions.get(cid, 0.0)
+            score = max(excitation - inhibitions.get(cid, 0.0), visibility.get(cid, 0.0))
             if score > cut:
                 net[cid] = score
             elif cid in seeds:
                 net[cid] = max(0.0, score)
+        for cid, visible in visibility.items():
+            if cid not in activations and visible > cut:
+                net[cid] = visible
         return net
 
     @staticmethod

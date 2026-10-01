@@ -124,7 +124,7 @@ class TestCompactRender:
         ], relations=[("f", "o", "part_of")]))
         ids = [c.id for c in w.concepts.all() if c.name == "Apple"]
         text = w.project(ids, max_concepts=5).render()
-        assert "Apple (fruit) belongs to orchard" in text
+        assert "orchard contains Apple (fruit)" in text
         assert "Apple (technology company)" in text
 
     def test_definitions_come_from_the_concept_cards(self, tmp_path):
@@ -149,7 +149,7 @@ class TestRelationPhrases:
         ("depends_on", "x depends on y"),
         ("contains", "x contains y"),
         ("inclusion", "x contains y"),
-        ("part_of", "x belongs to y"),
+        ("part_of", "y contains x"),
         ("conflict", "x conflicts with y"),
         ("related_to", "x is related to y"),
     ])

@@ -105,7 +105,7 @@ def test_ingest_concept_candidates_disambiguate_same_label() -> None:
     assert len(nodes) == 2
     assert {n.sense for n in nodes} == {"fruit", "technology company"}
     assert nodes[0].id != nodes[1].id
-    assert result.new_relations == ["Apple → conflict → Apple"]
+    assert result.new_relations == ["Apple → contrast → Apple"]
     edge = rs.all()[0]
     assert edge.source_id != edge.target_id
     representations = {node.representation() for node in nodes}

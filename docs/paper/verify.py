@@ -818,6 +818,36 @@ def check_opposition() -> None:
        f"E10,C10: dependence {e:.3f} vs conflict {c:.3f} (the later block leads)")
 
 
+def check_contrast_visibility() -> None:
+    section("§6.3 Prop 6.6: a stated contrast makes its partner visible, as a terminal, below a dependence")
+    from world0.dynamics.activation import PROPAGATION_MIN_RATIO
+
+    # one pair per observation: co-mentioning more would add co-occurrence edges
+    w = World(store_path=tempfile.mkdtemp())
+    for _ in range(4):
+        w.ingest(Observation(concepts=["lock", "async io"], relations=[("lock", "async io", "conflict")]))
+        w.ingest(Observation(concepts=["async io", "event loop"], relations=[("async io", "event loop", "depends_on")]))
+        w.ingest(Observation(concepts=["event loop", "callback"], relations=[("event loop", "callback", "depends_on")]))
+    ids = {n: w.concepts.resolve(n).id for n in ("lock", "async io", "event loop", "callback")}
+    act = ActivationEngine(w.concepts, w.relations, clock=w.clock).activate([ids["lock"]], max_depth=3, record=False)
+    seed = act[ids["lock"]]
+    assert ids["async io"] in act, "the contrast partner is visible"
+    assert act[ids["async io"]] >= PROPAGATION_MIN_RATIO * 0.9 * seed - 1e-12, (act[ids["async io"]], seed)
+    assert ids["event loop"] not in act and ids["callback"] not in act, "the partner is a terminal"
+    ok("partner visible at >= 0.027 S, its neighbourhood not reached",
+       f"seed {seed:.4f}, partner {act[ids['async io']]:.4f}, 2 concepts beyond it absent")
+
+    w = World(store_path=tempfile.mkdtemp())
+    for _ in range(6):
+        w.ingest(Observation(concepts=["origin", "needed"], relations=[("origin", "needed", "depends_on")]))
+        w.ingest(Observation(concepts=["origin", "contrasted"], relations=[("origin", "contrasted", "conflict")]))
+    ids = {n: w.concepts.resolve(n).id for n in ("origin", "needed", "contrasted")}
+    act = ActivationEngine(w.concepts, w.relations, clock=w.clock).activate([ids["origin"]], record=False)
+    assert act[ids["origin"]] > act[ids["needed"]] > act[ids["contrasted"]] > 0, act
+    ok("seed > dependence partner > contrast partner > 0",
+       f"{act[ids['origin']]:.4f} > {act[ids['needed']]:.4f} > {act[ids['contrasted']]:.4f}")
+
+
 def check_read_path() -> None:
     section("§3.2 Corollary 3.2': activation reads settled values, so a view between uses ignores reflect")
     outs = []
@@ -882,6 +912,7 @@ def main() -> None:
     check_relation_settle_exact()
     check_relation_survival()
     check_opposition()
+    check_contrast_visibility()
     check_jaccard()
     check_revalidation_count()
     check_noisy_or()

@@ -35,7 +35,8 @@ def test_a_raw_answer_becomes_the_benchmark_extraction():
     })
     x = llm_extract.to_extraction(raw, ev, known)
     assert Claim.make(r.src, "depends_on", r.tgt) in x.claims      # names mapped back to the world's
-    assert Claim.make(r.src, "membership", "follow-up notes") in x.claims  # other labels kept as chosen
+    # other labels kept as chosen; part_of is inclusion seen from the part (round 28)
+    assert Claim.make("follow-up notes", "contains", r.src) in x.claims
     assert x.retractions == [r]
     assert "follow-up notes" in x.concepts
 

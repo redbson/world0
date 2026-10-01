@@ -59,6 +59,7 @@ _LEGACY_RELATION_TYPE_MAP: dict[str, RelationType] = {
     "depends_on": RelationType.POSITIVE,
     "contains": RelationType.POSITIVE,
     "part_of": RelationType.POSITIVE,
+    "contrast": RelationType.NEGATIVE,
     "activates": RelationType.POSITIVE,
     "precedes": RelationType.POSITIVE,
     "derived_from": RelationType.POSITIVE,
@@ -209,6 +210,9 @@ SEMANTIC_RELATION_SPECS: dict[str, SemanticRelationSpec] = {
     "conflict": SemanticRelationSpec(
         "conflict", RelationType.NEGATIVE, 0.84, 0.10, "concepts conflict or contradict"
     ),
+    "contrast": SemanticRelationSpec(
+        "contrast", RelationType.NEGATIVE, 0.70, 0.06, "concepts differ in a way worth keeping apart, without conflicting"
+    ),
     "instability": SemanticRelationSpec(
         "instability", RelationType.NEGATIVE, 0.78, 0.12, "one concept destabilizes another"
     ),
@@ -255,6 +259,7 @@ SYMMETRIC_SEMANTIC_RELATIONS: frozenset[str] = frozenset({
     "mutual_reinforcement",
     "future_coupling",
     "conflict",
+    "contrast",
     "disjointness",
     "complement",
     "incompatible_ontology",
@@ -266,8 +271,9 @@ _SEMANTIC_RELATION_ALIASES: dict[str, str] = {
     # Axis words default to generic language relations for that axis.
     "positive": "mutual_reinforcement",
     "attraction": "mutual_reinforcement",
-    "negative": "conflict",
-    "repulsion": "conflict",
+    # A bare axis word asserts only the axis: the weakest claim on it.
+    "negative": "contrast",
+    "repulsion": "contrast",
     "parallel": "generic_relation",
     "resonance": "overlap",
     # Prior semantic labels.
@@ -279,7 +285,7 @@ _SEMANTIC_RELATION_ALIASES: dict[str, str] = {
     "incompatible_ontology": "incompatible_ontology",
     "instability": "instability",
     "adversarial_prediction": "adversarial_prediction",
-    "mutual_understanding": "equivalence",
+    "mutual_understanding": "recursive_co_modeling",
     "deep_conceptual_overlap": "overlap",
     "recursive_co_modeling": "recursive_co_modeling",
     "persistent_attention_allocation": "persistent_attention",
@@ -287,11 +293,11 @@ _SEMANTIC_RELATION_ALIASES: dict[str, str] = {
     "supports": "enables",
     "depends_on": "dependence",
     "contains": "inclusion",
-    "part_of": "membership",
+    "part_of": "inclusion",  # seen from the part; stored from the whole (orient_relation)
     "activates": "enables",
     "precedes": "dependence",
     "derived_from": "dependence",
-    "contrasts": "conflict",
+    "contrasts": "contrast",
     "similar_to": "similarity_kernel",
     "related_to": "generic_relation",
 }
@@ -362,9 +368,10 @@ def normalize_semantic_relation(value: str | None) -> str:
 _T = TypeVar("_T")
 
 # Legacy labels phrased from the other end: "A precedes B" states that B
-# depends on A.  They are stored in the canonical direction, so a claim
-# reads the same whichever label stated it.
-_REVERSED_ALIASES: frozenset[str] = frozenset({"precedes"})
+# depends on A; "x part_of A" states that A contains x.  They are stored in
+# the canonical direction, so a claim reads the same whichever label stated
+# it.
+_REVERSED_ALIASES: frozenset[str] = frozenset({"precedes", "part_of"})
 
 
 def orient_relation(source: _T, target: _T, label: str | None) -> tuple[_T, _T, str]:
@@ -401,6 +408,7 @@ RELATION_PHRASES: dict[str, str] = {
     "incompatible_ontology": "is incompatible with",
     "violates_constraint": "violates",
     "conflict": "conflicts with",
+    "contrast": "contrasts with",
     "instability": "destabilizes",
     "adversarial_prediction": "predicts against",
     "equivalence": "is equivalent to",

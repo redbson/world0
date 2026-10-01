@@ -132,7 +132,10 @@ class ProjectionEngine:
            score × task_affinity vs diversity.  ``max_concepts`` is a
            ceiling, not a target: a candidate whose known context is
            another task and whose activation sits in the floor band is
-           filler and never selected (see ``_off_task``)
+           filler and never selected (see ``_off_task``).  Candidates in
+           the floor band carry no evidential strength to trade against
+           diversity, so MMR runs over the candidates above the band and
+           the band fills what is left in activation order
         5. Include relations between selected concepts
         6. Return LLM-prompt-ready Projection
         """
@@ -289,13 +292,22 @@ class ProjectionEngine:
         # no candidate is in the task's context (a label the world has
         # never seen, or a wrong one) nothing is filler and the view is
         # filled as before.
+        floor_band = PROPAGATION_MIN_RATIO * peak
         off_task = self._off_task(remaining, task_lower, task_mismatch)
         if any(cid not in off_task for cid in remaining):
-            floor_band = PROPAGATION_MIN_RATIO * peak
             remaining = [
                 cid for cid in remaining
                 if cid not in off_task or candidates[cid] >= floor_band
             ]
+        # Diversity is traded against evidence.  Candidates lifted into the
+        # floor band carry no evidential strength to trade — the band keeps
+        # only their order (closer, stronger first) — so MMR runs over the
+        # candidates above the band and the band then fills what is left in
+        # that order.  Before, the redundancy term dominated the band's
+        # ~1 % relevance differences and bought "coverage" of third-hop
+        # concepts at the expense of second-hop ones (docs §7.29).
+        weak = [cid for cid in remaining if candidates[cid] < floor_band]
+        remaining = [cid for cid in remaining if candidates[cid] >= floor_band]
 
         while remaining and len(selected) < max_concepts:
             best_id = None
@@ -344,6 +356,11 @@ class ProjectionEngine:
 
             selected.append(best_id)
             remaining.remove(best_id)
+
+        for cid in weak:
+            if len(selected) >= max_concepts:
+                break
+            selected.append(cid)
 
         selected_ids = set(selected)
         selected_scores = {cid: candidates[cid] for cid in selected}

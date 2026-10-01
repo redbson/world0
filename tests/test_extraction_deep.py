@@ -473,7 +473,7 @@ class TestWeakenedAndContradicted:
             ],
         })
         obs = _extract(resp)
-        assert obs.contradicted_relations == [("RAG", "fine tuning", "conflict")]
+        assert obs.contradicted_relations == [("RAG", "fine tuning", "contrast")]
 
     def test_contradicted_unresolved_endpoint_adds_parse_warning(self):
         resp = json.dumps({
