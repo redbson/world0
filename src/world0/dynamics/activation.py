@@ -51,6 +51,7 @@ from typing import TYPE_CHECKING
 
 from world0.dynamics.coefficients import (
     CONCEPT_TEMPORAL_HL,
+    PROPAGATION_MIN_RATIO,
     RELATION_TEMPORAL_HL,
     RELATION_TYPE_FACTOR,
 )
@@ -102,12 +103,8 @@ TASK_AFFINITY_BOOST: float = 1.5
 # this minimum readiness level, preventing "dead node" blockage.
 PROPAGATION_FLOOR: float = 0.3
 
-# ── Propagation minimum ratio ────────────────────────────────────────
-# Signals weaker than this fraction of the strongest *seed* score are
-# lifted into a band just below it, preventing the multiplicative chain
-# from zeroing out signal too early.  This widens the cognitive horizon
-# from ~1 hop to 3-4 hops.
-PROPAGATION_MIN_RATIO: float = 0.03
+# ``PROPAGATION_MIN_RATIO`` (the floor band, 0.03 of the strongest seed)
+# lives in ``dynamics.coefficients`` since the projection reads it too.
 
 # Acceptance cut as a fraction of the strongest seed score.  Applied as
 # ``min(min_activation, RELATIVE_MIN_ACTIVATION × seed_max)`` it only ever

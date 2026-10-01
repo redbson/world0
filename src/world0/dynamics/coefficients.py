@@ -30,6 +30,15 @@ RELATION_TYPE_FACTOR: dict[RelationType, float] = {
     RelationType.NEGATIVE: 0.60,
 }
 
+# ── Propagation minimum ratio ────────────────────────────────────────
+# Signals weaker than this fraction of the strongest *seed* score are
+# lifted by the activation engine into a band just below it, preventing
+# the multiplicative chain from zeroing out signal too early.  This widens
+# the cognitive horizon from ~1 hop to 3-4 hops.  The projection reads the
+# same constant: a candidate below ``PROPAGATION_MIN_RATIO × peak`` was
+# kept for horizon completeness, not on the strength of its evidence.
+PROPAGATION_MIN_RATIO: float = 0.03
+
 
 # ── Temporal relevance half-lives (ticks of cognitive time) ──────────
 # "Soft" half-lives for freshness weighting during read-only operations

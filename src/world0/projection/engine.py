@@ -15,6 +15,7 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
 from world0.context import IGNITION_THRESHOLD, Focus, ground_task
+from world0.dynamics.coefficients import PROPAGATION_MIN_RATIO
 from world0.dynamics.decay import (
     RELATION_PRUNE_THRESHOLD,
     concept_expired,
@@ -128,7 +129,10 @@ class ProjectionEngine:
         3. Seeds first: what the Agent asked about is always in its
            projection, ordered by score and capped by ``max_concepts``
         4. MMR greedy selection for the remaining slots: balance
-           score × task_affinity vs diversity
+           score × task_affinity vs diversity.  ``max_concepts`` is a
+           ceiling, not a target: a candidate whose known context is
+           another task and whose activation sits in the floor band is
+           filler and never selected (see ``_off_task``)
         5. Include relations between selected concepts
         6. Return LLM-prompt-ready Projection
         """
@@ -274,6 +278,25 @@ class ProjectionEngine:
         for cid in selected:
             remaining.remove(cid)
 
+        # Filler: a candidate whose known context is another task *and*
+        # whose activation was lifted into the floor band — kept by the
+        # activation engine for horizon completeness, not on the strength
+        # of its evidence.  Filling the remaining slots with such candidates
+        # is what made a task-conditioned view wander across a polysemous
+        # bridge into the other domain once the task's own neighbourhood was
+        # exhausted (docs §7.29).  An off-task concept the seeds reach
+        # strongly (a direct claim, say) still competes on its merit; when
+        # no candidate is in the task's context (a label the world has
+        # never seen, or a wrong one) nothing is filler and the view is
+        # filled as before.
+        off_task = self._off_task(remaining, task_lower, task_mismatch)
+        if any(cid not in off_task for cid in remaining):
+            floor_band = PROPAGATION_MIN_RATIO * peak
+            remaining = [
+                cid for cid in remaining
+                if cid not in off_task or candidates[cid] >= floor_band
+            ]
+
         while remaining and len(selected) < max_concepts:
             best_id = None
             best_mmr = -float("inf")
@@ -397,6 +420,27 @@ class ProjectionEngine:
                 live_weight,
             ),
         )
+
+    def _off_task(self, candidates, task_lower: str, task_mismatch: dict[str, float]) -> set[str]:
+        """Candidates with a *known, different* context.
+
+        A concept has a known context when it carries a task profile; it
+        is off-task when its affinity for the current task (history or
+        grounding) is below ``CONTEXT_MATCH``, the same line that decides
+        whether a claim is in the task's context.  A concept with no task
+        profile at all is neutral — there is no evidence it belongs
+        elsewhere — and without a task nothing is off-task.
+        """
+        if not task_lower:
+            return set()
+        off: set[str] = set()
+        for cid in candidates:
+            node = self._concepts.get(cid)
+            if node is None or not node.task_profile:
+                continue
+            if 1.0 - task_mismatch[cid] < CONTEXT_MATCH:
+                off.add(cid)
+        return off
 
     def _split_by_context(self, relations, selected, task_lower, vocabulary, live_weight):
         """(in-context relations, relations that describe a concept elsewhere).
