@@ -17,7 +17,7 @@ from typing import Any, Callable
 
 from pydantic import BaseModel, Field, ValidationError
 
-from world0.api import API_VERSION, Statement
+from world0.api import API_VERSION, ConceptCardInput, Statement
 from world0.schemas.relation import is_known_relation_type
 from world0.schemas.types import Observation
 from world0.world import World
@@ -30,12 +30,13 @@ ERROR_CODES = (
     "llm_unavailable",      # ingest_text without a provider
     "invalid_request",      # anything else wrong with the parameters
     "unknown_operation",
+    "internal_error",       # the operation raised something the API did not expect
 )
 
 HTTP_STATUS = {
     "not_found": 404, "invalid_observation": 400, "unknown_relation": 400,
     "identity_conflict": 409, "llm_unavailable": 503, "invalid_request": 400,
-    "unknown_operation": 404,
+    "unknown_operation": 404, "internal_error": 500,
 }
 
 
@@ -43,7 +44,8 @@ class ApiError(Exception):
     """An operation failed; ``code`` is one of ``ERROR_CODES``."""
 
     def __init__(self, code: str, message: str) -> None:
-        assert code in ERROR_CODES, code
+        if code not in ERROR_CODES:
+            raise ValueError(f"unknown error code {code!r}")
         super().__init__(message)
         self.code = code
         self.message = message
@@ -122,6 +124,24 @@ class StatementRequest(BaseModel):
     belief: float | None = Field(default=None, ge=0.0, le=1.0)
 
 
+class ObservationInput(BaseModel):
+    """An observation in the API shape (docs/world0-api.md §4.1): what was
+    mentioned, what holds, what no longer holds, what is denied, and the
+    task it was stated under.  The pipeline field names (``relations``,
+    ``relation_priors``, ``retracted_relations``, ``contradicted_relations``,
+    ``concept_candidates``, ``descriptions``) are accepted too."""
+    concepts: list[str] = Field(default_factory=list, description="Names mentioned")
+    cards: list[ConceptCardInput] = Field(default_factory=list, description="Card details beyond the name")
+    statements: list[Statement] = Field(default_factory=list, description="Claims that hold: <source> <relation> <target>")
+    withdrawals: list[Statement] = Field(default_factory=list, description="Claims that no longer hold")
+    denials: list[Statement] = Field(default_factory=list, description="Claims denied (belief lowered)")
+    weakened: list[str] = Field(default_factory=list, description="Concepts doubted as such")
+    task: str = Field(default="", description="The task this was stated under; the claims' context")
+    source: str = ""
+    source_id: str = Field(default="", description="The caller's idempotency key")
+    domain: str = ""
+
+
 class EmptyRequest(BaseModel):
     pass
 
@@ -129,8 +149,9 @@ class EmptyRequest(BaseModel):
 # ── operations ──────────────────────────────────────────────────────────
 
 def _check_relations(observation: Observation) -> None:
-    for src, tgt, rel in (*observation.relations, *observation.retracted_relations,
-                          *observation.contradicted_relations):
+    labelled = [*observation.relations, *observation.retracted_relations, *observation.contradicted_relations,
+                *((pr.source, pr.target, pr.relation_type) for pr in observation.relation_priors)]
+    for src, tgt, rel in labelled:
         if not is_known_relation_type(rel):
             raise ApiError("unknown_relation", f"unknown relation label {rel!r} in {src!r} → {tgt!r}")
 
@@ -138,7 +159,7 @@ def _check_relations(observation: Observation) -> None:
 def _observation(params: dict[str, Any]) -> Observation:
     try:
         obs = Observation.model_validate(params)
-    except ValidationError as exc:
+    except (ValidationError, ValueError, TypeError) as exc:
         raise ApiError("invalid_observation", str(exc)) from exc
     _check_relations(obs)
     return obs
@@ -166,7 +187,7 @@ def op_project(world: World, params: dict[str, Any]) -> dict[str, Any]:
         projection = world.project(req.seeds, task=req.task, perspective=req.perspective or None,
                                    max_concepts=req.max_concepts, max_depth=req.max_depth)
     except (KeyError, ValueError) as exc:
-        raise ApiError("invalid_request", str(exc)) from exc
+        raise ApiError("invalid_request", str(exc.args[0]) if exc.args else str(exc)) from exc
     data = projection.model_dump(mode="json")
     # Activation is settled at read time and the cognitive clock drifts
     # slowly with the calendar, so two reads seconds apart differ in the
@@ -230,7 +251,10 @@ def op_merge(world: World, params: dict[str, Any]) -> dict[str, Any]:
         raise ApiError("identity_conflict", f"{req.keeper!r} and {req.absorbed!r} are the same concept")
     if not world.merge(req.keeper, req.absorbed):
         raise ApiError("identity_conflict", f"cannot merge {req.absorbed!r} into {req.keeper!r}")
-    return {"api": API_VERSION, "merged": True, "keeper": world.card(req.keeper).model_dump(mode="json")}
+    keeper = world.card(cards[0].id)
+    if keeper is None:
+        raise ApiError("identity_conflict", f"{req.keeper!r} is gone after the merge")
+    return {"api": API_VERSION, "merged": True, "keeper": keeper.model_dump(mode="json")}
 
 
 def op_split(world: World, params: dict[str, Any]) -> dict[str, Any]:
@@ -240,9 +264,10 @@ def op_split(world: World, params: dict[str, Any]) -> dict[str, Any]:
         raise ApiError("not_found", f"no concept named {req.source!r}")
     new_id = world.split(req.source, req.new_name, aliases_to_move=req.aliases_to_move or None,
                          description=req.description)
-    if new_id is None:
+    new = world.card(new_id) if new_id is not None else None
+    if new is None:
         raise ApiError("identity_conflict", f"cannot split {req.new_name!r} off {req.source!r}")
-    return {"api": API_VERSION, "split": True, "new": world.card(new_id).model_dump(mode="json")}
+    return {"api": API_VERSION, "split": True, "new": new.model_dump(mode="json")}
 
 
 def op_weaken(world: World, params: dict[str, Any]) -> dict[str, Any]:
@@ -303,21 +328,20 @@ def call(world: World, op: str, params: dict[str, Any] | None = None) -> dict[st
     if entry is None:
         raise ApiError("unknown_operation", f"unknown operation {op!r}; one of {sorted(OPERATIONS)}")
     handler, _model, _mutates = entry
-    return handler(world, dict(params or {}))
+    if params is not None and not isinstance(params, dict):
+        raise ApiError("invalid_request", f"parameters must be a JSON object, not {type(params).__name__}")
+    try:
+        return handler(world, dict(params or {}))
+    except ApiError:
+        raise
+    except Exception as exc:  # the error vocabulary is the contract; nothing else escapes
+        raise ApiError("internal_error", f"{type(exc).__name__}: {exc}") from exc
 
 
 def input_schema(op: str) -> dict[str, Any]:
-    """JSON Schema of ``op``'s parameters (the raw ``Observation`` schema for ``ingest``)."""
+    """JSON Schema of ``op``'s parameters (``ObservationInput`` for ``ingest``)."""
     _handler, model, _mutates = OPERATIONS[op.replace("-", "_")]
-    schema = (model or Observation).model_json_schema()
-    if model is None:
-        # The pipeline fields are accepted too, but the API names are what
-        # a caller should see first.
-        schema["description"] = (
-            "An observation: concepts mentioned, statements (source, relation, target[, belief]), "
-            "withdrawals, denials, cards, task, source, source_id."
-        )
-    return schema
+    return (model or ObservationInput).model_json_schema()
 
 
 def describe(op: str) -> str:

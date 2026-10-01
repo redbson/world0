@@ -17,6 +17,10 @@ from world0.schemas.relation import RelationEdge
 # claims; withdrawn and
 # other-task sections show at most this many lines.
 DOUBTED_BELIEF: float = 0.5
+# Two opposing claims whose beliefs differ by less than this are
+# ``contested``; by more, the stronger one is ``leaning``
+# (projection/metacognition.py uses the same line).
+CONTEST_MARGIN: float = 0.25
 COMPACT_SECTION_LIMIT: int = 10
 # A claim with this many times less support (explicit statements) than an
 # opposing claim, or than another label for the same pair, is listed under
@@ -117,21 +121,48 @@ class Observation(BaseModel):
 
         def statements(key: str) -> list[Statement]:
             raw = data.pop(key, None) or []
-            return [s if isinstance(s, Statement) else Statement(**s) if isinstance(s, dict)
-                    else Statement(*s) for s in raw]
+            if not isinstance(raw, (list, tuple)):
+                raise ValueError(f"{key} must be a list of statements")
+            out = []
+            for s in raw:
+                if isinstance(s, Statement):
+                    out.append(s)
+                elif isinstance(s, dict):
+                    out.append(Statement(**s))
+                elif isinstance(s, (list, tuple)) and len(s) == 3 and all(isinstance(x, str) for x in s):
+                    out.append(Statement(*s))
+                else:
+                    raise ValueError(f"{key}: each statement is (source, relation, target) or a mapping, not {s!r}")
+            return out
+
+        def names(key: str) -> list[str]:
+            raw = data.get(key) or []
+            if isinstance(raw, str) or not isinstance(raw, (list, tuple)):
+                raise ValueError(f"{key} must be a list of names")
+            return list(raw)
+
+        def dedup(triples):
+            seen: set = set()
+            out = []
+            for t in triples:
+                t = tuple(t)
+                if t not in seen:
+                    seen.add(t)
+                    out.append(t)
+            return out
 
         stated = statements("statements")
         if stated:
-            data["relations"] = [*data.get("relations", []), *(s.as_triple() for s in stated)]
+            data["relations"] = dedup([*(data.get("relations") or []), *(s.as_triple() for s in stated)])
             # A statement mentions its endpoints (a withdrawal or denial
             # does not: they must not create concepts).
-            mentioned = list(data.get("concepts", []))
+            mentioned = names("concepts")
             for s in stated:
                 for name in (s.source, s.target):
                     if name not in mentioned:
                         mentioned.append(name)
             data["concepts"] = mentioned
-            priors = list(data.get("relation_priors", []))
+            priors = list(data.get("relation_priors") or [])
             for s in stated:
                 if s.belief is not None:
                     priors.append(RelationPrior(source=s.source, target=s.target, relation_type=s.relation,
@@ -139,32 +170,45 @@ class Observation(BaseModel):
             data["relation_priors"] = priors
         withdrawn = statements("withdrawals")
         if withdrawn:
-            data["retracted_relations"] = [*data.get("retracted_relations", []),
-                                           *(s.as_triple() for s in withdrawn)]
+            data["retracted_relations"] = dedup([*(data.get("retracted_relations") or []),
+                                                 *(s.as_triple() for s in withdrawn)])
         denied = statements("denials")
         if denied:
-            data["contradicted_relations"] = [*data.get("contradicted_relations", []),
-                                              *(s.as_triple() for s in denied)]
+            data["contradicted_relations"] = dedup([*(data.get("contradicted_relations") or []),
+                                                    *(s.as_triple() for s in denied)])
         cards = data.pop("cards", None) or []
         if cards:
+            if not isinstance(cards, (list, tuple)):
+                raise ValueError("cards must be a list of concept cards")
             cards = [c if isinstance(c, ConceptCardInput) else ConceptCardInput(**c) for c in cards]
-            candidates = list(data.get("concept_candidates", []))
-            named = {getattr(c, "name", None) or c.get("name") for c in candidates}
+            candidates = [c if isinstance(c, ConceptCandidate) else ConceptCandidate(**c)
+                          for c in (data.get("concept_candidates") or [])]
+            by_name = {c.name: c for c in candidates}
             for card in cards:
-                if card.name in named:
-                    continue
-                candidates.append(ConceptCandidate(uid=card.name, name=card.name, kind=card.kind, sense=card.sense,
-                                                   domain=card.domain, description=card.description,
-                                                   aliases=list(card.aliases)))
-                named.add(card.name)
+                existing = by_name.get(card.name)
+                if existing is None:
+                    cand = ConceptCandidate(uid=card.name, name=card.name, kind=card.kind, sense=card.sense,
+                                            domain=card.domain, description=card.description,
+                                            aliases=list(card.aliases))
+                    candidates.append(cand)
+                    by_name[card.name] = cand
+                else:
+                    # The card completes a candidate given the pipeline way.
+                    for field in ("kind", "sense", "domain", "description"):
+                        if getattr(card, field) and not getattr(existing, field):
+                            setattr(existing, field, getattr(card, field))
+                    for alias in card.aliases:
+                        if alias not in existing.aliases:
+                            existing.aliases.append(alias)
             # Names given only in ``concepts`` still need a candidate once
             # candidates are present (the pipeline reads one or the other).
-            for name in data.get("concepts", []):
-                if name not in named:
-                    candidates.append(ConceptCandidate(uid=name, name=name))
-                    named.add(name)
+            mentioned = names("concepts")
+            for name in mentioned:
+                if name not in by_name:
+                    cand = ConceptCandidate(uid=name, name=name)
+                    candidates.append(cand)
+                    by_name[name] = cand
             data["concept_candidates"] = candidates
-            mentioned = list(data.get("concepts", []))
             for card in cards:
                 if card.name not in mentioned:
                     mentioned.append(card.name)
@@ -174,10 +218,14 @@ class Observation(BaseModel):
     @property
     def statements(self) -> list[Statement]:
         """The stated relations as ``Statement`` objects (priors attached)."""
-        priors = {(pr.source, pr.target): pr for pr in self.relation_priors}
+        # Priors are keyed the way the pipeline keys them: by pair and label.
+        from world0.schemas.relation import normalize_semantic_relation
+
+        priors = {(pr.source, pr.target, normalize_semantic_relation(pr.relation_type)): pr
+                  for pr in self.relation_priors}
         out = []
         for src, tgt, rel in self.relations:
-            pr = priors.get((src, tgt))
+            pr = priors.get((src, tgt, normalize_semantic_relation(rel)))
             out.append(Statement(src, rel, tgt, belief=pr.probability if pr else None,
                                  rationale=pr.rationale if pr else ""))
         return out
@@ -416,8 +464,6 @@ class Projection(BaseModel):
         [(opposing, belief)])`` for the contested pairs among what is
         shown, recomputed on the shown claims (``CONTEST_MARGIN``).
         """
-        from world0.projection.metacognition import CONTEST_MARGIN
-
         explicit = sorted((r for r in self.relations if r.is_explicit), key=lambda r: -r.probability)
         # Doubted: evidence against it brought it below even odds (a low
         # starting prior alone, e.g. ``related_to``, is not doubt).

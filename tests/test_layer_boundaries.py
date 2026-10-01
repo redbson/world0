@@ -56,6 +56,19 @@ FORBIDDEN_FOR_CORE = {
 
 AGENT_LAYER = "agents"
 
+# Top-level modules (not packages) and what they may import from world0.
+# ``api`` is the interface contract and imports nothing; the entry points
+# (``ops``, ``cli``, ``http``) go through the facade only.
+MODULES_ALLOWED = {
+    "api": set(),
+    "ops": {"api", "schemas", "world"},
+    "cli": {"api", "ops", "world"},
+    "http": {"api", "ops", "world"},
+}
+# Inside the core, the schema layer is the bottom: it must not reach into
+# the engines that consume it.
+SCHEMAS_FORBIDDEN = {"projection", "dynamics", "activation", "concepts", "relations", "context"}
+
 
 def _top_level_imports(path: Path) -> set[str]:
     """Second-level package names imported from ``world0`` by one module."""
@@ -92,6 +105,26 @@ class TestCoreDoesNotReachUp:
         past this test unclassified."""
         known = CORE_PACKAGES | FORBIDDEN_FOR_CORE | {"sources"}
         assert _package_names() <= known, _package_names() - known
+
+    def test_top_level_modules_are_classified(self):
+        modules = {p.stem for p in SRC.glob("*.py") if p.stem != "__init__"}
+        assert modules == set(MODULES_ALLOWED), modules ^ set(MODULES_ALLOWED)
+
+    def test_top_level_modules_import_only_what_they_may(self):
+        violations: list[str] = []
+        for name, allowed in MODULES_ALLOWED.items():
+            bad = _top_level_imports(SRC / f"{name}.py") - allowed
+            if bad:
+                violations.append(f"{name}.py imports world0.{sorted(bad)}")
+        assert not violations, "\n".join(violations)
+
+    def test_schemas_do_not_import_the_engines(self):
+        violations: list[str] = []
+        for module in _modules_of("schemas"):
+            bad = _top_level_imports(module) & SCHEMAS_FORBIDDEN
+            if bad:
+                violations.append(f"{module.relative_to(SRC)} imports world0.{sorted(bad)}")
+        assert not violations, "\n".join(violations)
 
     def test_core_packages_import_only_core(self):
         violations: list[str] = []

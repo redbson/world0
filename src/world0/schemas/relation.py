@@ -757,9 +757,9 @@ class RelationEdge(BaseModel):
         """The edge as the API presents it (``world0.api.Claim``).
 
         ``status`` defaults to what the edge alone can tell — ``withdrawn``,
-        ``co_occurrence`` or ``current``; a projection refines it to
-        ``doubted`` / ``contested`` / ``outvoted`` from the other claims in
-        view (``Projection.hold_loosely``)."""
+        ``co_occurrence``, ``doubted`` or ``current``; a projection refines it
+        to ``contested`` / ``outvoted`` from the other claims in view
+        (``Projection.hold_loosely``)."""
         from world0.api import Claim
 
         if status is None:
@@ -767,6 +767,8 @@ class RelationEdge(BaseModel):
                 status = "withdrawn"
             elif not self.is_explicit:
                 status = "co_occurrence"
+            elif self.disconfirmation_count > 0 and self.probability < 0.5:
+                status = "doubted"  # argued below even odds (``DOUBTED_BELIEF``)
             else:
                 status = "current"
         return Claim(

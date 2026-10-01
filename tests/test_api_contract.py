@@ -63,6 +63,30 @@ class TestObservationInput:
         assert (api.sense, api.kind, api.aliases, api.description) == ("HTTP interface", "component", ["API"], "the public interface")
         assert obs.concepts == ["db", "api"]
 
+    def test_old_and_new_names_together_do_not_double_a_claim(self):
+        obs = Observation(relations=[("api", "db", "depends_on")], statements=[Statement("api", "depends_on", "db")])
+        assert obs.relations == [("api", "db", "depends_on")]
+
+    def test_priors_read_back_by_pair_and_label(self):
+        obs = Observation(statements=[Statement("a", "depends_on", "b", belief=0.9, rationale="r1"),
+                                      Statement("a", "conflict", "b", belief=0.2, rationale="r2")])
+        assert [(s.relation, s.belief, s.rationale) for s in obs.statements] == [("depends_on", 0.9, "r1"), ("conflict", 0.2, "r2")]
+
+    def test_card_completes_a_candidate_of_the_same_name(self):
+        obs = Observation(concept_candidates=[{"name": "api", "kind": "component"}],
+                          cards=[ConceptCardInput(name="api", sense="HTTP interface", aliases=["API"])])
+        cand = obs.concept_candidates[0]
+        assert (cand.kind, cand.sense, cand.aliases) == ("component", "HTTP interface", ["API"])
+
+    def test_malformed_statements_are_validation_errors(self):
+        from pydantic import ValidationError
+        for bad in (["a depends_on b"], [("a", "b")], [("a", "b", "c", "d")], "a depends_on b"):
+            with pytest.raises(ValidationError):
+                Observation(statements=bad)
+        with pytest.raises(ValidationError):
+            Observation(concepts="api", statements=[Statement("a", "enables", "b")])
+        assert Observation(concepts=None, statements=[Statement("a", "enables", "b")]).concepts == ["a", "b"]
+
     def test_pipeline_field_names_still_work_unchanged(self):
         obs = Observation(concepts=["a", "b"], relations=[("a", "b", "depends_on")], retracted_relations=[("a", "b", "enables")])
         assert obs.statements[0].as_triple() == ("a", "b", "depends_on")
@@ -137,6 +161,13 @@ class TestGoldenSequence:
         before = world.card("db").confidence
         r2 = world.deny("db", "conflict", "cache", task="backend")  # nobody made this claim
         assert r2.weakened_concepts == [] and world.card("db").confidence == before
+
+    def test_claims_reports_doubted_from_the_edge(self, world):
+        world.state("api", "enables", "cache", task="t")
+        for _ in range(6):  # each denial lowers belief a little; six take it below even odds
+            world.deny("api", "enables", "cache", task="t")
+        claim = next(c for c in world.claims("api") if c.target == "cache")
+        assert claim.status == "doubted" and claim.belief < 0.5
 
     def test_other_tasks_and_hold_loosely_statuses(self, world):
         for _ in range(3):

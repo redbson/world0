@@ -54,7 +54,7 @@
 | 写入 | `ingest_text` | 经 LLM 抽取后 `ingest`；原文不保存 | 否 | ✓ |
 | 读取 | `project` | 从种子出发生成任务相关的局部视图 | ✓ | — |
 | 读取 | `card` | 一个概念的概念卡（零跳投影） | ✓ | — |
-| 读取 | `claims` | 一个概念的全部当前 / 已撤回 / 争议主张（一跳投影，不做选择） | ✓ | — |
+| 读取 | `claims` | 一个概念的全部主张（当前 / 已撤回 / 被质疑 / 共现；一跳，不做选择。"争议"与"被压过"是投影级判断，取决于视图里还有什么，只在 `project` 的 `hold_loosely` 里给出） | ✓ | — |
 | 读取 | `find` | 按名字 / 别名 / 相似度找概念 | ✓ | — |
 | 读取 | `status` | 世界状态摘要 | ✓ | — |
 | 巩固 | `reflect` | 社群、色场、物理删除；`light=True` 只做轻量一遍 | ✓（状态是流的函数，reflect 不改变读出的值） | ✓ |
@@ -64,8 +64,8 @@
 | 生命周期 | `close` | 刷盘并释放资源 | ✓ | ✓ |
 
 不进入动词表的东西，以及理由：
-- `retract` / `contradict` / `state`：都是 `ingest` 的一种观察（原则 2）。可以提供语法糖（§4.2），但语法糖必须构造 `Observation` 再调 `ingest`，
-  不得另开写入路径。
+- `retract` / `contradict` / `state`：都是 `ingest` 的一种观察（原则 2）。语法糖 `state` / `withdraw` / `deny`（§4.2）在四个入口上都存在
+  （所以操作表有 14 项：12 个动词 + 3 个拼写 − `close` 不是远程操作），但它们必须构造 `Observation` 再调 `ingest`，不得另开写入路径。
 - `visualize`：输出 HTML，是工具不是认知操作；归入 Agent 壳或 `world0.tools`。
 - `set_llm`：是构造参数的运行时变体，归入 Agent 壳 / 配置。
 - `learn` / `ask` / `explore` / `connect`：PKM 的自然语言包装。保留为 PKM 的方法名，但文档与 CLI 帮助里注明它们等于
@@ -98,7 +98,9 @@ class Observation(BaseModel):
 
 与 0.3.0 字段的对应：`relations` + `relation_priors` → `statements`（一个 `Statement` 同时承载标签与可选先验，消除两种形态）；
 `retracted_relations` → `withdrawals`；`contradicted_relations` → `denials`；`concept_candidates` + `descriptions` → `cards`。
-0.3.0 的字段名在 0.4 继续接受（构造时转换并发出 `DeprecationWarning`），1.0 移除。
+**0.4 的实现方式**：新名字是构造参数与只读属性，不是存储字段——构造时折叠进流水线字段（去重；`cards` 补全同名候选），
+`observation.statements` 等属性从流水线字段读回（先验按（源, 目标, 标签）匹配）。流水线字段名继续接受、不告警；
+内部改读新名之后再开始弃用周期（0.6）。HTTP / MCP 的 `ingest` 输入 schema 是 `world0.ops.ObservationInput`（只有 API 名字）。
 
 ```python
 class Statement(BaseModel):
@@ -154,13 +156,14 @@ class Claim(BaseModel):
     axis: str                  # positive | negative | parallel
     belief: float              # 0–1
     support: int               # 被陈述的次数（共现边为 0）
-    status: str                # current | withdrawn | contested | outvoted | co_occurrence
+    status: str                # current | withdrawn | doubted | contested | outvoted | co_occurrence
     stated_under: list[str]    # 陈述它的任务
     text: str                  # 一句话："api depends on db"
 ```
 
 `RelationEdge.to_claim()` 产生它。`status` 把 0.3.0 渲染里的四个分节（当前 / No longer holds / Hold loosely / Seen under other tasks）
-变成了结构化字段，调用方不必解析文本。
+变成了结构化字段，调用方不必解析文本。边自己能判断 `current` / `withdrawn` / `doubted`（被否证到半数以下）/ `co_occurrence`；
+`contested` / `outvoted` 取决于视图里的其他主张，由投影给出。
 
 ### 4.5 `Projection`（读取，已存在，收口）
 
@@ -184,31 +187,41 @@ class Projection(BaseModel):
 `Claim` 列表；`epistemic` 折叠进 `Claim.status` 与 `ConceptCard.evidence`；`attention: dict[str, AttentionTrace]` 折叠为 `why`。
 `render()` 的输出文本格式**不是**接口承诺（它会随可读性研究改），结构化字段才是。
 
+**0.4 / 0.5 的线格式**同时带两套：新字段 `cards` / `claims` / `no_longer_holds` / `other_tasks` / `hold_loosely` / `why` / `seeds` /
+`perspective` / `api`，以及 0.3.0 的 `concepts`（内部记录）/ `relations` / `retracted` / `other_contexts` / `activation_scores`（1e-6 量化）/
+`epistemic` / `attention`；`project` 的 HTTP / CLI / MCP 结果另带 `text`（`render()` 文本）。0.6 去掉内部记录后，
+`concepts` 改为 `ConceptCard` 列表、`activation_scores` 改名 `activation`。
+
 ### 4.6 `IngestResult`、`ReflectResult`、`WorldStatus`
 
-保持 0.3.0 的字段，加上 `api` 版本字段；`IngestResult` 里的列表元素统一为 `{"id","name"}`（现在是名字字符串）
-与 `"A → relation → B"` 文本两者并列（`claims_changed: list[Claim]`）。
+0.4 / 0.5：保持 0.3.0 的字段，加上 `api` 版本字段。0.6：`IngestResult` 的列表元素统一为 `{"id","name"}`（现在是名字字符串），
+并增加 `claims_changed: list[Claim]` 与 `"A → relation → B"` 文本并列。
 
 ## 5. 四个入口的同构映射
 
 | 动词 | Python | CLI (`world0`) | HTTP | MCP 工具 |
 |---|---|---|---|---|
-| ingest | `world.ingest(obs)` | `world0 ingest --json obs.json` | `POST /v1/ingest` | `world0.ingest` |
-| ingest_text | `world.ingest_text(text, task=…)` | `world0 ingest-text "…" --task …` | `POST /v1/ingest-text` | `world0.ingest_text` |
-| project | `world.project(seeds, task=…)` | `world0 project api db --task backend` | `POST /v1/project` | `world0.project` |
-| card | `world.card("api")` | `world0 card api` | `GET /v1/card/{name}` | `world0.card` |
-| claims | `world.claims("api", task=…)` | `world0 claims api` | `GET /v1/claims/{name}` | `world0.claims` |
-| find | `world.find("auth")` | `world0 find auth` | `GET /v1/find?q=` | `world0.find` |
-| status | `world.status()` | `world0 status` | `GET /v1/status` | `world0.status` |
-| reflect | `world.reflect(light=…)` | `world0 reflect [--light]` | `POST /v1/reflect` | `world0.reflect` |
-| merge / split / weaken | `world.merge(keeper_id, absorbed_id)` … | `world0 merge <id> <id>` … | `POST /v1/merge` … | `world0.merge` … |
+| ingest | `world.ingest(obs)` | `world0 ingest obs.json [--json]` | `POST /v1/ingest` | `world0_ingest` |
+| ingest_text | `world.ingest_text(text, task=…)` | `world0 ingest-text "…" --task …` | `POST /v1/ingest-text` | `world0_ingest_text` |
+| project | `world.project(seeds, task=…)` | `world0 project api db --task backend` | `POST /v1/project` | `world0_project` |
+| card | `world.card("api")` | `world0 card api` | `GET /v1/card/{name}` | `world0_card` |
+| claims | `world.claims("api", task=…)` | `world0 claims api` | `GET /v1/claims/{name}` | `world0_claims` |
+| find | `world.find("auth")` | `world0 find auth` | `GET /v1/find?q=` | `world0_find` |
+| status | `world.status()` | `world0 status` | `GET /v1/status` | `world0_status` |
+| reflect | `world.reflect(light=…)` | `world0 reflect [--light]` | `POST /v1/reflect` | `world0_reflect` |
+| merge / split / weaken | `world.merge(keeper, absorbed)` … | `world0 merge <keeper> <absorbed>` … | `POST /v1/merge` … | `world0_merge` … |
+| state / withdraw / deny（拼写） | `world.state(a, rel, b, task=…)` | `world0 state a rel b --task …` | `POST /v1/state` | `world0_state` |
 
 规则：
 - **HTTP 在 `/v1/` 下**，请求与响应体就是 §4 的 DTO 的 JSON；错误体 `{"api":"world0/1","error":{"code","message"}}`，
-  code 取 `not_found | invalid_observation | unknown_relation | identity_conflict | llm_unavailable`。
-- **CLI 的 `--json`** 输出与 HTTP 响应体字节相同；默认输出是 `render()` 或人读表格。入口名改为 `world0`；`pkm` 保留为 Agent 壳的入口。
-- **MCP 服务端**（`world0.agents.mcp.server`）把同一组动词暴露为工具，`inputSchema` 由 DTO 的 JSON Schema 生成，
-  `project` 的结果以 `render()` 文本 + 结构化 JSON 两种 content 返回。
+  code 取 `not_found(404) | invalid_observation(400) | unknown_relation(400) | invalid_request(400) | identity_conflict(409) |
+  llm_unavailable(503) | unknown_operation(404) | internal_error(500)`（`world0.ops.ERROR_CODES`）。请求在一把锁下串行执行：`World` 不是线程安全的。
+- **CLI 的 `--json`** 输出与 HTTP 响应体字节相同（同样的紧凑分隔符与 UTF-8）；默认输出是 `render()` 或人读表格；出错退出码 1。
+  入口名是 `world0`；`pkm` 保留为 Agent 壳的入口。
+- **MCP 服务端**（`python -m world0.agents.mcp.server --store …`）把同一组操作暴露为工具 `world0_<op>`（下划线：宿主的函数名规则不接受点），
+  `inputSchema` 由请求模型的 JSON Schema 生成；每个结果都是 `structuredContent`，文本 content 是同一 JSON；`project` 另把 `render()` 文本
+  放在第一个 content 里，纯文本客户端可以直接粘贴。
+- **身份操作接受名字**（经别名解析），但同名异义时应给 id：`card` / `find` 的结果里有 id。
 - **Agent 壳**的东西（会话、prompt、模型、skill、MCP 客户端、space、研究、web 搜索）在 `/agent/*`、`pkm …`、`pkm.*` 工具下，
   不在 `/v1/`，不受本文承诺约束。
 
@@ -238,7 +251,8 @@ class Projection(BaseModel):
 
 线格式版本 `api: "world0/1"`：DTO 新增可选字段不升版本；字段改名 / 删除 / 语义改变升到 `world0/2`，服务端同时接受前一版至少一个次版本。
 
-弃用方式：旧字段名在构造时转换 + `DeprecationWarning`（Python）；HTTP 旧路径 301 到新路径一个次版本；CLI 旧子命令打印提示并转发。
+弃用方式：旧字段名在构造时转换 + `DeprecationWarning`（Python）；核心 API 若改 HTTP 路径，旧路径 301 到新路径一个次版本（Agent 壳的
+`/api/*` 不是核心 API 的旧路径，不弃用）；CLI 旧子命令打印提示并转发。
 
 ## 8. 一个完整的调用序列（任何入口都一样）
 
@@ -273,7 +287,7 @@ w.close()
 |---|---|---|
 | **0.4** ✅ | 新模块 `world0.api`：`Statement`、`ConceptCard`、`Claim`；`ConceptNode.to_card()`、`RelationEdge.to_claim()`；`World.card()` / `claims()` / `find()`（`find_similar` 转发）；`Observation` 接受 `statements` / `withdrawals` / `denials` / `cards`（构造时折叠进流水线字段，并以同名属性读回；流水线字段名在 0.4 不告警，内部改读新名之后再弃用）；`Projection` 增加 `cards` / `claims` / `no_longer_holds` / `other_tasks` / `hold_loosely` / `why` 字段，旧字段保留；`api` 版本字段；稳定性分级写进 docstring | 完全兼容 |
 | **0.5** ✅ | CLI 入口 `world0`（§5 子命令，`--json`）；HTTP `/v1/*`（独立于 `/api/*` 的 Agent 壳路由）；MCP 服务端 `world0.agents.mcp.server`（TODO P2-11）；`pkm` 的 `learn/ask/explore/connect` 文档化为别名 | 旧 `/api/*`、`pkm` 继续工作 |
-| **0.6** | 移除 `Projection` 的 `ConceptNode` / `RelationEdge` 直出字段与 `Observation` 旧字段名（按 §7 弃用期）；`world0` 顶层不再导出内部记录 | 破坏性，在 CHANGELOG `Migration` 节说明 |
+| **0.6** | 移除 `Projection` 的 `ConceptNode` / `RelationEdge` 直出字段与 `Observation` 旧字段名（按 §7 弃用期）；`IngestResult` 元素改为 `{"id","name"}` 并加 `claims_changed`；`world0` 顶层不再导出内部记录 | 破坏性，在 CHANGELOG `Migration` 节说明 |
 | **1.0** | 冻结 §3–§6；`api: "world0/1"` 成为长期承诺 | — |
 
 每一步的验收：`tests/test_api_contract.py` 对四个入口做同一组黄金用例（§8 的序列），断言结构化输出逐字段相同；

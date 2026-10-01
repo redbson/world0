@@ -32,16 +32,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   model, JSON result and error code per operation; errors are
   `not_found`, `invalid_observation`, `unknown_relation`,
   `identity_conflict`, `llm_unavailable`, `invalid_request`,
-  `unknown_operation`), behind three surfaces that cannot drift from it:
+  `unknown_operation`, `internal_error`), behind three surfaces that cannot drift from it:
   the `world0` command (`world0.cli`; `world0 project api --task backend`,
   `world0 ingest obs.json`, `world0 state api depends_on db`; `--json`
   prints the HTTP body), HTTP `/v1/<op>` (`world0.http`: `v1_router(world)`
   is mounted in the Agent shell's web app next to `/api/*`, `create_app`
   serves it alone), and World 0 as an MCP server
   (`python -m world0.agents.mcp.server --store .world0`: tools
-  `world0.<op>` over stdio, input schemas from the request models, a
-  projection's text content is the render and every result is
-  `structuredContent`).  `McpClient.call_tool_raw()` returns the MCP
+  `world0_<op>` over stdio, input schemas from the request models, a
+  projection's first text content is the render, the JSON follows, and
+  every result is `structuredContent`; malformed frames and tool errors
+  are answered, never fatal).  HTTP requests run under one lock and a
+  non-object body is `invalid_request`.  `McpClient.call_tool_raw()` returns the MCP
   result object.  The wire form of `project` carries `text` and
   activation scores quantised to 1e-6.  `tests/test_api_surfaces.py` reads
   the same world through all four entry points and asserts identical JSON.

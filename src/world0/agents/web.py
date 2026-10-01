@@ -202,7 +202,7 @@ def create_app(
     # Agent shell's own /api/* routes.
     from world0.http import v1_router
 
-    app.include_router(v1_router(_agent.world))
+    app.include_router(v1_router(lambda: _agent.world))  # follows space switches
 
     def _space_payload() -> dict[str, Any]:
         registry = _agent.space_registry

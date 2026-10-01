@@ -37,7 +37,7 @@ TENTATIVE_EVIDENCE: float = 0.15
 WELL_EVIDENCED: float = 0.5
 
 # Opposing claims whose beliefs differ by less than this are contested.
-CONTEST_MARGIN: float = 0.25
+from world0.schemas.types import CONTEST_MARGIN  # noqa: E402  (the schema owns the line)
 
 
 def reliability_level(node: ConceptNode) -> str:

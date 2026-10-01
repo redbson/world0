@@ -23,6 +23,16 @@ from world0.ops import ApiError, call
 from world0.world import World
 
 
+class _Subcommands:
+    """``add_parser`` with the shared options attached to every subcommand."""
+
+    def __init__(self, subparsers, common: argparse.ArgumentParser) -> None:
+        self._sub, self._common = subparsers, common
+
+    def add_parser(self, name: str, **kw):
+        return self._sub.add_parser(name, parents=[self._common], **kw)
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="world0", description=f"World 0 unified API ({API_VERSION})")
     p.add_argument("--store", default=".world0", help="store path (default .world0)")
@@ -33,12 +43,7 @@ def build_parser() -> argparse.ArgumentParser:
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("--json", action="store_true", default=argparse.SUPPRESS)
     top_sub = p.add_subparsers(dest="op", required=True)
-
-    class _Sub:
-        def add_parser(self, name, **kw):
-            return top_sub.add_parser(name, parents=[common], **kw)
-
-    sub = _Sub()
+    sub = _Subcommands(top_sub, common)
 
     s = sub.add_parser("ingest", help="write one observation from a JSON file ('-' for stdin)")
     s.add_argument("file")
@@ -65,6 +70,7 @@ def build_parser() -> argparse.ArgumentParser:
     s = sub.add_parser("find", help="concepts resembling a text")
     s.add_argument("q")
     s.add_argument("--limit", type=int, default=5)
+    s.add_argument("--min-similarity", type=float, default=0.3, dest="min_similarity")
 
     sub.add_parser("status", help="world status")
 
@@ -104,8 +110,16 @@ def _params(ns: argparse.Namespace) -> dict[str, Any]:
     skip = {"store", "backend", "json", "op"}
     params = {k: v for k, v in vars(ns).items() if k not in skip and v is not None}
     if ns.op == "ingest":
-        raw = sys.stdin.read() if ns.file == "-" else open(ns.file, encoding="utf-8").read()
-        return json.loads(raw)
+        try:
+            raw = sys.stdin.read() if ns.file == "-" else open(ns.file, encoding="utf-8").read()
+            data = json.loads(raw)
+        except OSError as exc:
+            raise ApiError("invalid_observation", f"cannot read {ns.file}: {exc}") from exc
+        except ValueError as exc:
+            raise ApiError("invalid_observation", f"not valid JSON: {exc}") from exc
+        if not isinstance(data, dict):
+            raise ApiError("invalid_observation", "the observation must be a JSON object")
+        return data
     return params
 
 
@@ -132,7 +146,7 @@ def _human(op: str, result: dict[str, Any]) -> str:
         keys = ("cognitive_tick", "total_concepts", "total_relations", "by_maturity")
         return "\n".join(f"{k}: {result[k]}" for k in keys if k in result)
     if op == "reflect":
-        return ", ".join(f"{k} {len(v)}" for k, v in result.items() if isinstance(v, list)) or "nothing to do"
+        return ", ".join(f"{k.replace('_', ' ')} {len(v)}" for k, v in result.items() if isinstance(v, list)) or "nothing to do"
     # ingest-like results
     parts = [f"{k.replace('_', ' ')}: {', '.join(v)}" for k, v in result.items()
              if isinstance(v, list) and v and all(isinstance(x, str) for x in v)]
@@ -149,14 +163,19 @@ def main(argv: list[str] | None = None, *, stdout=None) -> int:
             result = call(world, op, _params(ns))
         except ApiError as exc:
             if ns.json:
-                print(json.dumps(exc.as_json(), ensure_ascii=False), file=out)
+                print(_json(exc.as_json()), file=out)
             else:
                 print(f"error ({exc.code}): {exc.message}", file=sys.stderr)
             return 1
-        print(json.dumps(result, ensure_ascii=False) if ns.json else _human(op, result), file=out)
+        print(_json(result) if ns.json else _human(op, result), file=out)
         return 0
     finally:
         world.close()
+
+
+def _json(data: Any) -> str:
+    """The same bytes the HTTP surface sends (compact separators, UTF-8)."""
+    return json.dumps(data, ensure_ascii=False, separators=(",", ":"))
 
 
 if __name__ == "__main__":  # pragma: no cover

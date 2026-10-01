@@ -369,7 +369,7 @@ world0 merge <keeper> <absorbed> · world0 split api "api v2" --alias v2 · worl
 ```
 
 出错时退出码 1，`--json` 下输出 `{"api": "world0/1", "error": {"code": "...", "message": "..."}}`。
-同一组操作在 HTTP（`/v1/<op>`，见 §9）和 MCP（`python -m world0.agents.mcp.server --store .world0`，工具名 `world0.<op>`）上同名同形。
+同一组操作在 HTTP（`/v1/<op>`，见 §9）和 MCP（`python -m world0.agents.mcp.server --store .world0`，工具名 `world0_<op>`）上同名同形。
 
 
 安装后可用 `pkm` 命令。默认存储目录是 `~/.pkm_world`，默认 provider 是 `anthropic`。
