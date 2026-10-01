@@ -6,7 +6,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Extraction prompt: direction convention and label scope** (analysis doc
+  §7.28) — every relation reads as "<source> <label> <target>"; direction
+  follows what the text asserts, not word order, with examples for passive,
+  conditional and part-of phrasings; a "needs" statement is dependence with
+  the needing side as source, never a reversed enables; membership,
+  functional_map, disjointness, incompatible_ontology and conflict are
+  scoped; a denial goes in `contradicted_relations`.  On paraphrased LongRun
+  text the old prompt kept 52 % of claims (35 % reversed, 13 % relabelled);
+  the new one keeps 90 / 88 / 93 % on seeds 0 / 1 / 2 (seeds 1 and 2 unseen
+  while revising).
+
 ### Added
+- **Natural (paraphrased) LongRun text** (`benchmarks/longrun/paraphrase.py`,
+  `GenConfig(text_style="natural")`) — the same stream in varied wording:
+  active and passive phrasings, pronouns, case and articles, varied
+  withdrawals, negated distractors.  Events and gold sets are identical to
+  the template text of the same seed.  Real LLM extraction is cached for
+  seeds 0–2 (`llm_extract.py --style natural`); at 1 200 tokens, excluding
+  episodic detail queries, real extraction costs `world0_tuned` 0.94 → 0.90,
+  `fact_task` 0.92 → 0.87, `state_doc` 0.95 → 0.90.  `llm_cache/prompt_v1/`
+  keeps the previous prompt's extractions (`GenConfig(llm_version=...)`).
 - **Withdrawn relations from the LLM extractor** (analysis doc §7.27) — the
   extraction prompt and `ConceptExtractor` emit `retracted_relations`
   (a relation that held and no longer holds: removed, replaced, changed),

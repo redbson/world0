@@ -81,6 +81,7 @@ class GenConfig:
     growth: bool = False            # domains appear over time instead of all existing from the start
     extract_p: float = 0.0          # extractor error level (drop p, wrong p/2, spurious p, missed retraction p)
     extract_mode: str = "sim"       # "sim": gold + injected errors (extract_p); "llm": cached real LLM output (llm_extract.py)
+    llm_version: str = ""           # extract_mode="llm": "" = current prompt's cache, else an older one ("prompt_v1")
     text_style: str = "template"    # "template": one canonical sentence per claim; "natural": paraphrase.py (same stream, other words)
     allow_pair_collision: bool = False  # two typed claims on one ordered pair (revisions can still create one)
     popularity_skew: float = 0.8    # Zipf exponent over claims: rarely-stated claims exist
@@ -448,7 +449,8 @@ class Stream:
         if self.cfg.extract_mode == "llm":
             from benchmarks.longrun import llm_extract
 
-            raw = llm_extract.load_cache(self.cfg.seed, self.cfg.horizon, self.cfg.text_style)[str(ev.step)]
+            raw = llm_extract.load_cache(self.cfg.seed, self.cfg.horizon, self.cfg.text_style,
+                                         self.cfg.llm_version)[str(ev.step)]
             if self._known is None:
                 self._known = {llm_extract._key(c): c for c in self.world.all_concepts}
             return llm_extract.to_extraction(raw, ev, self._known)

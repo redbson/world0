@@ -96,7 +96,7 @@ Agent 每次在一个领域里工作一段（run），每个事件陈述当前�
 | `scale` | 视野 H = 300 / 3000 / 6000 |
 | `bigworld` | 40 个领域 × 每领域 40 个概念、领域随时间出现、H=6000（已知状态约 2.3 万 tokens，装不进一个提示词） |
 | `extraction` | 抽取误差 p = 0.05 / 0.1 / 0.2 / 0.3；另含"只展示至少被陈述两次的主张"的证据阈值变体 |
-| `llm` | 真实 LLM 抽取（生产 prompt + 生产解析器，原始输出缓存于 `benchmarks/longrun/llm_cache/`，见 `llm_extract.py`）与读标准答案的抽取器在同一条流上对比；目前缓存 seed 0、600 个事件（抽取模型 Claude Haiku） |
+| `llm` | 真实 LLM 抽取（生产 prompt + 生产解析器，原始输出缓存于 `benchmarks/longrun/llm_cache/`，见 `llm_extract.py`）与读标准答案的抽取器在同一条流上对比；600 个事件，抽取模型 Claude Haiku：改写文本（`text_style="natural"`，`paraphrase.py`）seed 0–2 用当前 prompt，改写文本 seed 0 与模板文本 seed 0 用第 26 轮之前的 prompt（`llm_cache/prompt_v1/`） |
 | `taskmode` | 查询里的任务标签：精确 / 缺失 / 错误（另一个领域的标签） |
 | `chatter` | 闲聊比例 0 / 0.5 / 0.75 |
 | `verbosity` | 每事件填充词 0 / 120 / 400 |

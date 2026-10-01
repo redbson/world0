@@ -1299,6 +1299,58 @@ seed 0 / 600 个事件由 Claude Haiku（与生产默认 `gpt-5.4-nano` 同档�
 **效果**（与第 24 轮代码在同一口径下比较，1 200 token）：只注入错标（p = 0.3）0.52 → 0.65；混合误差 p = 0.1 / 0.3：0.79 / 0.53 → 0.82 / 0.60（事实库 0.81 / 0.65）；主研究 `world0_tuned` 0.95 → 0.96（stale 0.97）；真实 LLM 抽取下各系统不变。`tests/test_relation_identity.py`、
 `tests/test_llm_extract.py`、`tests/test_compact_render.py::TestSupport`、`tests/test_extraction.py::TestRetractedRelations`。
 
+### 7.28 非模板文本上的抽取压测与抽取 prompt 的方向约定 ✅
+
+**改写文本**。第 25 轮的结论是 LongRun 的模板句式太明确，真实 LLM 几乎不出错。`GenConfig(text_style="natural")`
+（`benchmarks/longrun/paraphrase.py`）把同一条流换一种写法：每种关系有多种主动 / 被动 / 条件句式（"B is a prerequisite
+for A"、"without B, A won't work"、"C sits inside A"、"A and D can't run together"），延续主语时用代词（"It also bundles
+C"），名字小写或带冠词，撤回措辞多样（"A stopped relying on B"），并插入否定干扰句（"we checked: A and E do not conflict"，
+该对概念在世界里没有任何主张）。措辞只用每个事件自己的随机流，事件、主张与所有金标准与模板文本逐一相同
+（`tests/test_llm_extract.py::TestNaturalText`），两种文本的差异只来自抽取器。
+
+**生产 prompt 在改写文本上失效**（seed 0，959 条标准主张，Claude Haiku 按生产 prompt 逐条抽取）：只有 52% 抽对；
+35% 方向反了（被动、条件句把 "B is a prerequisite for A" 抽成 B → A，且常改述成 "B enables A"），13% 错标（conflict
+写成 disjointness / incompatible_ontology，"calls into" 写成 functional_map），撤回漏掉 1/3。结构化系统在 1 200 token
+下全部大幅下降（`world0_tuned` 0.72 → 0.47，`fact_task` 0.92 → 0.64，`state_doc` 0.97 → 0.66）。根因在 prompt：它
+从未说明 source / target 哪个是哪个，"dependence: one concept depends on another" 对方向没有约束。
+
+**修复（生产 prompt）**：
+- 方向约定：每条关系读作 "<source> <label> <target>"（source depends on target、source contains target、source
+  enables target）；方向按文本所断言的事实而不是词序决定，并给出被动、条件与 "part of" 句式的例子（例句与评测模板不同，
+  避免对着评测调 prompt）；"需要" 一类陈述一律是 dependence、需要方为 source，不得改述成反向的 enables。
+- 标签范围：membership（元素 / 实例）与 inclusion（部分 / 组件）、functional_map（显式映射，不是组件调用）、
+  disjointness（类别不相交，不是运行中的部件）、incompatible_ontology（同一事物的两种模型）、conflict（不能同时使用 /
+  运行）。
+- 否定："A does not depend on B" 放进 contradicted_relations，绝不进 relations，也不是 A、B 本身的反证。
+
+**效果**（seed 0 用于诊断；seed 1、2 是调整 prompt 时没看过的事件）：
+
+| | 抽对 | 方向反 | 错标 | 漏抽 | 撤回漏识别 |
+|---|---|---|---|---|---|
+| 旧 prompt，seed 0 | 0.52 | 0.35 | 0.13 | 0.00 | 2 / 6 |
+| 新 prompt，seed 0 | 0.90 | 0.04 | 0.05 | 0.01 | 0 / 6 |
+| 新 prompt，seed 1 | 0.88 | 0.06 | 0.06 | 0.01 | 1 / 6 |
+| 新 prompt，seed 2 | 0.93 | 0.02 | 0.05 | 0.01 | 0 / 4 |
+
+1 200 token、不含 detail 查询（工单号是情节记忆，不在 World 0 的职责内，见 `benchmarks/longrun/scoring.py`）的分数，seed 0：
+`world0_tuned` 理想抽取 0.92 / 旧 prompt 0.59 / 新 prompt 0.88；`fact_task` 0.90 / 0.66 / 0.85；`state_doc`
+0.96 / 0.69 / 0.91。三个 seed 平均下真实抽取相对理想抽取的损失：`world0_tuned` 0.94 → 0.90，`fact_task`
+0.92 → 0.87，`state_doc` 0.95 → 0.90，`kg_temporal` 0.85 → 0.81——World 0 损失最小，且是不含 detail 时得分最高的
+结构化系统。
+
+**剩余错误**多是有语义依据的另一种读法："A calls into B for everything" 标成 functional_map（seed 0、1 共 91 条），
+"A depends on B" 读成反向的 "B enables A"（69 条）。没有继续针对同一批句式调 prompt；依赖与 enables 互为逆读是否应在
+World 0 内部合一（同一事实的两种陈述互相支持），记入待办。
+
+**评测通道修正**：基线只能把抽取器的 contradicted 当撤回处理；World 0 现在按生产 API 分开接收
+（`Extraction.contradictions` → `contradicted_relations`）。对分数几乎无影响（0.464 → 0.465），但暴露出一个语义问题：
+对**不存在**的主张的否证会削弱两个端点概念（"we checked: A and E do not conflict" 让 A、E 的置信下降）。这是早先有意
+为之的行为（有测试），本轮未改，记入待办。
+
+缓存：`benchmarks/longrun/llm_cache/seed{0,1,2}_h600_natural.json`（新 prompt），`llm_cache/prompt_v1/`（旧 prompt：
+改写文本 seed 0 与第 25 轮的模板文本 seed 0），`GenConfig(llm_version="prompt_v1")` 选择旧缓存；
+`run.py --study llm` 覆盖全部组合。
+
 ---
 
 ## 8. 复现

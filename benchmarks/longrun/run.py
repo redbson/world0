@@ -23,8 +23,9 @@ EVIDENCE = CORE + ["fact_task_s2", "world0_tuned_s2"]   # + 'show only claims st
 ABLATION = CORE + ["world0_reflect", "world0_focus", "world0_notask", "world0_depth1", "world0_depth3"]
 TUNE = ["w0-d1-r0", "w0-d2-r0", "w0-d3-r0", "w0-d1-r25", "w0-d2-r25", "w0-d3-r25"]
 DEV_SEEDS = range(100, 105)
-# seeds with a cached LLM extraction (benchmarks/longrun/llm_cache), per text style
-LLM_SEEDS = {"template": [0], "natural": [0, 1, 2]}
+# cached LLM extractions (benchmarks/longrun/llm_cache): (text style, prompt version, seeds);
+# "" is the current prompt, "prompt_v1" the one before round 26
+LLM_RUNS = [("natural", "", [0, 1, 2]), ("natural", "prompt_v1", [0]), ("template", "prompt_v1", [0])]
 
 
 def studies(seeds: int) -> dict[str, list[dict]]:
@@ -48,8 +49,10 @@ def studies(seeds: int) -> dict[str, list[dict]]:
         # Real LLM extraction (production prompt, cached by llm_extract.py) against
         # the gold-reading extractor on the same streams, on template and on
         # natural (paraphrased) event text.
-        "llm": [dict(seed=s, horizon=600, systems=CORE, jitter=False, extract_mode=m, text_style=st)
-                for st, seeds_ in LLM_SEEDS.items() for s in seeds_ for m in ("sim", "llm")],
+        "llm": [dict(seed=s, horizon=600, systems=CORE, jitter=False, text_style=st, extract_mode="llm", llm_version=v)
+                for st, v, seeds_ in LLM_RUNS for s in seeds_]
+               + [dict(seed=s, horizon=600, systems=CORE, jitter=False, text_style=st, extract_mode="sim")
+                  for st, seeds_ in (("natural", [0, 1, 2]), ("template", [0])) for s in seeds_],
         "smoke": [dict(horizon=200, seed=0, systems=CORE)],
     }
     return out
@@ -92,7 +95,7 @@ def run_one(job: dict) -> list[dict]:
     key = {"horizon": cfg.horizon, "noise_rate": cfg.noise_rate, "task_mode": cfg.task_mode,
            "verbosity": cfg.verbosity, "extract_p": cfg.extract_p, "n_domains": cfg.n_domains,
            "growth": cfg.growth, "seed": cfg.seed, "extract_mode": cfg.extract_mode,
-           "text_style": cfg.text_style}
+           "text_style": cfg.text_style, "llm_version": cfg.llm_version}
     stream_tokens = 0
     for ev, qs in stream.events():
         known |= set(ev.concepts)

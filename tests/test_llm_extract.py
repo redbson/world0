@@ -55,10 +55,10 @@ def test_invalid_json_extracts_nothing():
     assert x.claims == [] and x.retractions == []
 
 
-@pytest.mark.skipif(not __import__("os").path.exists(llm_extract.cache_path(0, 600)),
+@pytest.mark.skipif(not __import__("os").path.exists(llm_extract.cache_path(0, 600, version="prompt_v1")),
                     reason="no cached LLM extraction")
 def test_the_cached_stream_replays_and_is_profiled():
-    p = llm_extract.profile(0, 600)
+    p = llm_extract.profile(0, 600, version="prompt_v1")
     assert p["events"] == 600 and p["claims_gold"] > 0
     assert 0.0 <= p["drop"] <= 1.0 and p["kept"] + p["relabelled"] + p["reversed"] + p["dropped"] == p["claims_gold"]
 
@@ -131,7 +131,8 @@ class TestNaturalText:
 
     def test_styles_are_cached_separately(self):
         assert llm_extract.cache_path(0, 600) != llm_extract.cache_path(0, 600, "natural")
-        assert llm_extract.cache_path(0, 600).endswith("seed0_h600.json")  # the template cache keeps its name
+        assert llm_extract.cache_path(0, 600).endswith("seed0_h600.json")
+        assert llm_extract.cache_path(0, 600, "natural", "prompt_v1").endswith("prompt_v1/seed0_h600_natural.json")
 
 
 @pytest.mark.skipif(not __import__("os").path.exists(llm_extract.cache_path(0, 600, "natural")),

@@ -21,7 +21,10 @@ an LLM, and the raw JSON is parsed by the production parser
 Runs then use ``GenConfig(extract_mode="llm")`` (``run.py --study llm``).
 Every command takes ``--style template|natural`` (``GenConfig.text_style``):
 the natural text of a seed is the same stream in varied wording
-(``paraphrase.py``), cached separately.
+(``paraphrase.py``), cached separately.  The cache directory holds the
+current production prompt's answers; ``llm_cache/prompt_v1/`` holds those of
+the prompt before round 26 (no direction convention), selected with
+``GenConfig(llm_version="prompt_v1")``.
 """
 
 from __future__ import annotations
@@ -42,20 +45,23 @@ CACHE_DIR = os.path.join(os.path.dirname(__file__), "llm_cache")
 _SEM2REL = {"dependence": "depends_on", "inclusion": "contains", "conflict": "conflict", "enables": "enables"}
 
 
-def cache_path(seed: int, horizon: int, style: str = "template") -> str:
+def cache_path(seed: int, horizon: int, style: str = "template", version: str = "") -> str:
+    """``version`` names an older prompt's extraction (a subdirectory, e.g. "prompt_v1");
+    "" is the current production prompt."""
     suffix = "" if style == "template" else f"_{style}"
-    return os.path.join(CACHE_DIR, f"seed{seed}_h{horizon}{suffix}.json")
+    return os.path.join(CACHE_DIR, version, f"seed{seed}_h{horizon}{suffix}.json")
 
 
 @functools.lru_cache(maxsize=8)
-def load_cache(seed: int, horizon: int, style: str = "template") -> dict[str, str]:
-    path = cache_path(seed, horizon, style)
+def load_cache(seed: int, horizon: int, style: str = "template", version: str = "") -> dict[str, str]:
+    path = cache_path(seed, horizon, style, version)
     try:
         with open(path) as fh:
             return json.load(fh)
     except OSError as exc:
         raise FileNotFoundError(
-            f"no LLM extraction cache for seed {seed}, horizon {horizon}, {style} text ({path}); "
+            f"no LLM extraction cache for seed {seed}, horizon {horizon}, {style} text"
+            f"{', ' + version if version else ''} ({path}); "
             "see benchmarks/longrun/llm_extract.py"
         ) from exc
 
@@ -173,9 +179,9 @@ def collect(seed: int, horizon: int, directory: str, style: str = "template") ->
     print(f"{len(raw)} answers → {cache_path(seed, horizon, style)}")
 
 
-def profile(seed: int, horizon: int, style: str = "template") -> dict:
+def profile(seed: int, horizon: int, style: str = "template", version: str = "") -> dict:
     """The extractor measured against gold, in the simulator's error categories."""
-    cfg = GenConfig(seed=seed, horizon=horizon, extract_mode="llm", text_style=style)
+    cfg = GenConfig(seed=seed, horizon=horizon, extract_mode="llm", text_style=style, llm_version=version)
     s = Stream(cfg)
     n = Counter({k: 0 for k in ("kept", "relabelled", "reversed", "dropped", "spurious", "extra_label",
                                  "retraction_kept",
@@ -238,6 +244,8 @@ def main() -> None:
         p.add_argument("--seed", type=int, default=0)
         p.add_argument("--horizon", type=int, default=600)
         p.add_argument("--style", default="template", choices=["template", "natural"])
+        if name == "profile":
+            p.add_argument("--version", default="", help="an older prompt's cache, e.g. prompt_v1")
         if name == "export":
             p.add_argument("--out", required=True)
             p.add_argument("--batch", type=int, default=50)
@@ -254,7 +262,7 @@ def main() -> None:
     elif a.cmd == "collect":
         collect(a.seed, a.horizon, a.dir, a.style)
     else:
-        print(json.dumps(profile(a.seed, a.horizon, a.style), indent=1))
+        print(json.dumps(profile(a.seed, a.horizon, a.style, a.version), indent=1))
 
 
 if __name__ == "__main__":
