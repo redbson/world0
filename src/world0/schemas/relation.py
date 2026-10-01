@@ -7,8 +7,12 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import Enum
+from typing import TypeVar
 
 from pydantic import BaseModel, Field, field_validator, model_validator
+
+from world0.schemas.clock import cognitive_elapsed, wall_now
+from world0.schemas.concept import TaskVocabulary, normalize_task_label, task_match_score
 
 
 class RelationType(str, Enum):
@@ -55,6 +59,7 @@ _LEGACY_RELATION_TYPE_MAP: dict[str, RelationType] = {
     "depends_on": RelationType.POSITIVE,
     "contains": RelationType.POSITIVE,
     "part_of": RelationType.POSITIVE,
+    "contrast": RelationType.NEGATIVE,
     "activates": RelationType.POSITIVE,
     "precedes": RelationType.POSITIVE,
     "derived_from": RelationType.POSITIVE,
@@ -76,6 +81,62 @@ _LEGACY_RELATION_TYPE_MAP: dict[str, RelationType] = {
 }
 
 
+# Share of the remaining doubt removed by one explicit re-statement of a
+# relation without an attached probability (see ``RelationEdge.confirm``).
+EXPLICIT_CONFIRMATION_GAIN: float = 0.05
+
+# Belief that a *negative-axis* claim is correct at the moment it is first
+# stated and the extractor attached no probability of its own.
+#
+# ``SemanticRelationSpec.propagation_strength`` is how strongly activation
+# flows along an edge.  On the negative axis it is the gain of the
+# *inhibition* channel and is deliberately small (0.05-0.12); reading it as
+# a belief made a stated conflict start with a seventh of the belief of a
+# stated dependence, lose every contested pair, and — because the relation
+# floor is ``RELATION_FLOOR_SHARE x belief`` — fall under the prune
+# threshold from the first tick (docs/paper §4.2, note after Proposition
+# 4.3).  0.70 is the belief a once-stated ``dependence`` (the paper's
+# reference relation, and the weakest positive-axis claim) already carries,
+# so a stated claim has the same standing on either axis.  It is a belief
+# only: the inhibition gain (``weight``) is untouched.
+NEGATIVE_CLAIM_PRIOR: float = 0.70
+
+# A stored negative claim is rebased onto ``NEGATIVE_CLAIM_PRIOR`` only if its
+# belief is explained (within this tolerance) by the legacy default seed and
+# its own confirm / weaken counters; anything else was set by an extractor or
+# by feedback and is kept as stored (``RelationEdge.adopt_claim_prior``).
+LEGACY_BELIEF_TOLERANCE: float = 0.02
+
+
+def disconfirmation_penalty(count: int) -> float:
+    """Absolute penalty of the ``count``-th disconfirmation (diminishing)."""
+    return 0.06 * (1.0 / (1.0 + count * 0.10))
+
+
+def _replay_belief(
+    seed: float, confirms: int, weakens: int, *, weakens_first: bool = False
+) -> float:
+    """Belief reached from ``seed`` after bare confirmations / disconfirmations.
+
+    Mirrors ``RelationEdge.confirm`` (closed form) and ``RelationEdge.weaken``
+    (with its 0.01 clamp); the order in which they happened is not stored, so
+    callers bound it with both orderings.
+    """
+
+    def confirm(p: float) -> float:
+        return 1.0 - (1.0 - p) * (1.0 - EXPLICIT_CONFIRMATION_GAIN) ** max(0, confirms)
+
+    def weaken(p: float) -> float:
+        for i in range(1, max(0, weakens) + 1):
+            if p <= 0.01:
+                break
+            p = max(0.01, p - disconfirmation_penalty(i))
+        return p
+
+    p = min(1.0, max(0.0, seed))
+    return confirm(weaken(p)) if weakens_first else weaken(confirm(p))
+
+
 @dataclass(frozen=True)
 class SemanticRelationSpec:
     """Deterministic mapping from language relation to axis + scores."""
@@ -86,6 +147,20 @@ class SemanticRelationSpec:
     propagation_strength: float
     description: str
 
+    @property
+    def claim_prior(self) -> float:
+        """Belief that one explicit statement of this relation is correct.
+
+        ``propagation_strength`` for positive and parallel relations (the
+        long-standing default, unchanged); ``NEGATIVE_CLAIM_PRIOR`` for the
+        negative axis, whose propagation strength is an inhibition gain and
+        not a belief.  Belief and gain are separate quantities: this one
+        seeds ``RelationEdge.probability``, the other ``weight``.
+        """
+        if self.axis == RelationType.NEGATIVE:
+            return NEGATIVE_CLAIM_PRIOR
+        return self.propagation_strength
+
 
 SEMANTIC_RELATION_SPECS: dict[str, SemanticRelationSpec] = {
     # Positive / attraction axis
@@ -93,10 +168,10 @@ SEMANTIC_RELATION_SPECS: dict[str, SemanticRelationSpec] = {
         "membership", RelationType.POSITIVE, 0.94, 0.88, "x belongs to A"
     ),
     "inclusion": SemanticRelationSpec(
-        "inclusion", RelationType.POSITIVE, 0.92, 0.86, "A is contained in B"
+        "inclusion", RelationType.POSITIVE, 0.92, 0.86, "A contains B"
     ),
     "proper_inclusion": SemanticRelationSpec(
-        "proper_inclusion", RelationType.POSITIVE, 0.93, 0.87, "A is strictly contained in B"
+        "proper_inclusion", RelationType.POSITIVE, 0.93, 0.87, "A strictly contains B"
     ),
     "functional_map": SemanticRelationSpec(
         "functional_map", RelationType.POSITIVE, 0.90, 0.84, "f(x) maps to y"
@@ -135,6 +210,9 @@ SEMANTIC_RELATION_SPECS: dict[str, SemanticRelationSpec] = {
     "conflict": SemanticRelationSpec(
         "conflict", RelationType.NEGATIVE, 0.84, 0.10, "concepts conflict or contradict"
     ),
+    "contrast": SemanticRelationSpec(
+        "contrast", RelationType.NEGATIVE, 0.70, 0.06, "concepts differ in a way worth keeping apart, without conflicting"
+    ),
     "instability": SemanticRelationSpec(
         "instability", RelationType.NEGATIVE, 0.78, 0.12, "one concept destabilizes another"
     ),
@@ -172,14 +250,30 @@ SEMANTIC_RELATION_SPECS: dict[str, SemanticRelationSpec] = {
 }
 
 
+# Semantic relations on a directed axis whose meaning is nevertheless
+# symmetric: "A conflicts with B" says the same as "B conflicts with A".
+# They are matched in either orientation and are not scaled by
+# direction-conditioned perspectives (docs §7.18).
+SYMMETRIC_SEMANTIC_RELATIONS: frozenset[str] = frozenset({
+    "co_creation",
+    "mutual_reinforcement",
+    "future_coupling",
+    "conflict",
+    "contrast",
+    "disjointness",
+    "complement",
+    "incompatible_ontology",
+})
+
 _SEMANTIC_RELATION_ALIASES: dict[str, str] = {
     # Canonical names
     **{name: name for name in SEMANTIC_RELATION_SPECS},
     # Axis words default to generic language relations for that axis.
     "positive": "mutual_reinforcement",
     "attraction": "mutual_reinforcement",
-    "negative": "conflict",
-    "repulsion": "conflict",
+    # A bare axis word asserts only the axis: the weakest claim on it.
+    "negative": "contrast",
+    "repulsion": "contrast",
     "parallel": "generic_relation",
     "resonance": "overlap",
     # Prior semantic labels.
@@ -191,7 +285,7 @@ _SEMANTIC_RELATION_ALIASES: dict[str, str] = {
     "incompatible_ontology": "incompatible_ontology",
     "instability": "instability",
     "adversarial_prediction": "adversarial_prediction",
-    "mutual_understanding": "equivalence",
+    "mutual_understanding": "recursive_co_modeling",
     "deep_conceptual_overlap": "overlap",
     "recursive_co_modeling": "recursive_co_modeling",
     "persistent_attention_allocation": "persistent_attention",
@@ -199,11 +293,11 @@ _SEMANTIC_RELATION_ALIASES: dict[str, str] = {
     "supports": "enables",
     "depends_on": "dependence",
     "contains": "inclusion",
-    "part_of": "membership",
+    "part_of": "inclusion",  # seen from the part; stored from the whole (orient_relation)
     "activates": "enables",
     "precedes": "dependence",
     "derived_from": "dependence",
-    "contrasts": "conflict",
+    "contrasts": "contrast",
     "similar_to": "similarity_kernel",
     "related_to": "generic_relation",
 }
@@ -234,6 +328,34 @@ def is_known_relation_type(value: str | RelationType | None) -> bool:
     )
 
 
+def is_known_relation_label(value: str | RelationType | None) -> bool:
+    """True for any label a ``Perspective`` may weight: an axis
+    (``positive`` / ``negative`` / ``parallel``), a canonical semantic
+    relation (``dependence``, ``inclusion`` …) or one of its aliases
+    (``depends_on``, ``contains`` …)."""
+    return is_known_relation_type(value)
+
+
+def canonical_relation_label(value: str | RelationType | None) -> str:
+    """Canonical form of a label a ``Perspective`` may weight.
+
+    An axis stays an axis value (``"positive"``); a semantic relation or
+    one of its aliases becomes its canonical semantic name
+    (``"depends_on"`` → ``"dependence"``).  Raises ``KeyError`` for an
+    unknown label.
+    """
+    if isinstance(value, RelationType):
+        return value.value
+    raw = str(value or "").strip().lower().replace(" ", "_")
+    if raw in {axis.value for axis in RelationType}:
+        return raw
+    if raw in _SEMANTIC_RELATION_ALIASES:
+        return _SEMANTIC_RELATION_ALIASES[raw]
+    if raw in _LEGACY_RELATION_TYPE_MAP:
+        return _LEGACY_RELATION_TYPE_MAP[raw].value
+    raise KeyError(raw)
+
+
 def normalize_semantic_relation(value: str | None) -> str:
     """Normalize a language relation label to a canonical semantic relation."""
     raw = str(value or "").strip().lower()
@@ -243,9 +365,68 @@ def normalize_semantic_relation(value: str | None) -> str:
     return _SEMANTIC_RELATION_ALIASES.get(key, "generic_relation")
 
 
+_T = TypeVar("_T")
+
+# Legacy labels phrased from the other end: "A precedes B" states that B
+# depends on A; "x part_of A" states that A contains x.  They are stored in
+# the canonical direction, so a claim reads the same whichever label stated
+# it.
+_REVERSED_ALIASES: frozenset[str] = frozenset({"precedes", "part_of"})
+_AXIS_NAMES: frozenset[str] = frozenset(t.value for t in RelationType)
+
+
+def orient_relation(source: _T, target: _T, label: str | None) -> tuple[_T, _T, str]:
+    """``(source, target, canonical semantic relation)`` for a stated claim,
+    with the endpoints swapped for a label phrased from the other end."""
+    key = str(label or "").strip().lower().replace(" ", "_")
+    canonical = normalize_semantic_relation(label)
+    if key in _REVERSED_ALIASES:
+        return target, source, canonical
+    return source, target, canonical
+
+
 def semantic_relation_spec(value: str | None) -> SemanticRelationSpec:
     """Return the score/axis mapping for a language relation label."""
     return SEMANTIC_RELATION_SPECS[normalize_semantic_relation(value)]
+
+
+# How a claim reads in plain language, source first: "<source> <phrase>
+# <target>".  Used by the compact projection render, the form an Agent's
+# prompt receives; one entry per canonical semantic relation.
+RELATION_PHRASES: dict[str, str] = {
+    "membership": "belongs to",
+    "inclusion": "contains",
+    "proper_inclusion": "strictly contains",
+    "functional_map": "maps to",
+    "co_creation": "co-creates",
+    "mutual_reinforcement": "reinforces",
+    "future_coupling": "is coupled in future with",
+    "enables": "enables",
+    "dependence": "depends on",
+    "disjointness": "is disjoint from",
+    "complement": "is the complement of",
+    "exclusion": "excludes",
+    "incompatible_ontology": "is incompatible with",
+    "violates_constraint": "violates",
+    "conflict": "conflicts with",
+    "contrast": "contrasts with",
+    "instability": "destabilizes",
+    "adversarial_prediction": "predicts against",
+    "equivalence": "is equivalent to",
+    "quotient_map": "maps into the same class as",
+    "approximate_equivalence": "is roughly equivalent to",
+    "overlap": "overlaps with",
+    "similarity_kernel": "is similar to",
+    "recursive_co_modeling": "co-models",
+    "persistent_attention": "attends to",
+    "co_membership": "shares a group with",
+    "generic_relation": "is related to",
+}
+
+
+def relation_phrase(value: str | None) -> str:
+    """Plain-language phrase for a relation label (canonical or alias)."""
+    return RELATION_PHRASES[normalize_semantic_relation(value)]
 
 
 def semantic_relation_names(axis: RelationType | str | None = None) -> list[str]:
@@ -284,6 +465,10 @@ def relation_axis_descriptions() -> dict[str, list[str]]:
     }
 
 
+# Most recent distinct tasks a claim is remembered to have been stated under.
+MAX_CLAIM_TASKS: int = 32
+
+
 class RelationEdge(BaseModel):
     """A relation is discovered through the Agent's work, not declared upfront.
 
@@ -299,6 +484,12 @@ class RelationEdge(BaseModel):
     propagation_strength: float = Field(default=0.45, ge=0.0, le=1.0)
     probability: float = Field(default=0.3, ge=0.0, le=1.0)
     probability_observation_count: int = 0
+    # Belief an explicit claim started from: ``SemanticRelationSpec.claim_prior``
+    # or the extractor's own prior.  ``None`` marks an edge stored before belief
+    # was separated from the propagation gain (a legacy negative claim is
+    # rebased once on load, see ``adopt_claim_prior``); it also stays ``None``
+    # for co-occurrence edges, which assert nothing.
+    belief_prior: float | None = Field(default=None, ge=0.0, le=1.0)
     weight: float = Field(default=0.3, ge=0.0, le=1.0)
     is_explicit: bool = False  # True if declared by Agent, False if Hebbian
 
@@ -309,11 +500,55 @@ class RelationEdge(BaseModel):
         default_factory=lambda: datetime.now(timezone.utc)
     )
     last_weakened: datetime | None = None
+    # Cognitive-time coordinates (see ``schemas/clock.py``).
+    discovered_tick: int = 0
+    last_reinforced_tick: int = 0
+    # Tick at which the claim was withdrawn (``Observation.retracted_relations``:
+    # "X no longer depends on Y").  A retracted claim is kept as history but
+    # is no longer part of the world: it carries no activation, is not a
+    # connection, is not in projections, and its weight relaxes toward zero.
+    # Restating the claim clears it.
+    retracted_tick: int | None = None
+    # Instant (both coordinates) at which time decay was last applied (see
+    # ``ConceptNode.last_decayed_at``).
+    last_decayed_at: datetime | None = None
+    last_decayed_tick: int | None = None
     discovered_at: datetime = Field(
         default_factory=lambda: datetime.now(timezone.utc)
     )
     provenance: str = ""
     task_history: list[str] = Field(default_factory=list)
+    # Tasks under which the claim was *stated* (explicit statements only;
+    # ``task_history`` also collects co-occurrence provenance).  The context
+    # of a claim is decided by these (projection ``CONTEXT_MATCH``).
+    claim_tasks: list[str] = Field(default_factory=list)
+    # Explicit statements of this claim (every statement, with or without
+    # an extractor prior); 0 on co-occurrence edges and on edges stored
+    # before it was counted (``support`` then falls back to confirmations).
+    statements: int = 0
+
+    @model_validator(mode="before")
+    @classmethod
+    def _migrate_legacy_label(cls, data: object) -> object:
+        """A 0.2.0 edge stored its label (``depends_on``, ``part_of``,
+        ``contrasts`` ...) in ``relation_type`` and had no
+        ``semantic_relation``.  Keep the label's semantics instead of
+        collapsing it to an axis default, and store a label phrased from
+        the other end (``part_of``, ``precedes``) in the canonical direction,
+        as ``orient_relation`` does for a stated claim."""
+        if not isinstance(data, dict) or data.get("semantic_relation"):
+            return data
+        raw = data.get("relation_type")
+        if isinstance(raw, RelationType) or raw is None:
+            return data
+        key = str(raw).strip().lower().replace(" ", "_")
+        if key in _AXIS_NAMES or key not in _SEMANTIC_RELATION_ALIASES:
+            return data
+        data = dict(data)
+        data["semantic_relation"] = _SEMANTIC_RELATION_ALIASES[key]
+        if key in _REVERSED_ALIASES and "source_id" in data and "target_id" in data:
+            data["source_id"], data["target_id"] = data["target_id"], data["source_id"]
+        return data
 
     @field_validator("relation_type", mode="before")
     @classmethod
@@ -345,8 +580,18 @@ class RelationEdge(BaseModel):
             and self.probability == 0.3
             and self.weight == 0.3
             and self.confidence == 0.3
+            # A stamped edge was initialised on purpose (an extractor prior
+            # of exactly 0.3 is not "unset").
+            and self.belief_prior is None
         ):
-            self.probability = spec.propagation_strength
+            # Belief and operational strength are separate quantities: the
+            # weight is the propagation (or inhibition) gain of the label; the
+            # belief is its claim prior for an explicit statement.
+            self.probability = (
+                spec.claim_prior if self.is_explicit else spec.propagation_strength
+            )
+            if self.is_explicit:
+                self.belief_prior = self.probability
             self.weight = spec.propagation_strength
             self.confidence = spec.structural_strength
         return self
@@ -357,11 +602,195 @@ class RelationEdge(BaseModel):
             self.probability_observation_count == 0
             and self.probability == 0.3
             and self.confidence != 0.3
+            # Stamped edges postdate the probability field: a belief of
+            # exactly 0.3 (an extractor's prior) is a belief, not "missing".
+            and self.belief_prior is None
         ):
             self.probability = self.confidence
 
+    def adopt_claim_prior(self) -> bool:
+        """Migrate an explicit negative claim stored before belief and gain
+        were separated.
+
+        Such an edge started at its inhibition gain (0.05-0.12) as *belief*,
+        so a stated conflict carried a seventh of the standing of a stated
+        dependence.  If the stored belief is what that legacy seed and the
+        edge's own ``confirm`` / ``weaken`` counters explain (within
+        ``LEGACY_BELIEF_TOLERANCE``, for either order of the two), the belief
+        is rebased: the same counters are replayed from the label's claim
+        prior instead (confirmations first, then disconfirmations), and the
+        result is kept only if it is higher.  A belief the legacy seed does
+        not explain came from an extractor's own probability or from
+        feedback, and is kept as stored.  ``weight`` (the inhibition gain) is
+        never touched, and neither is any positive, parallel or co-occurrence
+        edge.  The edge is stamped with ``belief_prior`` so this runs once.
+        Returns True when the edge was stamped (and so should be persisted).
+        """
+        if (
+            self.belief_prior is not None
+            or not self.is_explicit
+            or self.relation_type != RelationType.NEGATIVE
+        ):
+            return False
+        confirms = self.probability_observation_count
+        weakens = self.disconfirmation_count
+        seed = self.propagation_strength  # what the legacy code seeded belief from
+        ends = (
+            _replay_belief(seed, confirms, weakens),
+            _replay_belief(seed, confirms, weakens, weakens_first=True),
+        )
+        explained = (
+            min(ends) - LEGACY_BELIEF_TOLERANCE
+            <= self.probability
+            <= max(ends) + LEGACY_BELIEF_TOLERANCE
+        )
+        if explained:
+            prior = semantic_relation_spec(self.semantic_relation).claim_prior
+            self.probability = max(
+                self.probability, _replay_belief(prior, confirms, weakens)
+            )
+            self.belief_prior = prior
+        else:
+            self.belief_prior = self.probability
+        return True
+
     def involves(self, concept_id: str) -> bool:
         return self.source_id == concept_id or self.target_id == concept_id
+
+    def connects(self, id_a: str, id_b: str, *, directed: bool = False) -> bool:
+        """Whether this edge links ``id_a`` and ``id_b``.
+
+        With ``directed=True`` a directed (positive / negative) edge must
+        run ``id_a → id_b``; a parallel edge has no meaningful orientation
+        and matches either way.
+        """
+        if directed and self.is_directed:
+            return self.source_id == id_a and self.target_id == id_b
+        return {self.source_id, self.target_id} == {id_a, id_b}
+
+    def opposes(self, other_axis: RelationType, other_semantic: str = "") -> bool:
+        """Whether a claim on ``other_axis`` contradicts this edge's claim.
+
+        A negative claim (conflict, exclusion, …) about a pair contradicts
+        a positive or parallel one and vice versa.  ``generic_relation``
+        asserts nothing beyond "related", so it neither contradicts nor is
+        contradicted — pass the other claim's ``other_semantic`` so the
+        relation stays symmetric (docs/paper, Proposition 4.4).
+        """
+        if self.semantic_relation == "generic_relation":
+            return False
+        if other_semantic and normalize_semantic_relation(other_semantic) == "generic_relation":
+            return False
+        mine_negative = self.relation_type == RelationType.NEGATIVE
+        return mine_negative != (other_axis == RelationType.NEGATIVE)
+
+    def decay_reference_time(self) -> datetime:
+        """Wall-clock instant from which the next decay interval is measured."""
+        if self.last_decayed_at and self.last_decayed_at > self.last_reinforced:
+            return self.last_decayed_at
+        return self.last_reinforced
+
+    def decay_reference_tick(self) -> int:
+        """Tick from which the next decay interval is measured."""
+        if (
+            self.last_decayed_tick is not None
+            and self.last_decayed_tick > self.last_reinforced_tick
+        ):
+            return self.last_decayed_tick
+        return self.last_reinforced_tick
+
+    def elapsed_since_reinforced(
+        self, now_tick: int | None = None, now: datetime | None = None
+    ) -> float:
+        """Cognitive time since the last reinforcement, in ticks."""
+        return cognitive_elapsed(
+            self.last_reinforced_tick if now_tick is None else now_tick,
+            self.last_reinforced_tick,
+            now or wall_now(),
+            self.last_reinforced,
+        )
+
+    def decay_elapsed(self, now_tick: int, now: datetime | None = None) -> float:
+        """Cognitive time since decay was last applied (or since reinforcement)."""
+        return cognitive_elapsed(
+            now_tick,
+            self.decay_reference_tick(),
+            now or wall_now(),
+            self.decay_reference_time(),
+        )
+
+    def task_affinity(self, task: str, vocabulary: TaskVocabulary | None = None) -> float:
+        """Graded association between this relation and ``task`` in [0, 1].
+
+        Word-level match against the tasks under which the relation was
+        observed (``task_history``); see ``task_match_score``.
+        """
+        best = 0.0
+        for label in self.task_history:
+            score = task_match_score(task, label, vocabulary)
+            if score > best:
+                best = score
+                if best >= 1.0:
+                    break
+        return best
+
+    @property
+    def is_retracted(self) -> bool:
+        return self.retracted_tick is not None
+
+    def record_claim(self, task: str) -> None:
+        """Note that the claim was stated under ``task``."""
+        label = normalize_task_label(task)
+        if label and label not in self.claim_tasks:
+            self.claim_tasks.append(label)
+            if len(self.claim_tasks) > MAX_CLAIM_TASKS:
+                del self.claim_tasks[: len(self.claim_tasks) - MAX_CLAIM_TASKS]
+
+    @property
+    def support(self) -> int:
+        """Explicit statements of this claim (0 for a co-occurrence edge)."""
+        if not self.is_explicit:
+            return 0
+        return self.statements or self.probability_observation_count + 1
+
+    def to_claim(self, source_name: str, target_name: str, *, status: str | None = None) -> "Claim":
+        """The edge as the API presents it (``world0.api.Claim``).
+
+        ``status`` defaults to what the edge alone can tell — ``withdrawn``,
+        ``co_occurrence``, ``doubted`` or ``current``; a projection refines it
+        to ``contested`` / ``outvoted`` from the other claims in view
+        (``Projection.hold_loosely``)."""
+        from world0.api import Claim
+
+        if status is None:
+            if self.is_retracted:
+                status = "withdrawn"
+            elif not self.is_explicit:
+                status = "co_occurrence"
+            elif self.disconfirmation_count > 0 and self.probability < 0.5:
+                status = "doubted"  # argued below even odds (``DOUBTED_BELIEF``)
+            else:
+                status = "current"
+        return Claim(
+            source=source_name,
+            source_id=self.source_id,
+            relation=self.semantic_relation,
+            target=target_name,
+            target_id=self.target_id,
+            axis=self.relation_type.value,
+            belief=round(self.probability, 4),
+            support=self.support,
+            status=status,
+            stated_under=sorted({t for t in self.claim_tasks if t.strip()}),
+            text=f"{source_name} {relation_phrase(self.semantic_relation)} {target_name}",
+        )
+
+    def claim_affinity(self, task: str, vocabulary: TaskVocabulary | None = None) -> float | None:
+        """Best match of ``task`` against the tasks the claim was stated under;
+        None when the claim was never stated under a task (neutral)."""
+        if not self.claim_tasks:
+            return None
+        return max(task_match_score(task, label, vocabulary) for label in self.claim_tasks)
 
     def other_end(self, concept_id: str) -> str | None:
         if self.source_id == concept_id:
@@ -370,10 +799,32 @@ class RelationEdge(BaseModel):
             return self.source_id
         return None
 
-    def reinforce(self, provenance: str = "") -> None:
-        """Strengthen this relation through repeated observation."""
+    @property
+    def is_directed(self) -> bool:
+        """Whether source→target orientation carries meaning.
+
+        Positive and negative relations are directed (``A depends_on B``,
+        ``A excludes B``); parallel relations (equivalence, overlap,
+        Hebbian co-occurrence) are symmetric and their stored orientation
+        is arbitrary, so direction-conditioned propagation ignores them.
+        So are the symmetric semantics on a directed axis (``conflict``,
+        ``mutual_reinforcement``, … — ``SYMMETRIC_SEMANTIC_RELATIONS``).
+        """
+        return (
+            self.relation_type != RelationType.PARALLEL
+            and self.semantic_relation not in SYMMETRIC_SEMANTIC_RELATIONS
+        )
+
+    def reinforce(self, provenance: str = "", *, tick: int | None = None) -> None:
+        """Strengthen this relation through repeated observation.
+
+        ``tick`` is the world's cognitive time at which the observation
+        happened; engines always pass it.
+        """
         self.reinforcement_count += 1
         self.last_reinforced = datetime.now(timezone.utc)
+        if tick is not None:
+            self.last_reinforced_tick = int(tick)
         if provenance:
             self.provenance = provenance
             if provenance not in self.task_history:
@@ -390,6 +841,19 @@ class RelationEdge(BaseModel):
         self.weight = min(cap, self.weight + boost)
         self.confidence = min(cap, self.confidence + boost)
 
+    def confirm(self, *, gain: float = EXPLICIT_CONFIRMATION_GAIN) -> None:
+        """An explicit re-statement of this relation is semantic evidence.
+
+        ``reinforce()`` strengthens the operational weight (Hebbian
+        co-occurrence does that too); ``confirm()`` is reserved for an
+        Agent or extractor asserting the typed relation again, and moves
+        the belief that it is *correct* toward 1 with diminishing returns.
+        Twenty bare confirmations take a 0.70 relation to ≈0.89.
+        """
+        step = max(0.0, min(1.0, gain))
+        self.probability = min(1.0, self.probability + (1.0 - self.probability) * step)
+        self.probability_observation_count += 1
+
     def weaken(self, provenance: str = "") -> None:
         """Disconfirmation evidence against this relation.
 
@@ -399,10 +863,14 @@ class RelationEdge(BaseModel):
         """
         self.disconfirmation_count += 1
         self.last_weakened = datetime.now(timezone.utc)
-        penalty = 0.06 * (1.0 / (1.0 + self.disconfirmation_count * 0.10))
+        penalty = disconfirmation_penalty(self.disconfirmation_count)
         self.weight = max(0.01, self.weight - penalty)
         self.confidence = max(0.01, self.confidence - penalty)
-        self.probability = self.confidence
+        # Disconfirmation is semantic evidence, so the belief that the
+        # relation is correct drops by the same penalty.  It must not be
+        # overwritten with ``confidence`` — that is a structural-strength
+        # scale and copying it could *raise* the probability.
+        self.probability = max(0.01, self.probability - penalty)
         if provenance and provenance not in self.task_history:
             self.task_history.append(provenance)
 
@@ -414,6 +882,7 @@ class RelationEdge(BaseModel):
         prior_strength: float = 1.0,
         evidence_strength: float = 2.0,
         provenance: str = "",
+        tick: int | None = None,
     ) -> None:
         """Recalculate relation probability from prior + evidence.
 
@@ -445,6 +914,8 @@ class RelationEdge(BaseModel):
             if evidence >= 0.5:
                 self.reinforcement_count += 1
                 self.last_reinforced = datetime.now(timezone.utc)
+                if tick is not None:
+                    self.last_reinforced_tick = int(tick)
             else:
                 self.disconfirmation_count += 1
                 self.last_weakened = datetime.now(timezone.utc)
@@ -452,8 +923,15 @@ class RelationEdge(BaseModel):
         if total_strength <= 0:
             return
         self.probability = min(1.0, max(0.0, total / total_strength))
-        self.weight = self.probability
-        self.confidence = self.probability
+        # Evidence about the claim re-scales the operational strengths of a
+        # positive / parallel edge.  On the negative axis ``weight`` is the
+        # inhibition gain (0.05-0.12 by design), not a belief: writing a
+        # belief of ~0.7 into it would multiply the inhibition of an
+        # extractor-restated conflict by ~3 now that stated negative claims
+        # carry a real belief, so the gain is left alone.
+        if self.relation_type != RelationType.NEGATIVE:
+            self.weight = self.probability
+            self.confidence = self.probability
         if provenance:
             self.provenance = provenance
             if provenance not in self.task_history:
@@ -475,26 +953,37 @@ class RelationEdge(BaseModel):
             return 0.5
         return alpha / total
 
-    def hours_since_reinforced(self) -> float:
-        delta = datetime.now(timezone.utc) - self.last_reinforced
+    def hours_since_reinforced(self, now: datetime | None = None) -> float:
+        reference = now or datetime.now(timezone.utc)
+        delta = reference - self.last_reinforced
         return delta.total_seconds() / 3600.0
 
-    def temporal_relevance(self, half_life_hours: float = 72.0) -> float:
-        """Time-based relevance score in [0, 1].
+    def temporal_relevance(
+        self,
+        half_life: float = 72.0,
+        *,
+        now_tick: int | None = None,
+        now: datetime | None = None,
+    ) -> float:
+        """Freshness score in [0, 1] as a function of cognitive time.
 
         Returns 1.0 for a just-reinforced relation and decays
-        exponentially.  More reinforced relations use a longer
-        effective half-life (the same scaling used by DecayEngine).
-        A floor of 0.15 keeps structurally significant but old
-        relations from disappearing completely during activation.
+        exponentially in ticks (observations).  More reinforced relations
+        use a longer effective half-life (the same scaling used by
+        DecayEngine).  A floor of 0.15 keeps structurally significant but
+        old relations from disappearing completely during activation.
 
         Args:
-            half_life_hours: Base half-life in hours.
-                Default 72 h (3 days).
+            half_life: Base half-life in ticks (default 72).
+            now_tick: The world's current tick; engines pass one value
+                for a whole pass.
+            now: Wall-clock reference for the drift term.
         """
-        hours = self.hours_since_reinforced()
-        if hours <= 0 or half_life_hours <= 0:
+        if half_life <= 0:
             return 1.0
-        effective_hl = half_life_hours * (1.0 + self.reinforcement_count * 0.5)
-        raw = math.pow(0.5, hours / effective_hl)
+        elapsed = self.elapsed_since_reinforced(now_tick, now)
+        if elapsed <= 0:
+            return 1.0
+        effective_hl = half_life * (1.0 + self.reinforcement_count * 0.5)
+        raw = math.pow(0.5, elapsed / effective_hl)
         return max(0.15, raw)

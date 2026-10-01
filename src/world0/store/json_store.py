@@ -20,6 +20,7 @@ class JsonStore(Store):
         {root}/sources/{id}.json
         {root}/source_index.json
         {root}/state.json
+        {root}/learning.json     (Hebbian counters, written less often)
     """
 
     def __init__(self, root: str | Path) -> None:
@@ -29,6 +30,7 @@ class JsonStore(Store):
         self._sources_dir = self._root / "sources"
         self._source_index_path = self._root / "source_index.json"
         self._state_path = self._root / "state.json"
+        self._learning_path = self._root / "learning.json"
 
         self._concepts_dir.mkdir(parents=True, exist_ok=True)
         self._relations_dir.mkdir(parents=True, exist_ok=True)
@@ -168,3 +170,13 @@ class JsonStore(Store):
         if not self._state_path.exists():
             return {}
         return json.loads(self._state_path.read_text(encoding="utf-8"))
+
+    def save_learning_state(self, state: dict) -> None:
+        self._learning_path.write_text(
+            json.dumps(state, separators=(",", ":"), default=str), encoding="utf-8"
+        )
+
+    def load_learning_state(self) -> dict:
+        if not self._learning_path.exists():
+            return {}
+        return json.loads(self._learning_path.read_text(encoding="utf-8"))

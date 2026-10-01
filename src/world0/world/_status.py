@@ -19,6 +19,7 @@ def build_status(
     relations: RelationStoreReader,
     communities: CommunityManager,
     last_reflect_iso: str | None,
+    cognitive_tick: int = 0,
 ) -> WorldStatus:
     all_concepts = concepts.all()
     by_maturity: dict[str, int] = {}
@@ -61,4 +62,5 @@ def build_status(
         avg_network_entropy=entropy.avg_network_entropy,
         high_entropy_concepts=entropy.high_entropy_nodes,
         relation_type_entropy=entropy.relation_type_entropy,
+        cognitive_tick=cognitive_tick,
     )

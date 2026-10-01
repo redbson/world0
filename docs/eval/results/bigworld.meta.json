@@ -1,0 +1,24 @@
+{
+ "study": "bigworld",
+ "jobs": 4,
+ "seeds": [
+  0,
+  1,
+  2,
+  3
+ ],
+ "budgets": [
+  150,
+  300,
+  600,
+  1200,
+  2400,
+  4800
+ ],
+ "commit": "1de189a",
+ "dirty_src_or_benchmarks": true,
+ "seconds": 171.4,
+ "python": "3.11.15",
+ "cpus": 4,
+ "workers": 4
+}

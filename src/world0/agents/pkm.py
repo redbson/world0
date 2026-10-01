@@ -78,6 +78,7 @@ from world0.schemas.relation import (
     RelationType,
     is_known_relation_type,
     normalize_semantic_relation,
+    orient_relation,
     semantic_relation_spec,
     semantic_relation_names,
 )
@@ -172,6 +173,19 @@ class PKMAgent:
         self._mcp_manager = None
         self._skill_registry = None
         self._skill_executor = None
+
+    def close(self) -> None:
+        """Persist the world's learning state and release its store.
+
+        ``World`` flushes concepts and relations on every observation but
+        writes the bulky Hebbian learning record on an amortised schedule
+        once a world is large; call this at the end of a session (the CLI
+        and web app do) so the record on disk is exact.  Safe to call
+        more than once.
+        """
+        world = getattr(self, "_world", None)
+        if world is not None:
+            world.close()
 
     @property
     def world(self) -> World:
@@ -1616,7 +1630,13 @@ class PKMAgent:
             for entry in node.reinforcement_log[-8:]
         ]
         sources = sorted({entry.source for entry in node.reinforcement_log if entry.source})
-        tasks = sorted({entry.task for entry in node.reinforcement_log if entry.task})
+        # The task profile is the complete task association; the log is
+        # only a bounded recent-activity window.
+        tasks = sorted(
+            node.task_profile
+            if node.task_profile
+            else {entry.task for entry in node.reinforcement_log if entry.task}
+        )
         source_refs = []
         for ref in sorted(
             node.source_refs,
@@ -1705,7 +1725,7 @@ class PKMAgent:
                 f"Invalid relation type: '{relation_type}'.\n"
                 f"Valid relation labels: {valid}"
             )
-        semantic_relation = normalize_semantic_relation(relation_type)
+        source, target, semantic_relation = orient_relation(source, target, relation_type)
         rel_type = semantic_relation_spec(semantic_relation).axis
 
         obs = Observation(
@@ -2317,20 +2337,23 @@ class PKMAgent:
         )
         relation = None
         if semantic_relation:
-            for candidate in self._world.relations.find_any_between(
+            # A claim is (source, target, label): match all three, in the
+            # stated direction (either way for an undirected relation).
+            relation = self._world.relations.find_between(
                 source.id,
                 target.id,
-            ):
-                if candidate.semantic_relation == semantic_relation:
-                    relation = candidate
-                    break
-        if relation is None:
+                rel_type,
+                directed=True,
+                semantic=semantic_relation,
+                cooccurrence_fallback=False,
+            )
+        if relation is None and not semantic_relation:
             relation = self._world.relations.find_between(
                 source.id,
                 target.id,
                 rel_type,
             )
-        if relation is None and rel_type is not None:
+        if relation is None and rel_type is None:
             relation = self._world.relations.find_between(source.id, target.id, None)
         return relation.id if relation else None
 

@@ -16,12 +16,13 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
+    from world0.context.focus import Focus
     from world0.schemas.community import Community
     from world0.schemas.concept import ConceptNode, Maturity
     from world0.schemas.context import Perspective
     from world0.schemas.relation import RelationEdge, RelationType
     from world0.schemas.source import SourceRecord
-    from world0.schemas.types import Observation, Projection
+    from world0.schemas.types import Observation, PredictionError, Projection
 
 
 # ── Persistence ───────────────────────────────────────────────────────
@@ -61,6 +62,10 @@ class StorageBackend(Protocol):
     # state
     def save_state(self, state: dict) -> None: ...
     def load_state(self) -> dict: ...
+
+    # learning state (bulky counters, persisted less often)
+    def save_learning_state(self, state: dict) -> None: ...
+    def load_learning_state(self) -> dict: ...
 
 
 # ── Concept storage ───────────────────────────────────────────────────
@@ -170,6 +175,10 @@ class RelationStoreReader(Protocol):
         id_a: str,
         id_b: str,
         relation_type: RelationType | None = ...,
+        *,
+        directed: bool = ...,
+        semantic: str | None = ...,
+        cooccurrence_fallback: bool = ...,
     ) -> RelationEdge | None: ...
     def find_any_between(
         self, id_a: str, id_b: str
@@ -202,6 +211,7 @@ class RelationStore(RelationStoreReader, Protocol):
     def weaken(
         self, relation_id: str, provenance: str = ...
     ) -> RelationEdge | None: ...
+    def retract(self, relation_id: str) -> RelationEdge | None: ...
     def refine_type(self, relation_id: str, new_type: RelationType) -> None: ...
     def adjust_strength(
         self,
@@ -213,6 +223,7 @@ class RelationStore(RelationStoreReader, Protocol):
 
     def remove(self, relation_id: str) -> bool: ...
     def remove_for_concept(self, concept_id: str) -> int: ...
+    def reap_dead_between(self, id_a: str, id_b: str) -> int: ...
     def migrate_concept(self, old_id: str, new_id: str) -> int: ...
 
     def mark_dirty(self, relation_id: str) -> None: ...
@@ -256,6 +267,22 @@ class HebbianLearner(Protocol):
     def learn(
         self, concept_ids: list[str], *, provenance: str = ...
     ) -> list[str]: ...
+
+    def revalidate(self) -> list[str]:
+        """Remove auto-discovered edges that no longer pass the
+        association gate; returns their ids.  ``learn()`` already does
+        this at the event for the edges whose association it changed;
+        this is the whole-store backstop."""
+        ...
+
+    # Endpoint id pairs of the edges the last ``learn()`` removed because
+    # the mentions it counted dropped their association below the gate.
+    last_revalidated_pairs: list[tuple[str, str]]
+
+    def prediction_error(self, concept_ids: list[str]) -> PredictionError:
+        """Score an observation against learned co-occurrence (before
+        learning it)."""
+        ...
 
 
 @runtime_checkable
@@ -323,6 +350,8 @@ class Projector(Protocol):
         max_concepts: int = ...,
         min_activation: float = ...,
         task: str = ...,
+        seed_ids: list[str] | None = ...,
+        focus: Focus | None = ...,
     ) -> Projection: ...
 
 

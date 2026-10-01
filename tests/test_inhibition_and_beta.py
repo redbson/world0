@@ -13,20 +13,19 @@ def world(tmp_path):
 
 
 class TestInhibition:
-    def test_contrasts_suppresses_neighbor(self, world):
-        """CONTRASTS edge drives target activation below min threshold."""
-        for _ in range(6):
-            world.ingest(Observation(
-                concepts=["focus", "distractor"],
-                relations=[("focus", "distractor", "contrasts")],
-                task="t",
-                source="bench",
-            ))
-        proj = world.project(["focus"], task="t")
+    def test_contrast_partner_is_visible_but_not_a_path(self, world):
+        """A stated contrast shows its partner (round 28) and spreads no further through it."""
+        for _ in range(6):  # one pair per observation: no co-occurrence edge focus–beyond
+            world.ingest(Observation(concepts=["focus", "distractor"],
+                                     relations=[("focus", "distractor", "contrasts")], task="t", source="bench"))
+            world.ingest(Observation(concepts=["distractor", "beyond"],
+                                     relations=[("distractor", "beyond", "depends_on")], task="t", source="bench"))
+        proj = world.project(["focus"], task="t", max_depth=3)
         distractor = world.concepts.resolve("distractor")
-        # The only edge to distractor is inhibitory — its score should
-        # never reach the projection at all.
-        assert distractor.id not in proj.activation_scores
+        beyond = world.concepts.resolve("beyond")
+        focus = world.concepts.resolve("focus")
+        assert 0 < proj.activation_scores[distractor.id] < proj.activation_scores[focus.id]
+        assert beyond.id not in proj.activation_scores
 
     def test_excitation_overpowers_weak_inhibition(self, world):
         """A strong supporting path must still win over contrast."""

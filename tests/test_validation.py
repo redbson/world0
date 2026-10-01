@@ -300,7 +300,7 @@ class TestCognitiveEvolution:
         docker = world.concepts.resolve("docker")
         from datetime import datetime, timedelta, timezone
 
-        docker.last_activated = datetime.now(timezone.utc) - timedelta(hours=48)
+        docker.last_activated_tick = world.clock.tick - 48
         docker.confidence = 0.03
         docker.maturity = Maturity.EMBRYONIC
 

@@ -13,7 +13,11 @@ from typing import Any
 
 from world0.llm.base import LLMProvider
 from world0.prompts import PromptRegistry
-from world0.schemas.relation import normalize_semantic_relation, semantic_relation_names
+from world0.schemas.relation import (
+    normalize_semantic_relation,
+    orient_relation,
+    semantic_relation_names,
+)
 from world0.schemas.types import ConceptCandidate, Observation, RelationPrior
 
 # All valid relation language labels for prompt and validation.
@@ -220,6 +224,12 @@ class ConceptExtractor:
             canonical,
             parse_warnings,
         )
+        retracted_relations = self._parse_relation_list(
+            data.get("retracted_relations"),
+            canonical,
+            parse_warnings,
+            kind="retracted",
+        )
 
         return Observation(
             concepts=concept_names,
@@ -228,6 +238,7 @@ class ConceptExtractor:
             descriptions=descriptions,
             weakened=weakened,
             contradicted_relations=contradicted_relations,
+            retracted_relations=retracted_relations,
             domain=str(data.get("domain", "")).strip(),
             task=task,
             source=source,
@@ -395,6 +406,8 @@ class ConceptExtractor:
         value: Any,
         canonical: dict[str, str],
         parse_warnings: list[str],
+        *,
+        kind: str = "contradicted",
     ) -> list[tuple[str, str, str]]:
         result: list[tuple[str, str, str]] = []
         if not isinstance(value, list):
@@ -408,7 +421,7 @@ class ConceptExtractor:
             resolved_tgt = canonical.get(self._normalize_key(tgt))
             if not resolved_src or not resolved_tgt:
                 parse_warnings.append(
-                    f"contradicted relation endpoint not found: {src} -> {tgt}"
+                    f"{kind} relation endpoint not found: {src} -> {tgt}"
                 )
                 continue
             rel_type = normalize_semantic_relation(rel_type)
@@ -420,20 +433,20 @@ class ConceptExtractor:
         item: Any,
     ) -> tuple[str, str, str, dict[str, Any]] | None:
         if isinstance(item, dict):
-            src = str(item.get("source", "")).strip()
-            tgt = str(item.get("target", "")).strip()
-            rel_type = normalize_semantic_relation(item.get("type", "generic_relation"))
+            src, tgt, rel_type = orient_relation(
+                str(item.get("source", "")).strip(),
+                str(item.get("target", "")).strip(),
+                item.get("type", "generic_relation"),
+            )
             return src, tgt, rel_type, {
                 "evidence": str(item.get("evidence", "")).strip(),
                 "rationale": str(item.get("rationale", "")).strip(),
             }
         if isinstance(item, (list, tuple)) and len(item) >= 3:
-            return (
-                str(item[0]).strip(),
-                str(item[1]).strip(),
-                normalize_semantic_relation(str(item[2]).strip()),
-                {},
+            src, tgt, rel_type = orient_relation(
+                str(item[0]).strip(), str(item[1]).strip(), str(item[2]).strip()
             )
+            return src, tgt, rel_type, {}
         return None
 
     @staticmethod

@@ -51,23 +51,28 @@ A relation is a language-level structural signature. You choose the relation
 label only; World 0 maps that label to an axis and deterministic scores.
 
 Positive / attraction labels:
-- membership: x belongs to A
-- inclusion: A is contained in B
-- proper_inclusion: A is strictly contained in B
-- functional_map: f(x) maps to y
+- membership: x belongs to A (x is an element or instance of the set A)
+- inclusion: A contains B (B is a part or component of A)
+- proper_inclusion: A strictly contains B
+- functional_map: f(x) maps to y (an explicit mapping or function, not one
+  component calling or using another)
 - co_creation: concepts jointly produce or shape each other
 - mutual_reinforcement: concepts strengthen each other's relevance
 - future_coupling: future states or trajectories become coupled
-- enables: one concept enables another
-- dependence: one concept depends on another under context
+- enables: A enables B (A makes B possible; B is not said to need A)
+- dependence: A depends on B (A needs, requires or cannot work without B)
 
 Negative / repulsion labels:
-- disjointness: sets or roles are mutually exclusive
+- disjointness: sets or roles share no member (categories, not running parts)
 - complement: one concept occupies the complement of another
 - exclusion: one concept excludes another
 - incompatible_ontology: concepts use incompatible modeling commitments
+  (two models of the same thing, not two parts that cannot work together)
 - violates_constraint: a concept violates a constraint or validity region
-- conflict: concepts conflict or contradict
+- conflict: concepts conflict or contradict; two components, settings or
+  practices that cannot be used or run together
+- contrast: concepts differ in a way worth keeping apart (alternatives,
+  opposite approaches) without conflicting
 - instability: one concept destabilizes another
 - adversarial_prediction: one concept predicts against another
 
@@ -84,6 +89,24 @@ Parallel / resonance labels:
 
 Use generic_relation only when the text supports connectedness but no more
 specific structural signature is justified.
+
+## Direction
+Every relation reads as the sentence "<source> <label> <target>" in the
+label's own wording above: source depends on target, source contains target,
+source enables target.  Decide the direction from what the text asserts, not
+from word order; passive, conditional and "part of" phrasings name the
+endpoints in the other order:
+- "the cache must be running before the API can start", "the API is blocked
+  until the cache is ready", "the cache is a precondition of the API"
+  → source: API, type: dependence, target: cache
+- "the parser is a component of the compiler", "the compiler is built from
+  the parser and the linker" → source: compiler, type: inclusion, target: parser
+- "the index is what makes fast search possible" → source: index, type:
+  enables, target: fast search
+A sentence that says one thing needs another is dependence, with the needing
+side as source, even when it is phrased from the needed side; do not restate
+it as enables in the other direction.  Symmetric labels (conflict, equivalence,
+overlap, ...) may take either order.
 
 ## Output format
 Respond with ONLY a JSON object:
@@ -114,6 +137,9 @@ Respond with ONLY a JSON object:
   "weakened": ["concept that the text makes less relevant or likely"],
   "contradicted_relations": [
     {"source": "c1", "target": "c2", "type": "relation label"}
+  ],
+  "retracted_relations": [
+    {"source": "c1", "target": "c2", "type": "relation label"}
   ]
 }
 
@@ -121,7 +147,7 @@ Rules:
 - Extract 3-15 concepts depending on text length and density.
 - Prefer fewer high-quality concepts over broad coverage.
 - Give every concept a local uid (`c1`, `c2`, ...). Use these uids in
-  relations and contradicted_relations whenever possible.
+  relations, contradicted_relations and retracted_relations whenever possible.
 - A concept's identity is uid + sense + boundary, not its surface name.
 - Do not merge two concepts only because their names are the same; merge only
   when the same sense and boundary are intended.
@@ -147,7 +173,14 @@ Rules:
   and below 0.40 for background mentions.
 - Do not use outside knowledge to invent concepts or relations.
 - Use weakened/contradicted_relations only when the input explicitly rejects,
-  narrows, or disconfirms a concept or relation.
+  narrows, or disconfirms a concept or relation: it is or was wrong.  A
+  denial ("A does not depend on B") goes in contradicted_relations, never in
+  relations, and is not evidence against A or B themselves.
+- Use retracted_relations when the input says a relation that held no longer
+  holds: it was removed, replaced or changed ("X no longer depends on Y",
+  "we moved X off Y", "X now uses Z instead of Y"). Keep the label and
+  direction of the relation being withdrawn; a replacement goes in relations.
+  Never list the same relation as both contradicted and retracted.
 - Respond ONLY with the JSON object, no markdown fences, no explanation.\
 """
 
@@ -223,8 +256,10 @@ activation, and local projection.
 
 You will receive:
 1. A cognitive projection — a local view of the user's concept world \
-relevant to their query. This includes concepts (with maturity and confidence), \
-relations between them, and activation scores.
+relevant to their query: current claims between concepts, each with a belief \
+(0–1), other concepts in view, definitions, and what to discount — claims \
+that no longer hold, claims made under other tasks, and contested, doubted \
+or thinly evidenced knowledge ("Hold loosely").
 2. The user's question or request.
 
 Your job:
@@ -233,8 +268,10 @@ Your job:
 - If the projection is sparse, say so honestly — suggest what observations \
 or concept links would make the world clearer.
 - Be concise but insightful. Focus on conceptual understanding, not trivia.
-- When referencing concepts, mention their maturity level if it adds context \
-(e.g., an "embryonic" concept is new and may need more reinforcement).
+- Treat claims under "No longer holds" and "Seen under other tasks" as not \
+current here, and say so when they matter; qualify anything under "Hold \
+loosely" (e.g., a thinly evidenced concept is new and may need more \
+reinforcement).
 
 Do NOT fabricate knowledge that isn't in the projection or general knowledge. \
 If the projection doesn't cover the query well, say so.\

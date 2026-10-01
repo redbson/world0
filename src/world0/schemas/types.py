@@ -5,10 +5,34 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, computed_field, model_validator
 
+from world0.api import API_VERSION, Claim, ConceptCard, ConceptCardInput, Statement
 from world0.schemas.concept import ConceptNode, Maturity
 from world0.schemas.relation import RelationEdge
+
+
+# Compact render: an explicit claim that disconfirmations brought below
+# even odds is listed under "Hold loosely" instead of among the current
+# claims; withdrawn and
+# other-task sections show at most this many lines.
+DOUBTED_BELIEF: float = 0.5
+# Two opposing claims whose beliefs differ by less than this are
+# ``contested``; by more, the stronger one is ``leaning``
+# (projection/metacognition.py uses the same line).
+CONTEST_MARGIN: float = 0.25
+COMPACT_SECTION_LIMIT: int = 10
+# A claim with this many times less support (explicit statements) than an
+# opposing claim, or than another label for the same pair, is listed under
+# "Hold loosely" ("outvoted" / "also stated as"), not as current: a
+# once-misread "conflicts with" does not stand beside a "depends on" stated
+# nine times.  2 was best of 1.5 / 2 / 3 on LongRun extraction noise.
+OUTVOTE_RATIO: float = 2.0
+
+
+def _one_line(text: str) -> str:
+    """Collapse whitespace so user text cannot start a line of the render."""
+    return " ".join(str(text).split())
 
 
 class ConceptCandidate(BaseModel):
@@ -66,26 +90,257 @@ class Observation(BaseModel):
     contradicted_relations: list[tuple[str, str, str]] = Field(
         default_factory=list
     )
+    # Claims that *no longer hold* ("X no longer depends on Y"): a revision
+    # of the world, not evidence the claim was ever wrong.  The claim is
+    # withdrawn (``RelationEdge.retracted_tick``) rather than disconfirmed.
+    retracted_relations: list[tuple[str, str, str]] = Field(default_factory=list)
     extraction_metadata: dict[str, Any] = Field(default_factory=dict)
     domain: str = ""
     task: str = ""
     source: str = ""
     source_id: str = ""
+    # API input names (docs/world0-api.md §4.1).  ``statements`` /
+    # ``withdrawals`` / ``denials`` / ``cards`` are accepted at construction
+    # and folded into the fields above, which the pipeline reads; the
+    # properties of the same names read them back.
     timestamp: datetime = Field(
         default_factory=lambda: datetime.now(timezone.utc)
     )
 
 
+    @model_validator(mode="before")
+    @classmethod
+    def _fold_api_input(cls, data: object) -> object:
+        """Accept the API shapes (``Statement`` lists and ``ConceptCardInput``)
+        next to the pipeline fields, and fold them in."""
+        if not isinstance(data, dict):
+            return data
+        if not any(k in data for k in ("statements", "withdrawals", "denials", "cards")):
+            return data
+        data = dict(data)
+
+        def statements(key: str) -> list[Statement]:
+            raw = data.pop(key, None) or []
+            if not isinstance(raw, (list, tuple)):
+                raise ValueError(f"{key} must be a list of statements")
+            out = []
+            for s in raw:
+                if isinstance(s, Statement):
+                    out.append(s)
+                elif isinstance(s, dict):
+                    out.append(Statement(**s))
+                elif isinstance(s, (list, tuple)) and len(s) == 3 and all(isinstance(x, str) for x in s):
+                    out.append(Statement(*s))
+                else:
+                    raise ValueError(f"{key}: each statement is (source, relation, target) or a mapping, not {s!r}")
+            return out
+
+        def names(key: str) -> list[str]:
+            raw = data.get(key) or []
+            if isinstance(raw, str) or not isinstance(raw, (list, tuple)):
+                raise ValueError(f"{key} must be a list of names")
+            return list(raw)
+
+        def dedup(triples):
+            seen: set = set()
+            out = []
+            for t in triples:
+                t = tuple(t)
+                if t not in seen:
+                    seen.add(t)
+                    out.append(t)
+            return out
+
+        stated = statements("statements")
+        if stated:
+            data["relations"] = dedup([*(data.get("relations") or []), *(s.as_triple() for s in stated)])
+            # A statement mentions its endpoints (a withdrawal or denial
+            # does not: they must not create concepts).
+            mentioned = names("concepts")
+            for s in stated:
+                for name in (s.source, s.target):
+                    if name not in mentioned:
+                        mentioned.append(name)
+            data["concepts"] = mentioned
+            priors = list(data.get("relation_priors") or [])
+            for s in stated:
+                if s.belief is not None:
+                    priors.append(RelationPrior(source=s.source, target=s.target, relation_type=s.relation,
+                                                probability=s.belief, rationale=s.rationale))
+            data["relation_priors"] = priors
+        withdrawn = statements("withdrawals")
+        if withdrawn:
+            data["retracted_relations"] = dedup([*(data.get("retracted_relations") or []),
+                                                 *(s.as_triple() for s in withdrawn)])
+        denied = statements("denials")
+        if denied:
+            data["contradicted_relations"] = dedup([*(data.get("contradicted_relations") or []),
+                                                    *(s.as_triple() for s in denied)])
+        cards = data.pop("cards", None) or []
+        if cards:
+            if not isinstance(cards, (list, tuple)):
+                raise ValueError("cards must be a list of concept cards")
+            cards = [c if isinstance(c, ConceptCardInput) else ConceptCardInput(**c) for c in cards]
+            candidates = [c if isinstance(c, ConceptCandidate) else ConceptCandidate(**c)
+                          for c in (data.get("concept_candidates") or [])]
+            by_name = {c.name: c for c in candidates}
+            for card in cards:
+                existing = by_name.get(card.name)
+                if existing is None:
+                    cand = ConceptCandidate(uid=card.name, name=card.name, kind=card.kind, sense=card.sense,
+                                            domain=card.domain, description=card.description,
+                                            aliases=list(card.aliases))
+                    candidates.append(cand)
+                    by_name[card.name] = cand
+                else:
+                    # The card completes a candidate given the pipeline way.
+                    for field in ("kind", "sense", "domain", "description"):
+                        if getattr(card, field) and not getattr(existing, field):
+                            setattr(existing, field, getattr(card, field))
+                    for alias in card.aliases:
+                        if alias not in existing.aliases:
+                            existing.aliases.append(alias)
+            # Names given only in ``concepts`` still need a candidate once
+            # candidates are present (the pipeline reads one or the other).
+            mentioned = names("concepts")
+            for name in mentioned:
+                if name not in by_name:
+                    cand = ConceptCandidate(uid=name, name=name)
+                    candidates.append(cand)
+                    by_name[name] = cand
+            data["concept_candidates"] = candidates
+            for card in cards:
+                if card.name not in mentioned:
+                    mentioned.append(card.name)
+            data["concepts"] = mentioned
+        return data
+
+    @property
+    def statements(self) -> list[Statement]:
+        """The stated relations as ``Statement`` objects (priors attached)."""
+        # Priors are keyed the way the pipeline keys them: by pair and label.
+        from world0.schemas.relation import normalize_semantic_relation
+
+        priors = {(pr.source, pr.target, normalize_semantic_relation(pr.relation_type)): pr
+                  for pr in self.relation_priors}
+        out = []
+        for src, tgt, rel in self.relations:
+            pr = priors.get((src, tgt, normalize_semantic_relation(rel)))
+            out.append(Statement(src, rel, tgt, belief=pr.probability if pr else None,
+                                 rationale=pr.rationale if pr else ""))
+        return out
+
+    @property
+    def withdrawals(self) -> list[Statement]:
+        return [Statement(s, r, t) for s, t, r in self.retracted_relations]
+
+    @property
+    def denials(self) -> list[Statement]:
+        return [Statement(s, r, t) for s, t, r in self.contradicted_relations]
+
+
+class PredictionError(BaseModel):
+    """How far an observation departed from what the world expected.
+
+    Predictive processing (indicator PP-1, ``docs/mc/04-prediction.md``):
+    learned co-occurrence is a prediction about what appears together, and
+    each observation is scored against it *before* it is learned.
+
+    - ``missing``: ``(predictor, expected, P(expected | predictor))`` for
+      strong companions that did not appear;
+    - ``novel_pairs``: two well-known concepts appearing together for the
+      first time;
+    - ``missing_ratio``: predicted companion mass that failed to appear;
+    - ``novelty``: share of well-known pairs never seen together before;
+    - ``surprise``: the larger of the two, in ``[0, 1]``.
+    """
+
+    missing: list[tuple[str, str, float]] = Field(default_factory=list)
+    novel_pairs: list[tuple[str, str]] = Field(default_factory=list)
+    missing_ratio: float = 0.0
+    novelty: float = 0.0
+    surprise: float = 0.0
+
+
 class IngestResult(BaseModel):
     """Result of ingesting an observation."""
 
+    api: str = API_VERSION
     new_concepts: list[str] = Field(default_factory=list)
     reinforced_concepts: list[str] = Field(default_factory=list)
     weakened_concepts: list[str] = Field(default_factory=list)
     new_relations: list[str] = Field(default_factory=list)
     reinforced_relations: list[str] = Field(default_factory=list)
     weakened_relations: list[str] = Field(default_factory=list)
+    retracted_relations: list[str] = Field(default_factory=list)
     hebbian_relations: list[str] = Field(default_factory=list)
+    # Co-occurrence edges this observation's mention counts pushed below the
+    # association gate; removed at the event (dynamics/hebbian.py).
+    stale_relations: list[str] = Field(default_factory=list)
+    prediction: PredictionError = Field(default_factory=PredictionError)
+
+
+class ContestedClaim(BaseModel):
+    """Opposing explicit claims about one concept pair in a projection.
+
+    ``claims`` lists ``(relation_id, semantic_relation, belief)`` for every
+    explicit claim about the pair; ``leading`` is the relation id of the
+    most believed one.  ``status`` is ``"contested"`` when the leading
+    belief exceeds the strongest opposing belief by less than the
+    contest margin, ``"leaning"`` otherwise.
+    """
+
+    source_id: str
+    target_id: str
+    claims: list[tuple[str, str, float]] = Field(default_factory=list)
+    leading: str = ""
+    margin: float = 0.0
+    status: str = "contested"
+
+
+class EpistemicStatus(BaseModel):
+    """Metacognitive annotation of a projection (analysis ``docs/mc``).
+
+    Distinguishes what the world knows well from what it has barely seen
+    or holds contradictory beliefs about — the "metacognitive monitoring"
+    indicator (HOT-2) of consciousness science, used here as a functional
+    signal for the Agent, not as a claim about experience.
+
+    ``reliability`` maps concept id → ``"well_evidenced"``,
+    ``"moderate"`` or ``"tentative"``.
+    """
+
+    reliability: dict[str, str] = Field(default_factory=dict)
+    contested: list[ContestedClaim] = Field(default_factory=list)
+
+    def tentative_ids(self) -> list[str]:
+        return [cid for cid, level in self.reliability.items() if level == "tentative"]
+
+
+class AttentionTrace(BaseModel):
+    """Why one concept is in a projection — the view's attention schema.
+
+    Attention schema theory (indicator AST-1) holds that a system keeps a
+    simplified model of what it attends to and why; this is that model
+    for one projection (``docs/mc/03-workspace.md``).
+
+    ``kind`` is ``"seed"`` for a concept the Agent asked about and
+    ``"reached"`` for one activation reached; ``via`` / ``relation`` name
+    the strongest activated neighbour and the relation it came through.
+    The flags record which context sources raised its relevance
+    (``sustained``: the focus raised it, ``in_focus``: it was itself held
+    in the focus rather than next to something held), and ``ignited``
+    whether it entered the focus after this view.
+    """
+
+    kind: str = "reached"
+    via: str = ""
+    relation: str = ""
+    task_named: bool = False
+    task_history: bool = False
+    sustained: bool = False
+    in_focus: bool = False
+    ignited: bool = False
 
 
 class Projection(BaseModel):
@@ -94,10 +349,183 @@ class Projection(BaseModel):
     This is what gets injected into the Agent's prompt to shape its reasoning.
     """
 
+    api: str = API_VERSION
+    # The seed names as asked, and the perspective profile name if one was
+    # used (docs/world0-api.md §4.5).
+    seeds: list[str] = Field(default_factory=list)
+    perspective: str = ""
     concepts: list[ConceptNode] = Field(default_factory=list)
     relations: list[RelationEdge] = Field(default_factory=list)
+    # Claims about concepts in view that were observed only under other
+    # tasks while the concept also has claims in this task's context
+    # (projection ``CONTEXT_MATCH``): another sense or another setting.
+    other_contexts: list[RelationEdge] = Field(default_factory=list)
+    # Withdrawn claims about the seeds (``Observation.retracted_relations``),
+    # most recent first; ``outside_names`` names their endpoints that are
+    # not in view.
+    retracted: list[RelationEdge] = Field(default_factory=list)
+    outside_names: dict[str, str] = Field(default_factory=dict)
+    # Sense of each such endpoint (``ConceptNode.representation_feature``),
+    # so a render can tell it from a same-named concept in view.
+    outside_senses: dict[str, str] = Field(default_factory=dict)
     activation_scores: dict[str, float] = Field(default_factory=dict)
     task: str = ""
+    epistemic: EpistemicStatus = Field(default_factory=EpistemicStatus)
+    attention: dict[str, AttentionTrace] = Field(default_factory=dict)
+
+    # ── API views (docs/world0-api.md §4.5) ───────────────────────────
+    # The structured form of what ``render()`` prints: concept cards and
+    # claims grouped by status.  ``render()``'s text is provisional; these
+    # fields are the stable contract.
+
+    @computed_field  # type: ignore[misc]
+    @property
+    def cards(self) -> list[ConceptCard]:
+        """The concepts in view as concept cards, in view order."""
+        return [c.to_card() for c in self.concepts]
+
+    @computed_field  # type: ignore[misc]
+    @property
+    def claims(self) -> list[Claim]:
+        """Current claims, strongest belief first (what ``render()`` lists first)."""
+        names = self._display_names()
+        return [self._claim(r, names, "current") for r in self._classify()["current"]]
+
+    @computed_field  # type: ignore[misc]
+    @property
+    def no_longer_holds(self) -> list[Claim]:
+        """Withdrawn claims about the seeds, most recent first."""
+        names = self._display_names()
+        return [self._claim(r, names, "withdrawn") for r in self.retracted]
+
+    @computed_field  # type: ignore[misc]
+    @property
+    def other_tasks(self) -> list[Claim]:
+        """Claims about concepts in view that were stated under other tasks."""
+        names = self._display_names()
+        return [self._claim(r, names, "current") for r in self.other_contexts]
+
+    @computed_field  # type: ignore[misc]
+    @property
+    def hold_loosely(self) -> list[Claim]:
+        """Contested, outvoted and doubted claims (``render()``'s "Hold loosely")."""
+        names = self._display_names()
+        parts = self._classify()
+        out: list[Claim] = []
+        for _status, lead, _lead_belief, opposing in parts["contested"]:
+            out.append(self._claim(lead, names, "contested"))
+            out.extend(self._claim(r, names, "contested") for r, _b in opposing)
+        out.extend(self._claim(r, names, "outvoted") for r, _o in parts["outvoted"])
+        out.extend(self._claim(r, names, "doubted") for r in parts["doubted"])
+        out.extend(self._claim(r, names, "outvoted") for r, _o in parts["minority"])
+        return out
+
+    @computed_field  # type: ignore[misc]
+    @property
+    def why(self) -> dict[str, str]:
+        """One line per concept in view: why it is there (seed, reached via
+        which neighbour and relation, named by the task, held in focus)."""
+        names = {c.id: c.name for c in self.concepts}
+        out: dict[str, str] = {}
+        for c in self.concepts:
+            trace = self.attention.get(c.id)
+            if trace is None:
+                continue
+            if trace.kind == "seed":
+                out[c.id] = "seed"
+                continue
+            reasons = []
+            if trace.via in names:
+                reasons.append(f"via {trace.relation or 'relation'} from {names[trace.via]}")
+            if trace.task_named:
+                reasons.append("named by the task")
+            elif trace.task_history:
+                reasons.append("used in this task before")
+            if trace.in_focus:
+                reasons.append("still in focus")
+            elif trace.sustained:
+                reasons.append("next to the current focus")
+            out[c.id] = "; ".join(reasons) if reasons else "reached"
+        return out
+
+    @staticmethod
+    def _claim(r: RelationEdge, names: dict[str, str], status: str) -> Claim:
+        return r.to_claim(names.get(r.source_id, r.source_id), names.get(r.target_id, r.target_id), status=status)
+
+    def _classify(self) -> dict:
+        """Sort the explicit relations in view into current claims and what
+        to hold loosely — shared by ``render()`` and the API views.
+
+        Current claims are the explicit relations in view except those that
+        evidence against them has brought below ``DOUBTED_BELIEF`` and those
+        with ``OUTVOTE_RATIO`` times less support than an opposing claim
+        ("outvoted") or another label for the same pair ("minority", "also
+        stated as").  ``contested`` lists ``(status, lead, lead_belief,
+        [(opposing, belief)])`` for the contested pairs among what is
+        shown, recomputed on the shown claims (``CONTEST_MARGIN``).
+        """
+        explicit = sorted((r for r in self.relations if r.is_explicit), key=lambda r: -r.probability)
+        # Doubted: evidence against it brought it below even odds (a low
+        # starting prior alone, e.g. ``related_to``, is not doubt).
+        doubted = [r for r in explicit if r.disconfirmation_count > 0 and r.probability < DOUBTED_BELIEF]
+
+        def support(r: RelationEdge) -> int:
+            return r.support
+
+        # Support against a claim about the same pair, stated OUTVOTE_RATIO
+        # times as often: an opposing claim ("outvoted"), or another label
+        # for the same ordered pair on the same axis ("also stated as") —
+        # both are how extraction noise looks; two well-stated labels are
+        # two claims and both stay.
+        outvoted: dict[str, tuple[RelationEdge, RelationEdge]] = {}
+        minority: dict[str, tuple[RelationEdge, RelationEdge]] = {}
+        for r in explicit:
+            for o in explicit:
+                if o.id == r.id or {o.source_id, o.target_id} != {r.source_id, r.target_id}:
+                    continue
+                if support(o) < OUTVOTE_RATIO * support(r):
+                    continue
+                if r.opposes(o.relation_type, o.semantic_relation):
+                    outvoted[r.id] = (r, o)
+                    break
+                same_way = o.source_id == r.source_id or not (r.is_directed and o.is_directed)
+                if (same_way and o.relation_type == r.relation_type
+                        and "generic_relation" not in (o.semantic_relation, r.semantic_relation)):
+                    minority[r.id] = (r, o)
+                    break
+        hidden = set(outvoted) | set(minority)
+        doubted = [r for r in doubted if r.id not in hidden]  # listed once, as outvoted / minority
+        doubted_ids = {r.id for r in doubted}
+        current = [r for r in explicit if r.id not in doubted_ids and r.id not in hidden]  # stable
+        rels = {r.id: r for r in (*self.relations, *self.other_contexts)}
+        contested: list[tuple[str, RelationEdge, float, list[tuple[RelationEdge, float]]]] = []
+        # Contested pairs among what is shown: the claims set aside above
+        # neither lead nor oppose here, and the status is recomputed on the
+        # shown claims (``CONTEST_MARGIN``, projection/metacognition.py).
+        for claim in self.epistemic.contested:
+            shown = [
+                (rels[rid], belief) for rid, _sem, belief in claim.claims
+                if rid in rels and rid not in hidden and rid not in doubted_ids
+            ]
+            if len(shown) < 2:
+                continue
+            lead, lead_belief = max(shown, key=lambda rb: (rb[1], rb[0].id))
+            opposing = [(r, b) for r, b in shown
+                        if r.id != lead.id and lead.opposes(r.relation_type, r.semantic_relation)]
+            if not opposing:
+                continue
+            margin = lead_belief - max(b for _, b in opposing)
+            status = "contested" if margin < CONTEST_MARGIN else "leaning"
+            contested.append((status, lead, lead_belief, opposing))
+        return {
+            "current": current, "doubted": doubted,
+            "outvoted": list(outvoted.values()), "minority": list(minority.values()),
+            "contested": contested, "tentative": self.epistemic.tentative_ids(),
+        }
+
+    def ignited_ids(self) -> list[str]:
+        """Concepts that crossed the ignition threshold in this view."""
+        return [cid for cid, trace in self.attention.items() if trace.ignited]
 
     def top_concepts(self, n: int = 5) -> list[ConceptNode]:
         ranked = sorted(
@@ -107,8 +535,127 @@ class Projection(BaseModel):
         )
         return ranked[:n]
 
-    def render(self) -> str:
-        """Render as LLM-prompt-ready markdown."""
+    def render(self, style: str = "compact") -> str:
+        """Render the view for an Agent's prompt.
+
+        ``"compact"`` (the default) states each claim in plain language
+        with its belief — ``api depends on db (belief 0.82)`` — and lists
+        the other concepts in view by name; ``"full"`` is the diagnostic
+        view (maturity, confidence, evidence, strengths, reinforcement
+        counts, attention traces).  In LongRun real readers answered 0.90
+        of the questions from the compact form and 0.57 from the full one
+        at the same token budget (``docs/eval/01-report.md``).
+        """
+        if style == "compact":
+            return self._render_compact()
+        if style != "full":
+            raise ValueError(f"unknown render style {style!r} (compact, full)")
+        return self._render_full()
+
+    def _display_names(self) -> dict[str, str]:
+        """One line per name; the sense is added where two share a name."""
+        senses = {c.id: c.representation_feature() for c in self.concepts}
+        senses.update({k: v for k, v in self.outside_senses.items() if k not in senses})
+        base = {**{k: _one_line(v) for k, v in self.outside_names.items()},
+                **{c.id: _one_line(c.name) for c in self.concepts}}
+        counts: dict[str, int] = {}
+        for name in base.values():
+            counts[name.lower()] = counts.get(name.lower(), 0) + 1
+        return {
+            cid: f"{name} ({senses[cid]})" if counts[name.lower()] > 1 and cid in senses else name
+            for cid, name in base.items()
+        }
+
+    def _render_compact(self) -> str:
+        """Claims first, then what else is in view, then what to discount.
+
+        Claim lines are the explicit relations in view, strongest belief
+        first, except those that evidence against them has brought below
+        ``DOUBTED_BELIEF`` and those with ``OUTVOTE_RATIO`` times less support
+        than an opposing claim or another label for the same pair;
+        co-occurrence edges assert nothing and only put their concepts under
+        "Also relevant".  Doubted, withdrawn, other-task and contested
+        claims and thin knowledge follow in labelled sections, so a reader
+        never takes them for current claims.
+        """
+        # Local import: the phrase table is a presentation concern of the
+        # relation schema, kept next to the specs it covers.
+        from world0.schemas.relation import relation_phrase
+
+        names = self._display_names()
+
+        def sentence(r: RelationEdge) -> str:
+            return f"{names.get(r.source_id, r.source_id)} {relation_phrase(r.semantic_relation)} " \
+                   f"{names.get(r.target_id, r.target_id)}"
+
+        def capped(edges: list[RelationEdge], line) -> list[str]:
+            out = [line(r) for r in edges[:COMPACT_SECTION_LIMIT]]
+            if len(edges) > COMPACT_SECTION_LIMIT:
+                out.append(f"- … and {len(edges) - COMPACT_SECTION_LIMIT} more")
+            return out
+
+        lines: list[str] = ["## Cognitive Context"]
+        if self.task:
+            lines.append(f"Context for: {_one_line(self.task)}")
+        if not self.concepts:
+            lines.append("No concepts in view.")
+            return "\n".join(lines)
+        parts = self._classify()
+        claims = parts["current"]
+        doubted = parts["doubted"]
+
+        def support(r: RelationEdge) -> int:
+            return r.support
+
+        mentioned: set[str] = set()
+        for r in claims:
+            lines.append(f"- {sentence(r)} (belief {r.probability:.2f})")
+            mentioned |= {r.source_id, r.target_id}
+        rest = [
+            names[c.id]
+            for c in sorted(self.concepts, key=lambda c: -self.activation_scores.get(c.id, 0.0))
+            if c.id not in mentioned
+        ]
+        if rest:
+            lines.append("Also relevant: " + ", ".join(rest) + ".")
+        described = [c for c in self.concepts if c.description.strip()]
+        if described:
+            lines.append("Definitions:")
+            lines.extend(f"- {names[c.id]}: {_one_line(c.description)}" for c in described)
+        if self.retracted:
+            lines.append("No longer holds:")
+            lines.extend(capped(self.retracted, lambda r: f"- {sentence(r)}"))
+        if self.other_contexts:
+            lines.append("Seen under other tasks:")
+
+            def other(r: RelationEdge) -> str:
+                tasks = ", ".join(sorted({_one_line(t) for t in r.claim_tasks if t.strip()})[:3])
+                return f"- {sentence(r)}" + (f" ({tasks})" if tasks else "")
+
+            lines.extend(capped(self.other_contexts, other))
+        loose: list[str] = []
+        for status, lead, lead_belief, opposing in parts["contested"]:
+            parts_txt = [f"{sentence(r)} ({b:.2f})" for r, b in opposing]
+            joiner = " vs " if status == "contested" else " over "
+            loose.append(f"- {status}: {sentence(lead)} ({lead_belief:.2f}){joiner}{' / '.join(parts_txt)}")
+        for r, o in parts["outvoted"]:
+            loose.append(f"- outvoted: {sentence(r)} ({support(r)} vs {support(o)} statements)")
+        for r in doubted:
+            loose.append(f"- doubted: {sentence(r)} (belief {r.probability:.2f})")
+        for r, o in parts["minority"]:
+            loose.append(f"- also stated as: {sentence(r)} ({support(r)} vs {support(o)} statements)")
+        tentative = [names[cid] for cid in parts["tentative"] if cid in names]
+        room = COMPACT_SECTION_LIMIT - (1 if tentative else 0)
+        if len(loose) > room:
+            loose[room - 1:] = [f"- … and {len(loose) - room + 1} more"]
+        if tentative:
+            loose.append(f"- thin evidence: {', '.join(tentative)}")
+        if loose:
+            lines.append("Hold loosely:")
+            lines.extend(loose)
+        return "\n".join(lines)
+
+    def _render_full(self) -> str:
         lines: list[str] = ["## Cognitive Context", ""]
 
         # Group by maturity
@@ -136,7 +683,8 @@ class Projection(BaseModel):
                 linked = f" Linked to: {', '.join(neighbors)}." if neighbors else ""
                 lines.append(
                     f"- **{c.representation()}** ({c.name}, {c.maturity.value}, "
-                    f"confidence: {c.confidence:.2f}){desc}{linked}"
+                    f"confidence: {c.confidence:.2f}, evidence: {c.evidence():.2f})"
+                    f"{desc}{linked}"
                 )
             lines.append("")
 
@@ -146,7 +694,8 @@ class Projection(BaseModel):
                 desc = f": {c.description}" if c.description else ""
                 lines.append(
                     f"- **{c.representation()}** ({c.name}, {c.maturity.value}, "
-                    f"confidence: {c.confidence:.2f}){desc}"
+                    f"confidence: {c.confidence:.2f}, evidence: {c.evidence():.2f})"
+                    f"{desc}"
                 )
             lines.append("")
 
@@ -155,23 +704,61 @@ class Projection(BaseModel):
             for c, s in emerging:
                 lines.append(
                     f"- **{c.representation()}** ({c.name}, {c.maturity.value}, "
-                    f"confidence: {c.confidence:.2f})"
+                    f"confidence: {c.confidence:.2f}, evidence: {c.evidence():.2f})"
                 )
             lines.append("")
 
         if self.relations:
             lines.append("### Key Relations")
             concept_names = {c.id: c.representation() for c in self.concepts}
-            for r in sorted(self.relations, key=lambda x: x.weight, reverse=True)[:10]:
+            # The engine orders relations by settled weight; keep its order
+            # (stored weights may be stale between reflects).
+            for r in self.relations[:10]:
                 src = concept_names.get(r.source_id, r.source_id)
                 tgt = concept_names.get(r.target_id, r.target_id)
                 lines.append(
                     f"- {src} → {r.semantic_relation} [{r.relation_type.value}] → {tgt} "
-                    f"(structural: {r.structural_strength:.2f}, "
+                    # Belief applies to claims; a co-occurrence edge
+                    # asserts nothing beyond "seen together".
+                    + (
+                        f"(belief: {r.probability:.2f}, "
+                        if r.is_explicit
+                        else "(co-occurrence, "
+                    )
+                    + f"structural: {r.structural_strength:.2f}, "
                     f"propagation: {r.propagation_strength:.2f}, "
                     f"reinforced {r.reinforcement_count}×)"
                 )
             lines.append("")
+
+        if self.retracted:
+            lines.append("### No Longer Holds")
+            names = {**self.outside_names, **{c.id: c.name for c in self.concepts}}
+            for r in self.retracted[:10]:
+                lines.append(
+                    f"- {names.get(r.source_id, r.source_id)} → {r.semantic_relation} → "
+                    f"{names.get(r.target_id, r.target_id)} (withdrawn)"
+                )
+            lines.append("")
+
+        if self.other_contexts:
+            lines.append("### Seen in Other Tasks")
+            names = {c.id: c.name for c in self.concepts}
+            for r in self.other_contexts[:10]:
+                tasks = ", ".join(sorted({t for t in (r.claim_tasks or r.task_history) if t})[:3])
+                lines.append(
+                    f"- {names.get(r.source_id, r.source_id)} → {r.semantic_relation} → "
+                    f"{names.get(r.target_id, r.target_id)} (under: {tasks})"
+                )
+            lines.append("")
+
+        epistemic_lines = self._render_epistemic()
+        if epistemic_lines:
+            lines.extend(epistemic_lines)
+
+        attention_lines = self._render_attention()
+        if attention_lines:
+            lines.extend(attention_lines)
 
         if self.task:
             lines.append(f"### Task Context")
@@ -179,6 +766,54 @@ class Projection(BaseModel):
             lines.append("")
 
         return "\n".join(lines)
+
+    def _render_attention(self) -> list[str]:
+        """One line per reached concept: where its activation came from."""
+        names = {c.id: c.name for c in self.concepts}
+        out: list[str] = []
+        for c in self.concepts:
+            trace = self.attention.get(c.id)
+            if trace is None or trace.kind == "seed":
+                continue
+            reasons = []
+            if trace.via in names:
+                reasons.append(f"via {trace.relation or 'relation'} from {names[trace.via]}")
+            if trace.task_named:
+                reasons.append("named by the task")
+            elif trace.task_history:
+                reasons.append("used in this task before")
+            if trace.in_focus:
+                reasons.append("still in focus")
+            elif trace.sustained:
+                reasons.append("next to the current focus")
+            if reasons:
+                out.append(f"- {c.name}: {'; '.join(reasons)}")
+        if not out:
+            return []
+        return ["### Why These Concepts", *out, ""]
+
+    def _render_epistemic(self) -> list[str]:
+        """What the Agent should hold loosely: contested and thin knowledge."""
+        names = {c.id: c.name for c in self.concepts}
+        rels = {r.id: r for r in self.relations}
+        out: list[str] = []
+        for claim in self.epistemic.contested:
+            parts = []
+            for rid, semantic, belief in claim.claims:
+                rel = rels.get(rid)
+                src = names.get(rel.source_id, "?") if rel else names.get(claim.source_id, "?")
+                tgt = names.get(rel.target_id, "?") if rel else names.get(claim.target_id, "?")
+                parts.append(f"{src} {semantic} {tgt} (belief {belief:.2f})")
+            if claim.status == "contested":
+                out.append(f"- Contested: {' vs '.join(parts)}")
+            else:
+                out.append(f"- Leaning: {' over '.join(parts)}")
+        tentative = [names[cid] for cid in self.epistemic.tentative_ids() if cid in names]
+        if tentative:
+            out.append(f"- Thin evidence (seen once or twice): {', '.join(tentative)}")
+        if not out:
+            return []
+        return ["### Epistemic Status", *out, ""]
 
     def _neighbor_names(self, concept_id: str) -> list[str]:
         names_map = {c.id: c.representation() for c in self.concepts}
@@ -193,12 +828,16 @@ class Projection(BaseModel):
 class ReflectResult(BaseModel):
     """Result of a reflect() cycle."""
 
+    api: str = API_VERSION
     decayed_concepts: list[str] = Field(default_factory=list)
     promoted_concepts: list[str] = Field(default_factory=list)
     demoted_concepts: list[str] = Field(default_factory=list)
     pruned_concepts: list[str] = Field(default_factory=list)
     decayed_relations: list[str] = Field(default_factory=list)
     pruned_relations: list[str] = Field(default_factory=list)
+    # Auto-discovered generic edges removed because their association no
+    # longer passes the Hebbian gate (dynamics/hebbian.py ``revalidate``).
+    stale_relations: list[str] = Field(default_factory=list)
     # Color-field dynamics (doc §29 Stage A observation layer).
     new_communities: list[str] = Field(default_factory=list)
     stable_communities: list[str] = Field(default_factory=list)
@@ -209,6 +848,10 @@ class ReflectResult(BaseModel):
 class WorldStatus(BaseModel):
     """Overview of the cognitive world's current state."""
 
+    api: str = API_VERSION
+    # Cognitive time: number of observations ingested so far (see
+    # ``schemas/clock.py``).  Decay and freshness are measured in ticks.
+    cognitive_tick: int = 0
     total_concepts: int = 0
     total_relations: int = 0
     by_maturity: dict[str, int] = Field(default_factory=dict)

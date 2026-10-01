@@ -311,6 +311,8 @@ class ColorDiffusionEngine:
                     continue
 
                 for rel in self._relations.for_concept(concept_id):
+                    if rel.is_retracted:
+                        continue
                     neighbor_id = rel.other_end(concept_id)
                     neighbor = self._concepts.get(neighbor_id) if neighbor_id else None
                     if not neighbor:

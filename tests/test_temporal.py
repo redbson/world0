@@ -1,9 +1,13 @@
-"""Temporal dimension tests — validates that time freshness affects
-activation propagation, projection selection, and overall cognitive
-behavior.
+"""Temporal dimension tests — validates that freshness in *cognitive time*
+affects activation propagation, projection selection, and overall
+cognitive behavior.
 
-Tests simulate time passage by manipulating last_activated and
-last_reinforced timestamps rather than actually waiting.
+World 0 measures time in observations (ticks of ``world.clock``), not in
+seconds.  Tests simulate time passage either by advancing the world clock
+(``world.clock.advance(n)`` — n observations pass without touching any
+concept) or by moving a single record's ``*_tick`` coordinate into the
+past.  Wall-clock time only contributes a slow drift term, which is
+negligible inside a test run.
 
 Sections:
   1. Temporal Relevance Unit Tests — ConceptNode / RelationEdge methods
@@ -16,19 +20,35 @@ Sections:
 
 from __future__ import annotations
 
-import math
 from datetime import datetime, timedelta, timezone
 
 import pytest
 
 from world0 import Observation, World
-from world0.schemas.concept import ConceptNode, Maturity
-from world0.schemas.relation import RelationEdge, RelationType
+from world0.schemas.concept import ConceptNode
+from world0.schemas.relation import RelationEdge
 
 
 @pytest.fixture
 def world(tmp_path):
     return World(store_path=tmp_path / ".world0")
+
+
+def _age_concept(world: World, name: str, ticks: int) -> ConceptNode:
+    """Move a concept's last activation ``ticks`` observations into the past."""
+    node = world.concepts.resolve(name)
+    node.last_activated_tick = world.clock.tick - ticks
+    node.last_decayed_tick = None
+    return node
+
+
+def _age_relations_to(world: World, hub_name: str, targets: set[str], ticks: int) -> None:
+    hub = world.concepts.resolve(hub_name)
+    for rel in world.relations.for_concept(hub.id):
+        other = world.concepts.get(rel.other_end(hub.id))
+        if other and other.name in targets:
+            rel.last_reinforced_tick = world.clock.tick - ticks
+            rel.last_decayed_tick = None
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -39,68 +59,53 @@ class TestTemporalRelevanceUnit:
     """Unit tests for temporal_relevance() on ConceptNode and RelationEdge."""
 
     def test_concept_just_activated_is_1(self):
-        node = ConceptNode(name="fresh")
-        node.last_activated = datetime.now(timezone.utc)
-        assert node.temporal_relevance() == pytest.approx(1.0, abs=1e-6)
+        node = ConceptNode(name="fresh", last_activated_tick=10)
+        assert node.temporal_relevance(now_tick=10) == pytest.approx(1.0, abs=1e-6)
 
     def test_concept_half_life_halves(self):
-        node = ConceptNode(name="aging")
-        node.last_activated = datetime.now(timezone.utc) - timedelta(hours=168)
-        tr = node.temporal_relevance(half_life_hours=168.0)
+        node = ConceptNode(name="aging", last_activated_tick=0)
+        tr = node.temporal_relevance(half_life=168.0, now_tick=168)
         assert abs(tr - 0.5) < 0.02, f"Expected ~0.5, got {tr:.4f}"
 
     def test_concept_two_half_lives(self):
-        node = ConceptNode(name="old")
-        node.last_activated = datetime.now(timezone.utc) - timedelta(hours=336)
-        tr = node.temporal_relevance(half_life_hours=168.0)
+        node = ConceptNode(name="old", last_activated_tick=0)
+        tr = node.temporal_relevance(half_life=168.0, now_tick=336)
         assert abs(tr - 0.25) < 0.02, f"Expected ~0.25, got {tr:.4f}"
 
     def test_concept_very_old_hits_floor(self):
-        node = ConceptNode(name="ancient")
-        node.last_activated = datetime.now(timezone.utc) - timedelta(days=365)
-        tr = node.temporal_relevance(half_life_hours=168.0)
+        node = ConceptNode(name="ancient", last_activated_tick=0)
+        tr = node.temporal_relevance(half_life=168.0, now_tick=365 * 24)
         assert tr == 0.1, f"Expected floor 0.1, got {tr:.4f}"
 
     def test_concept_temporal_monotonic_decrease(self):
         """Temporal relevance should decrease with age."""
-        base = datetime.now(timezone.utc)
         prev = 1.0
-        for hours in [0, 24, 72, 168, 336, 720]:
-            node = ConceptNode(name="mono")
-            node.last_activated = base - timedelta(hours=hours)
-            tr = node.temporal_relevance()
-            assert tr <= prev, f"Not monotonic at {hours}h: {tr} > {prev}"
+        for ticks in [0, 24, 72, 168, 336, 720]:
+            node = ConceptNode(name="mono", last_activated_tick=0)
+            tr = node.temporal_relevance(now_tick=ticks)
+            assert tr <= prev, f"Not monotonic at {ticks} ticks: {tr} > {prev}"
             prev = tr
 
     def test_relation_just_reinforced_is_1(self):
-        edge = RelationEdge(source_id="a", target_id="b")
-        edge.last_reinforced = datetime.now(timezone.utc)
-        assert edge.temporal_relevance() == pytest.approx(1.0, abs=1e-6)
+        edge = RelationEdge(source_id="a", target_id="b", last_reinforced_tick=5)
+        assert edge.temporal_relevance(now_tick=5) == pytest.approx(1.0, abs=1e-6)
 
     def test_relation_half_life_halves(self):
-        edge = RelationEdge(source_id="a", target_id="b")
-        edge.last_reinforced = datetime.now(timezone.utc) - timedelta(hours=72)
+        edge = RelationEdge(source_id="a", target_id="b", last_reinforced_tick=0)
         edge.reinforcement_count = 0
-        tr = edge.temporal_relevance(half_life_hours=72.0)
+        tr = edge.temporal_relevance(half_life=72.0, now_tick=72)
         assert abs(tr - 0.5) < 0.02, f"Expected ~0.5, got {tr:.4f}"
 
     def test_relation_reinforcement_extends_half_life(self):
         """More reinforced relations should have higher temporal relevance
         at the same age, because their effective half-life is longer."""
-        base = datetime.now(timezone.utc) - timedelta(hours=72)
-
-        # Not reinforced
-        e0 = RelationEdge(source_id="a", target_id="b")
-        e0.last_reinforced = base
+        e0 = RelationEdge(source_id="a", target_id="b", last_reinforced_tick=0)
         e0.reinforcement_count = 0
-
-        # Heavily reinforced
-        e10 = RelationEdge(source_id="a", target_id="b")
-        e10.last_reinforced = base
+        e10 = RelationEdge(source_id="a", target_id="b", last_reinforced_tick=0)
         e10.reinforcement_count = 10
 
-        tr0 = e0.temporal_relevance(half_life_hours=72.0)
-        tr10 = e10.temporal_relevance(half_life_hours=72.0)
+        tr0 = e0.temporal_relevance(half_life=72.0, now_tick=72)
+        tr10 = e10.temporal_relevance(half_life=72.0, now_tick=72)
 
         assert tr10 > tr0, (
             f"Reinforced relation should stay fresher: "
@@ -108,11 +113,20 @@ class TestTemporalRelevanceUnit:
         )
 
     def test_relation_very_old_hits_floor(self):
-        edge = RelationEdge(source_id="a", target_id="b")
-        edge.last_reinforced = datetime.now(timezone.utc) - timedelta(days=365)
+        edge = RelationEdge(source_id="a", target_id="b", last_reinforced_tick=0)
         edge.reinforcement_count = 0
-        tr = edge.temporal_relevance()
+        tr = edge.temporal_relevance(now_tick=365 * 24)
         assert tr == 0.15, f"Expected floor 0.15, got {tr:.4f}"
+
+    def test_wall_clock_is_only_a_slow_drift(self):
+        """Without any observations, a month of real time ages a concept a
+        little (drift), far less than a month's worth of observations."""
+        node = ConceptNode(name="dormant", last_activated_tick=0)
+        node.last_activated = datetime.now(timezone.utc) - timedelta(days=30)
+        drift_only = node.temporal_relevance(now_tick=0)
+        assert 0.5 < drift_only < 1.0
+        active = node.temporal_relevance(now_tick=720)
+        assert active < drift_only
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -125,17 +139,7 @@ class TestActivationTimeDimension:
     def test_fresh_neighbor_scores_higher_than_stale(self, world):
         """A recently activated neighbor should receive a higher activation
         score than one activated long ago, all else being equal."""
-        # Create two parallel paths from seed
-        world.ingest(Observation(
-            concepts=["seed", "fresh_target", "stale_target"],
-            relations=[
-                ("seed", "fresh_target", "depends_on"),
-                ("seed", "stale_target", "depends_on"),
-            ],
-            task="test", source="bench",
-        ))
-        # Reinforce both equally
-        for _ in range(10):
+        for _ in range(11):
             world.ingest(Observation(
                 concepts=["seed", "fresh_target", "stale_target"],
                 relations=[
@@ -145,15 +149,9 @@ class TestActivationTimeDimension:
                 task="test", source="bench",
             ))
 
-        # Age stale_target
-        stale = world.concepts.resolve("stale_target")
-        stale.last_activated = datetime.now(timezone.utc) - timedelta(days=30)
-
-        # Also age the relation to stale_target
-        seed = world.concepts.resolve("seed")
-        for rel in world.relations.for_concept(seed.id):
-            if rel.other_end(seed.id) == stale.id:
-                rel.last_reinforced = datetime.now(timezone.utc) - timedelta(days=30)
+        # Age stale_target and its relation by 720 observations
+        stale = _age_concept(world, "stale_target", 720)
+        _age_relations_to(world, "seed", {"stale_target"}, 720)
 
         proj = world.project(["seed"], task="test")
         scores = proj.activation_scores
@@ -170,21 +168,14 @@ class TestActivationTimeDimension:
     def test_stale_concept_still_reachable(self, world):
         """Even a very old concept should still appear in projections
         thanks to the temporal floor (0.1)."""
-        world.ingest(Observation(
-            concepts=["root", "ancient"],
-            relations=[("root", "ancient", "depends_on")],
-            task="test", source="bench",
-        ))
-        for _ in range(10):
+        for _ in range(11):
             world.ingest(Observation(
                 concepts=["root", "ancient"],
                 relations=[("root", "ancient", "depends_on")],
                 task="test", source="bench",
             ))
 
-        # Age ancient concept to 6 months ago
-        ancient = world.concepts.resolve("ancient")
-        ancient.last_activated = datetime.now(timezone.utc) - timedelta(days=180)
+        _age_concept(world, "ancient", 4320)
 
         proj = world.project(["root"], task="test")
         names = {c.name for c in proj.concepts}
@@ -196,21 +187,15 @@ class TestActivationTimeDimension:
     def test_recently_reactivated_concept_recovers(self, world):
         """A stale concept that gets reactivated should recover its
         temporal relevance immediately."""
-        world.ingest(Observation(
-            concepts=["node_a", "node_b"],
-            relations=[("node_a", "node_b", "depends_on")],
-            task="test", source="bench",
-        ))
-        for _ in range(5):
+        for _ in range(6):
             world.ingest(Observation(
                 concepts=["node_a", "node_b"],
                 relations=[("node_a", "node_b", "depends_on")],
                 task="test", source="bench",
             ))
 
-        b = world.concepts.resolve("node_b")
-        b.last_activated = datetime.now(timezone.utc) - timedelta(days=60)
-        tr_before = b.temporal_relevance()
+        b = _age_concept(world, "node_b", 1440)
+        tr_before = b.temporal_relevance(now_tick=world.clock.tick)
 
         # Reactivate
         world.ingest(Observation(
@@ -218,7 +203,7 @@ class TestActivationTimeDimension:
         ))
 
         b = world.concepts.resolve("node_b")
-        tr_after = b.temporal_relevance()
+        tr_after = b.temporal_relevance(now_tick=world.clock.tick)
 
         assert tr_after > tr_before, (
             f"Reactivation should restore freshness: "
@@ -238,7 +223,6 @@ class TestProjectionTemporalPreference:
 
     def test_fresh_concepts_ranked_higher(self, world):
         """Among equally relevant concepts, fresh ones should rank higher."""
-        # Build a hub with many spokes
         spokes = [f"spoke_{i}" for i in range(8)]
         for _ in range(10):
             world.ingest(Observation(
@@ -249,13 +233,11 @@ class TestProjectionTemporalPreference:
 
         # Make half the spokes stale
         for i in range(4):
-            node = world.concepts.resolve(f"spoke_{i}")
-            node.last_activated = datetime.now(timezone.utc) - timedelta(days=60)
+            _age_concept(world, f"spoke_{i}", 1440)
 
         proj = world.project(["hub"], task="test", max_concepts=6)
         top_names = [c.name for c in proj.top_concepts(6) if c.name != "hub"]
 
-        # Fresh spokes (4-7) should tend to appear before stale spokes (0-3)
         fresh_spokes = {f"spoke_{i}" for i in range(4, 8)}
         stale_spokes = {f"spoke_{i}" for i in range(4)}
 
@@ -271,7 +253,6 @@ class TestProjectionTemporalPreference:
     def test_projection_shifts_with_time(self, world):
         """After aging domain A and refreshing domain B, projection
         from a bridge concept should shift toward B."""
-        # Domain A
         for _ in range(10):
             world.ingest(Observation(
                 concepts=["bridge", "domain_a_1", "domain_a_2"],
@@ -281,7 +262,6 @@ class TestProjectionTemporalPreference:
                 ],
                 task="domain_a", source="bench",
             ))
-        # Domain B
         for _ in range(10):
             world.ingest(Observation(
                 concepts=["bridge", "domain_b_1", "domain_b_2"],
@@ -292,22 +272,13 @@ class TestProjectionTemporalPreference:
                 task="domain_b", source="bench",
             ))
 
-        # Age domain A
         for name in ["domain_a_1", "domain_a_2"]:
-            node = world.concepts.resolve(name)
-            node.last_activated = datetime.now(timezone.utc) - timedelta(days=30)
-        # Age relations to domain A
-        bridge = world.concepts.resolve("bridge")
-        for rel in world.relations.for_concept(bridge.id):
-            other = rel.other_end(bridge.id)
-            node = world.concepts.get(other)
-            if node and node.name.startswith("domain_a"):
-                rel.last_reinforced = datetime.now(timezone.utc) - timedelta(days=30)
+            _age_concept(world, name, 720)
+        _age_relations_to(world, "bridge", {"domain_a_1", "domain_a_2"}, 720)
 
         proj = world.project(["bridge"], task="", max_concepts=4)
         scores = proj.activation_scores
 
-        # Domain B should have higher scores than domain A
         a1 = world.concepts.resolve("domain_a_1")
         b1 = world.concepts.resolve("domain_b_1")
 
@@ -338,17 +309,8 @@ class TestMultiSessionTemporalEvolution:
                 task="backend", source="session_1",
             ))
 
-        # Simulate 2 weeks passing
-        for name in ["flask", "sqlalchemy"]:
-            node = world.concepts.resolve(name)
-            node.last_activated = datetime.now(timezone.utc) - timedelta(days=14)
-        # Age relations
-        python_node = world.concepts.resolve("python")
-        for rel in world.relations.for_concept(python_node.id):
-            other = rel.other_end(python_node.id)
-            n = world.concepts.get(other)
-            if n and n.name in ("flask", "sqlalchemy"):
-                rel.last_reinforced = datetime.now(timezone.utc) - timedelta(days=14)
+        # 336 observations pass on other topics
+        world.clock.advance(336)
 
         # Session 2 (recent): ML
         for _ in range(10):
@@ -381,24 +343,24 @@ class TestMultiSessionTemporalEvolution:
             ))
 
         node = world.concepts.resolve("temporal_concept")
-        initial_tr = node.temporal_relevance()
+        initial_tr = node.temporal_relevance(now_tick=world.clock.tick)
         initial_conf = node.confidence
 
-        # Simulate time + reflect
-        node.last_activated = datetime.now(timezone.utc) - timedelta(hours=48)
+        # 48 observations pass, then reflect
+        world.clock.advance(48)
         world.reflect()
 
         node = world.concepts.resolve("temporal_concept")
-        if node:
-            later_tr = node.temporal_relevance()
-            later_conf = node.confidence
+        assert node is not None
+        later_tr = node.temporal_relevance(now_tick=world.clock.tick)
+        later_conf = node.confidence
 
-            assert later_tr < initial_tr, (
-                f"Temporal relevance should decrease: {initial_tr:.4f} → {later_tr:.4f}"
-            )
-            assert later_conf < initial_conf, (
-                f"Confidence should decay: {initial_conf:.4f} → {later_conf:.4f}"
-            )
+        assert later_tr < initial_tr, (
+            f"Temporal relevance should decrease: {initial_tr:.4f} → {later_tr:.4f}"
+        )
+        assert later_conf < initial_conf, (
+            f"Confidence should decay: {initial_conf:.4f} → {later_conf:.4f}"
+        )
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -411,7 +373,6 @@ class TestTemporalTaskInteraction:
     def test_fresh_and_task_aligned_wins(self, world):
         """A concept that is both fresh and task-aligned should dominate
         one that is only task-aligned but stale."""
-        # Build world with two task-aligned concepts
         for _ in range(10):
             world.ingest(Observation(
                 concepts=["seed", "fresh_aligned", "stale_aligned"],
@@ -422,9 +383,7 @@ class TestTemporalTaskInteraction:
                 task="target_task", source="bench",
             ))
 
-        # Age one of them
-        stale = world.concepts.resolve("stale_aligned")
-        stale.last_activated = datetime.now(timezone.utc) - timedelta(days=30)
+        stale = _age_concept(world, "stale_aligned", 720)
 
         proj = world.project(["seed"], task="target_task")
         scores = proj.activation_scores
@@ -454,9 +413,7 @@ class TestTemporalTaskInteraction:
                 task="other_task", source="bench",
             ))
 
-        # Age the aligned concept
-        aligned = world.concepts.resolve("aligned_old")
-        aligned.last_activated = datetime.now(timezone.utc) - timedelta(days=14)
+        aligned = _age_concept(world, "aligned_old", 336)
 
         proj = world.project(["hub"], task="special_task")
         scores = proj.activation_scores
@@ -465,7 +422,6 @@ class TestTemporalTaskInteraction:
         aligned_score = scores.get(aligned.id, 0)
         unaligned_score = scores.get(unaligned.id, 0)
 
-        # Both should be reachable — temporal and task factors compete
         assert aligned_score > 0, "Stale but aligned should still be reachable"
         assert unaligned_score > 0, "Fresh but unaligned should still be reachable"
 
@@ -479,49 +435,45 @@ class TestTemporalEdgeCases:
 
     def test_zero_half_life_returns_1(self):
         """Half-life of 0 should return 1.0 (no decay)."""
-        node = ConceptNode(name="test")
-        node.last_activated = datetime.now(timezone.utc) - timedelta(hours=100)
-        assert node.temporal_relevance(half_life_hours=0.0) == 1.0
+        node = ConceptNode(name="test", last_activated_tick=0)
+        assert node.temporal_relevance(half_life=0.0, now_tick=100) == 1.0
 
     def test_negative_half_life_returns_1(self):
-        node = ConceptNode(name="test")
-        node.last_activated = datetime.now(timezone.utc) - timedelta(hours=100)
-        assert node.temporal_relevance(half_life_hours=-10.0) == 1.0
+        node = ConceptNode(name="test", last_activated_tick=0)
+        assert node.temporal_relevance(half_life=-10.0, now_tick=100) == 1.0
 
     def test_future_timestamp_returns_1(self):
-        """A concept activated in the 'future' (clock skew) should return 1.0."""
-        node = ConceptNode(name="future")
+        """A concept stamped in the 'future' (clock reset / merged store)
+        should return 1.0 on both coordinates."""
+        node = ConceptNode(name="future", last_activated_tick=100)
         node.last_activated = datetime.now(timezone.utc) + timedelta(hours=1)
-        assert node.temporal_relevance() == 1.0
+        assert node.temporal_relevance(now_tick=50) == 1.0
 
     def test_temporal_floor_guarantees_minimum(self):
         """Even at extreme age, temporal relevance never goes below floor."""
-        node = ConceptNode(name="ancient")
-        node.last_activated = datetime.now(timezone.utc) - timedelta(days=3650)
-        tr = node.temporal_relevance()
-        assert tr == 0.1
+        node = ConceptNode(name="ancient", last_activated_tick=0)
+        assert node.temporal_relevance(now_tick=3650 * 24) == 0.1
 
-        edge = RelationEdge(source_id="a", target_id="b")
-        edge.last_reinforced = datetime.now(timezone.utc) - timedelta(days=3650)
+        edge = RelationEdge(source_id="a", target_id="b", last_reinforced_tick=0)
         edge.reinforcement_count = 0
-        tr_rel = edge.temporal_relevance()
-        assert tr_rel == 0.15
+        assert edge.temporal_relevance(now_tick=3650 * 24) == 0.15
 
     def test_temporal_relevance_is_serializable(self, tmp_path):
-        """Temporal relevance should work correctly after save/load."""
+        """Temporal relevance (and the clock) should survive save/load."""
         store = tmp_path / ".w0"
         w1 = World(store_path=store)
         w1.ingest(Observation(concepts=["persist_test"], source="bench"))
         node = w1.concepts.resolve("persist_test")
-        tr1 = node.temporal_relevance()
+        tr1 = node.temporal_relevance(now_tick=w1.clock.tick)
+        tick1 = w1.clock.tick
         w1.concepts.save_all()
         del w1
 
         w2 = World(store_path=store)
+        assert w2.clock.tick == tick1
         node2 = w2.concepts.resolve("persist_test")
-        tr2 = node2.temporal_relevance()
+        tr2 = node2.temporal_relevance(now_tick=w2.clock.tick)
 
-        # Should be very close (only microseconds passed during save/load)
         assert abs(tr1 - tr2) < 0.01
 
 
@@ -534,7 +486,6 @@ class TestTemporalReport:
 
     def test_temporal_dimension_report(self, world, capsys):
         """Measure temporal effects across different aging scenarios."""
-        # Build world
         concepts_fresh = ["fresh_a", "fresh_b", "fresh_c"]
         concepts_medium = ["med_a", "med_b", "med_c"]
         concepts_stale = ["stale_a", "stale_b", "stale_c"]
@@ -547,23 +498,12 @@ class TestTemporalReport:
                 task="test", source="bench",
             ))
 
-        # Age groups
         for name in concepts_medium:
-            node = world.concepts.resolve(name)
-            node.last_activated = datetime.now(timezone.utc) - timedelta(days=7)
+            _age_concept(world, name, 168)
         for name in concepts_stale:
-            node = world.concepts.resolve(name)
-            node.last_activated = datetime.now(timezone.utc) - timedelta(days=60)
-
-        # Also age relations to match
-        hub = world.concepts.resolve("hub")
-        for rel in world.relations.for_concept(hub.id):
-            other_id = rel.other_end(hub.id)
-            other = world.concepts.get(other_id)
-            if other and other.name in concepts_medium:
-                rel.last_reinforced = datetime.now(timezone.utc) - timedelta(days=7)
-            elif other and other.name in concepts_stale:
-                rel.last_reinforced = datetime.now(timezone.utc) - timedelta(days=60)
+            _age_concept(world, name, 1440)
+        _age_relations_to(world, "hub", set(concepts_medium), 168)
+        _age_relations_to(world, "hub", set(concepts_stale), 1440)
 
         proj = world.project(["hub"], task="test", max_concepts=12)
         scores = proj.activation_scores
@@ -576,14 +516,14 @@ class TestTemporalReport:
         report += "║ Concept         Age        TR      ActivScore  InProj    ║\n"
         report += "╠════════════════════════════════════════════════════════════╣\n"
 
-        for group_name, group, age_label in [
-            ("Fresh", concepts_fresh, "0 days"),
-            ("Medium", concepts_medium, "7 days"),
-            ("Stale", concepts_stale, "60 days"),
+        for group, age_label in [
+            (concepts_fresh, "0 obs"),
+            (concepts_medium, "168 obs"),
+            (concepts_stale, "1440 obs"),
         ]:
             for name in group:
                 node = world.concepts.resolve(name)
-                tr = node.temporal_relevance()
+                tr = node.temporal_relevance(now_tick=world.clock.tick)
                 score = scores.get(node.id, 0)
                 in_proj = "YES" if name in proj_names else "NO"
                 report += (
@@ -591,14 +531,13 @@ class TestTemporalReport:
                     f"{score:>8.4f}    {in_proj:3s}      ║\n"
                 )
 
-        # Summary
         fresh_scores = [scores.get(world.concepts.resolve(n).id, 0) for n in concepts_fresh]
         med_scores = [scores.get(world.concepts.resolve(n).id, 0) for n in concepts_medium]
         stale_scores = [scores.get(world.concepts.resolve(n).id, 0) for n in concepts_stale]
 
-        avg_fresh = sum(fresh_scores) / len(fresh_scores) if fresh_scores else 0
-        avg_med = sum(med_scores) / len(med_scores) if med_scores else 0
-        avg_stale = sum(stale_scores) / len(stale_scores) if stale_scores else 0
+        avg_fresh = sum(fresh_scores) / len(fresh_scores)
+        avg_med = sum(med_scores) / len(med_scores)
+        avg_stale = sum(stale_scores) / len(stale_scores)
 
         report += "╠════════════════════════════════════════════════════════════╣\n"
         report += f"║ Avg score  Fresh: {avg_fresh:.4f}  Med: {avg_med:.4f}  Stale: {avg_stale:.4f}   ║\n"
@@ -606,7 +545,6 @@ class TestTemporalReport:
         report += "╚════════════════════════════════════════════════════════════╝\n"
         print(report)
 
-        # Assertions
         assert avg_fresh > avg_med > avg_stale, (
             f"Expected fresh > medium > stale: "
             f"{avg_fresh:.4f} > {avg_med:.4f} > {avg_stale:.4f}"

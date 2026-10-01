@@ -122,10 +122,10 @@ The minimal loop:
 
 1. `ingest` — 输入观察
 2. `project` — 为任务生成局部投影
-3. `reflect` — 任务结束后做巩固、衰减和修剪
+3. `reflect` — 任务结束后做巩固（社群、色场、物理删除）；衰减与成熟度在每次事件与读取时按认知时间结算，不等 reflect
 1. `ingest` — feed an observation in
 2. `project` — produce a task-local projection
-3. `reflect` — consolidate, decay, and prune after the task
+3. `reflect` — consolidate after the task (communities, colour, physical deletion); decay and maturity settle in cognitive time at every event and read, not at reflect
 
 ### 4.1 Python API
 
@@ -169,7 +169,8 @@ print(reflect_result.promoted_concepts)
 | `relations` | `list[tuple[src, tgt, type]]` | 显式关系三元组；type 可用枚举值或字符串 |
 | `descriptions` | `dict[str, str]` | 可选的概念描述 |
 | `weakened` | `list[str]` | 负向证据：本次任务里被证伪/不相关的概念 |
-| `contradicted_relations` | `list[tuple]` | 负向证据：未成立的关系 |
+| `contradicted_relations` | `list[tuple]` | 负向证据：未成立的关系（只作用于已有的同一主张；对没人陈述过的关系的否定不改变任何东西） |
+| `retracted_relations` | `list[tuple]` | 撤回：曾经成立、现在不再成立的关系（信念不变，退出当前视图，列在 "No longer holds"） |
 | `domain` | `str` | 领域标签，驱动色彩场扩散 |
 | `task` | `str` | 任务上下文 |
 | `source` | `str` | 来源标识（会话、工单、文档名等） |
@@ -182,6 +183,11 @@ Positive + negative channels: `concepts`/`relations` give positive evidence; `we
 ---
 
 ## 5. 核心 API / Core API
+
+> 长期稳定的统一接口（动词表、数据形状、四个入口的映射、稳定性分级）见 [`world0-api.md`](world0-api.md)。
+> 0.4 的第一步已实现：`from world0 import Statement, ConceptCard, Claim`；`Observation(statements=[Statement("api", "depends_on", "db")],
+> withdrawals=[…], denials=[…], cards=[…])`；`projection.cards / claims / no_longer_holds / other_tasks / hold_loosely / why`；
+> `world.card(name)`、`world.claims(name, task=…)`、`world.find(text)`；`world.state(...)` / `withdraw(...)` / `deny(...)` 是 `ingest` 的拼写。
 
 ### `World(store_path=".world0", llm=None)`
 
@@ -211,7 +217,7 @@ Passing `llm=...` is what enables `ingest_text()`.
 - updates per-concept domain color field
 - facade owns the flush boundary — pipelines never persist
 
-返回 `IngestResult`：`new_concepts`、`reinforced_concepts`、`weakened_concepts`、`new_relations`、`reinforced_relations`、`weakened_relations`、`hebbian_relations`。
+返回 `IngestResult`：`new_concepts`、`reinforced_concepts`、`weakened_concepts`、`new_relations`、`reinforced_relations`、`weakened_relations`、`retracted_relations`（被撤回的主张）、`hebbian_relations`、`stale_relations`（本次事件上被再验证删除的共现边）、`prediction`（摄入前的预测误差）。
 
 ### `World.ingest_text(text, *, task="", source="") -> IngestResult`
 
@@ -230,9 +236,9 @@ Uses the configured LLM provider to extract an `Observation` from raw text, then
 - filters via `ProjectionEngine` (MMR)
 - returns a `Projection`
 
-`Projection.render()` 产出可直接注入 prompt 的 Markdown：分区为 *Core Understanding / Active Concepts / Emerging Concepts / Key Relations / Task Context*。`Projection.top_concepts(n)` 返回按激活分排序的前 N 个概念。
+`Projection.render()` 默认产出紧凑的提示词形式：当前主张逐条写成自然语言并带信念（`api depends on db (belief 0.82)`），随后是 *Also relevant*（视野中的其他概念）、*Definitions*（概念卡描述）、*No longer holds*（已撤回的主张）、*Seen under other tasks*（其他任务下的主张）、*Hold loosely*（有争议、被否证到低于五成、证据单薄）。`render(style="full")` 是诊断视图，分区为 *Core Understanding / Active Concepts / Emerging Concepts / Key Relations / … / Task Context*。`Projection.top_concepts(n)` 返回按激活分排序的前 N 个概念。
 
-`Projection.render()` produces prompt-ready Markdown grouped into *Core Understanding / Active Concepts / Emerging Concepts / Key Relations / Task Context*. `Projection.top_concepts(n)` returns the top-N concepts by activation score.
+`Projection.render()` produces the compact prompt form by default: each current claim as a sentence with its belief (`api depends on db (belief 0.82)`), then *Also relevant* (other concepts in view), *Definitions* (concept-card descriptions), *No longer holds* (withdrawn claims), *Seen under other tasks* and *Hold loosely* (contested, disconfirmed below even odds, thin evidence). `render(style="full")` is the diagnostic view grouped into *Core Understanding / Active Concepts / Emerging Concepts / Key Relations / … / Task Context*. `Projection.top_concepts(n)` returns the top-N concepts by activation score.
 
 ### `World.reflect() -> ReflectResult`
 
@@ -243,15 +249,15 @@ Five-stage pipeline:
 1. 概念衰减 + 关系衰减
 2. 社区检测与更新
 3. 色彩场 fade → 由社区重新播种 → settle
-4. 生命周期评估（成熟度升降）
+4. 生命周期追赶评估（成熟度晋升在激活 / 连接事件上已经发生，这里只补上经由其他途径变更的记录；不降级，褪色由衰减负责）
 5. 关系修剪 → 概念修剪
 1. decay concepts + decay relations
 2. detect and update communities
 3. color-field fade → reseed from communities → settle
-4. lifecycle evaluation (maturity up/down)
+4. lifecycle catch-up (promotion already happens at the activation / connection event; this only covers records changed some other way; never demotes — fading is decay's job)
 5. prune relations → prune concepts
 
-`ReflectResult` 包含：`decayed_*`、`promoted_concepts`、`demoted_concepts`、`pruned_*`、`new_communities`、`stable_communities`、`pruned_communities`、`color_sources`。
+`ReflectResult` 包含：`decayed_*`、`promoted_concepts`、`demoted_concepts`、`pruned_*`、`stale_relations`（后备再验证删除的共现边，普通的流之后为空）、`new_communities`、`stable_communities`、`pruned_communities`、`color_sources`。
 
 建议在任务结束或阶段切换时调用，不要每轮交互都 reflect。
 
@@ -289,13 +295,22 @@ Identity operations flush immediately, matching `ingest`/`reflect` semantics.
 `relations=[(src, tgt, type)]` 里 `type` 支持下列枚举（字符串/枚举值均可）：
 
 ```
-contains · part_of · depends_on · supports · contrasts ·
+contains · part_of · depends_on · supports · contrasts · contrast · conflict ·
 similar_to · activates · precedes · derived_from · related_to
 ```
 
 `related_to` 是默认/回退类型。Agent 后续可用 `RelationManager.refine_type()` 细化类型。
+两个方向约定：`(wheel, car, "part_of")` 与 `(car, wheel, "contains")` 是同一条 inclusion 关系，
+存储和渲染都是 "car contains wheel"；`contrasts` / `contrast` 是 negative 轴上最弱的主张
+（"值得区分，但不冲突"），`conflict` 才是冲突。对比的另一端会出现在投影里（以对比的强度），
+但激活不会穿过它继续扩散。
 
 `related_to` is the default / fallback. Agents can refine types later via `RelationManager.refine_type()`.
+Two conventions: `part_of` is inclusion seen from the part — `(wheel, car, "part_of")` is stored and
+rendered as "car contains wheel"; `contrasts` / `contrast` is the weakest negative-axis claim
+("worth keeping apart, not in conflict"), `conflict` is the strong one.  The partner of a stated
+contrast is visible in a projection at the strength of the contrast, but activation does not spread
+on through it.
 
 ---
 
@@ -337,6 +352,25 @@ Environment variables:
 ---
 
 ## 8. CLI 使用 / CLI Usage
+
+### 8.0 `world0` — 统一 API 的命令行入口 / the unified API on the command line
+
+`pip install -e .` 之后有两个命令：`world0`（认知层本身，`docs/world0-api.md` §5 的动词）和 `pkm`（Agent 壳：会话、prompt、skill、MCP 客户端）。
+
+```bash
+world0 --store .world0 state api depends_on db --task backend     # 一条陈述（= ingest 一条观察）
+world0 ingest obs.json                                           # 完整观察（statements / withdrawals / denials / cards）
+cat obs.json | world0 ingest -
+world0 project api db --task backend                             # 打印可直接放进提示词的渲染
+world0 project api --task backend --json                         # 与 HTTP /v1/project 返回体相同的 JSON
+world0 card api · world0 claims api --task backend · world0 find auth · world0 status · world0 reflect --light
+world0 withdraw api conflict cache --task backend · world0 deny api conflict cache
+world0 merge <keeper> <absorbed> · world0 split api "api v2" --alias v2 · world0 weaken cache
+```
+
+出错时退出码 1，`--json` 下输出 `{"api": "world0/1", "error": {"code": "...", "message": "..."}}`。
+同一组操作在 HTTP（`/v1/<op>`，见 §9）和 MCP（`python -m world0.agents.mcp.server --store .world0`，工具名 `world0_<op>`）上同名同形。
+
 
 安装后可用 `pkm` 命令。默认存储目录是 `~/.pkm_world`，默认 provider 是 `anthropic`。
 
@@ -389,6 +423,11 @@ Running `pkm` without a subcommand enters the interactive terminal.
 ---
 
 ## 9. Web / GUI
+
+> 认知层的 HTTP 接口在 `/v1/*`（`world0.http.v1_router`，随 `pkm-web` 一起挂载；`world0.http.create_app(world)` 可单独起一个只有 `/v1` 的服务）：
+> `POST /v1/ingest`、`POST /v1/project`、`GET /v1/card/{name}`、`GET /v1/claims/{name}?task=`、`GET /v1/find?q=`、`GET /v1/status`、
+> `POST /v1/reflect`、`POST /v1/merge|split|weaken|state|withdraw|deny`；`GET /v1` 列出操作。下面的 `/api/*` 是 Agent 壳的路由。
+
 
 浏览器版：
 
@@ -536,9 +575,9 @@ Long-running agents:
 
 **`ingest_text()` fails?** No `llm=...` passed, provider extra not installed, or API key missing.
 
-**为什么 `reflect` 要显式调用？** 把“输入”和“巩固”拆开。这样每次输入不会立刻触发衰减和修剪，避免行为抖动，也更贴近批次式任务节奏。
+**为什么 `reflect` 要显式调用？** 把“输入”和“巩固”拆开。衰减、成熟度、撤回与再验证都在事件与读取时按认知时间结算（世界的状态是观察流的函数，与 reflect 何时运行无关）；reflect 只做重的一遍：社群、色场、已死对象的物理删除。所以它可以按批次节奏调用。
 
-**Why is `reflect` explicit?** It separates observation ingestion from consolidation — keeps every input from triggering decay and pruning, reduces jitter, matches batch-oriented task rhythms.
+**Why is `reflect` explicit?** It separates observation ingestion from consolidation. Decay, maturity, withdrawal and revalidation settle in cognitive time at every event and read (the world's state is a function of the observation stream, whatever the reflect schedule); reflect only runs the heavy passes — communities, colour, physical deletion of dead objects — so it can follow a batch rhythm.
 
 **能不能完全关掉色彩场和社区？** 可以。继承 `World` 后覆盖 `self._color_diffusion` / `self._communities` 为 no-op 实现（满足 `ColorField` / `CommunityDetectorP` 即可）。
 
