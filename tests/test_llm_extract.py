@@ -132,3 +132,12 @@ class TestNaturalText:
     def test_styles_are_cached_separately(self):
         assert llm_extract.cache_path(0, 600) != llm_extract.cache_path(0, 600, "natural")
         assert llm_extract.cache_path(0, 600).endswith("seed0_h600.json")  # the template cache keeps its name
+
+
+@pytest.mark.skipif(not __import__("os").path.exists(llm_extract.cache_path(0, 600, "natural")),
+                    reason="no cached natural-text LLM extraction")
+def test_the_natural_cache_replays_with_most_claims_kept():
+    """The revised prompt (direction convention, label scope) keeps most claims on paraphrased text."""
+    p = llm_extract.profile(0, 600, "natural")
+    assert p["events"] == 600
+    assert p["kept"] / p["claims_gold"] > 0.85 and p["reverse"] < 0.1
