@@ -558,6 +558,32 @@ def check_revalidation_count() -> None:
 
 
 # ── §6 activation ──────────────────────────────────────────────────────
+def check_revalidation_at_events() -> None:
+    section("§5.3 / Thm 3.7: the generic edge set is a function of the stream (revalidation at events)")
+    pool = [f"c{i}" for i in range(40)]
+    def stream(seed):
+        rng = random.Random(seed)
+        for _ in range(300):
+            yield Observation(concepts=rng.sample(pool[:6], 4) if rng.random() < 0.3 else rng.sample(pool, 5), source="s")
+    def pairs(w):
+        return {frozenset((w.concepts.get(r.source_id).name, w.concepts.get(r.target_id).name))
+                for r in w.relations.all() if r.semantic_relation == "generic_relation" and not r.is_explicit}
+    for seed in (1, 2, 3):
+        finals = {}
+        for every in (1, 50, None):
+            w = World(store_path=tempfile.mkdtemp())
+            for i, obs in enumerate(stream(seed), start=1):
+                w.ingest(obs)
+                if every and i % every == 0:
+                    w.reflect(light=True)
+            finals[every] = pairs(w)
+            if every is None:
+                leftover = w.reflect(light=True).stale_relations
+        assert finals[1] == finals[50] == finals[None], seed
+        assert leftover == [], leftover
+        ok(f"stream {seed}: reflect every 1 / 50 / never → same {len(finals[None])} generic edges; a final reflect removes 0")
+
+
 def check_noisy_or() -> None:
     section("§6.1 bounded noisy-OR ⊕_S")
     rng = random.Random(7)
@@ -915,6 +941,7 @@ def main() -> None:
     check_contrast_visibility()
     check_jaccard()
     check_revalidation_count()
+    check_revalidation_at_events()
     check_noisy_or()
     check_floor()
     check_seed_dominance_and_horizon()

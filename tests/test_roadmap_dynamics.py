@@ -663,25 +663,26 @@ class TestHebbianRevalidation:
     def _generic(self, world: World):
         return [r for r in world.relations.all() if r.semantic_relation == "generic_relation"]
 
-    def test_reflect_removes_stale_chance_edges(self, world):
+    def test_stale_chance_edges_are_removed_at_the_event(self, world):
+        """Chance edges linked on thin statistics go as soon as the mentions
+        that collapse their association are counted; reflect finds none
+        left to remove (§7.32)."""
         import random
 
         rng = random.Random(7)
         backbone = [("c1", "c2"), ("c3", "c4"), ("c5", "c6")]
+        peak = 0
+        removed_at_events = 0
         for _ in range(400):
             concepts = rng.sample(self.POOL, 6)
             rels = [(a, b, "depends_on") for a, b in backbone if a in concepts and b in concepts]
-            world.ingest(Observation(concepts=concepts, relations=rels, source="s"))
-        before_ids = {r.id for r in self._generic(world)}
-        assert before_ids
+            result = world.ingest(Observation(concepts=concepts, relations=rels, source="s"))
+            removed_at_events += len(result.stale_relations)
+            peak = max(peak, len(self._generic(world)))
+        assert peak > 0 and removed_at_events > 0.8 * peak
+        assert len(self._generic(world)) < 0.2 * peak
         result = world.reflect(light=True)
-        after_ids = {r.id for r in self._generic(world)}
-        removed = before_ids - after_ids
-        # Every removed generic edge was either revalidated away or decayed
-        # below the prune threshold in the same cycle — nothing else.
-        assert removed == set(result.stale_relations) | (set(result.pruned_relations) & before_ids)
-        assert len(result.stale_relations) > 0.8 * len(before_ids)
-        assert len(after_ids) < 0.2 * len(before_ids)
+        assert result.stale_relations == []
         # explicit relations are untouched
         explicit = [r for r in world.relations.all() if r.is_explicit]
         assert all(r.semantic_relation == "dependence" for r in explicit)

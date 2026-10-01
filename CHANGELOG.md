@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- **Hebbian revalidation happens at the event** (analysis doc §7.32, paper
+  §3.5 / §5.3) — a co-occurrence edge's association changes only when one
+  of its endpoints is mentioned, so `HebbianEngine.learn()` now re-judges
+  exactly the generic edges incident to the concepts it just counted and
+  removes those below the gate; `IngestResult.stale_relations` reports them.
+  Reflect's whole-store `revalidate()` stays as a backstop and finds nothing
+  after an ordinary stream.  The set of generic edges is therefore a
+  function of the observation stream alone, and Theorem 3.7 (state does not
+  depend on the reflect cadence) no longer carries its last premise.
+- **Floor-band candidates fill a projection only after the candidates
+  above the band** (analysis doc §7.31) — a candidate the activation engine
+  lifted into the floor band carries no evidential strength to trade
+  against diversity, so MMR runs over the candidates above the band and the
+  band fills what is left in activation order.  Before, the redundancy term
+  dominated the band's ~1 % relevance differences and a far third-hop
+  concept displaced a strongly reached second-hop one.  LongRun bigworld
+  utility 0.865 → 0.871, wrong-label 0.807 → 0.812; `main` unchanged.
 - **A stated contrast makes its partner visible, as a terminal** (analysis
   doc §7.30, paper Prop. 6.6) — "A conflicts with B" is knowledge about the
   pair, so B now appears in A's view at the strength of the contrast

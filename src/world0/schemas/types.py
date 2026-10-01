@@ -133,6 +133,9 @@ class IngestResult(BaseModel):
     weakened_relations: list[str] = Field(default_factory=list)
     retracted_relations: list[str] = Field(default_factory=list)
     hebbian_relations: list[str] = Field(default_factory=list)
+    # Co-occurrence edges this observation's mention counts pushed below the
+    # association gate; removed at the event (dynamics/hebbian.py).
+    stale_relations: list[str] = Field(default_factory=list)
     prediction: PredictionError = Field(default_factory=PredictionError)
 
 

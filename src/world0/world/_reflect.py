@@ -100,8 +100,10 @@ class ReflectPipeline:
         result.pruned_relations = self._decay.prune_relations()
         result.pruned_concepts = self._decay.prune_concepts()
 
-        # 5b. Generic edges linked on thin early statistics are re-judged
-        #     now that mention counts are meaningful (dynamics/hebbian.py).
+        # 5b. Backstop: ``learn()`` re-judges a generic edge at the event
+        #     that changes its association, so this whole-store pass only
+        #     finds edges whose statistics changed some other way (a
+        #     restored snapshot, evicted counters) — dynamics/hebbian.py.
         if self._hebbian is not None:
             result.stale_relations = self._hebbian.revalidate()
 

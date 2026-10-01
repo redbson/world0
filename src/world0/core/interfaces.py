@@ -270,8 +270,14 @@ class HebbianLearner(Protocol):
 
     def revalidate(self) -> list[str]:
         """Remove auto-discovered edges that no longer pass the
-        association gate; returns their ids."""
+        association gate; returns their ids.  ``learn()`` already does
+        this at the event for the edges whose association it changed;
+        this is the whole-store backstop."""
         ...
+
+    # Endpoint id pairs of the edges the last ``learn()`` removed because
+    # the mentions it counted dropped their association below the gate.
+    last_revalidated_pairs: list[tuple[str, str]]
 
     def prediction_error(self, concept_ids: list[str]) -> PredictionError:
         """Score an observation against learned co-occurrence (before

@@ -110,6 +110,11 @@ class HebbianEngine:
         # pending counter is dropped when a pair is linked).  Bounded by
         # the number of related pairs; the basis for predictions.
         self._linked: dict[str, int] = {}
+        # Generic edges the last ``learn()`` removed because the mentions
+        # it counted dropped the pair's association below the gate
+        # (ids, and the endpoint pairs for reporting).
+        self.last_revalidated: list[str] = []
+        self.last_revalidated_pairs: list[tuple[str, str]] = []
 
     def learn(
         self,
@@ -179,6 +184,11 @@ class HebbianEngine:
                 else:
                     self._cooccurrence[key] = count
 
+        # The mentions just counted changed the association of every
+        # generic edge incident to a mentioned concept — and of no other
+        # edge — so those are re-judged now, at the event, rather than
+        # left for reflect (docs §7.32; paper Theorem 3.7).
+        self.last_revalidated = self._revalidate_edges(self._incident_edges(unique_ids))
         self._evict_overflow()
         return new_relation_ids
 
@@ -333,16 +343,35 @@ class HebbianEngine:
         Early in a world's life the association gate sees thin statistics
         (two mentions, both shared → J = 1), so chance pairs get linked
         and then keep being reinforced by further chance co-occurrences.
-        Reflect calls this to re-judge every non-explicit
-        ``generic_relation`` edge against the accumulated statistics.
-        Explicit relations and edges that were upgraded to a typed
-        semantic relation are never touched.
+        ``learn()`` re-judges the generic edges of the concepts it just
+        counted (the only edges whose association that event changed), so
+        the edge set is a function of the observation stream alone; this
+        whole-store pass is reflect's backstop for edges whose statistics
+        changed in some other way (a restored snapshot, evicted counters)
+        and is a no-op after an ordinary stream.  Explicit relations and
+        edges that were upgraded to a typed semantic relation are never
+        touched.
 
         Returns the ids of the removed relations.
         """
+        return self._revalidate_edges(list(self._relations.all()))
+
+    def _incident_edges(self, concept_ids: list[str]) -> list["RelationEdge"]:
+        seen: set[str] = set()
+        edges: list["RelationEdge"] = []
+        for cid in concept_ids:
+            for edge in self._relations.for_concept(cid):
+                if edge.id not in seen:
+                    seen.add(edge.id)
+                    edges.append(edge)
+        return edges
+
+    def _revalidate_edges(self, edges: list["RelationEdge"]) -> list[str]:
+        """Re-judge generic edges against the accumulated statistics."""
         cutoff = HEBBIAN_MIN_ASSOCIATION * REVALIDATION_HYSTERESIS
         removed: list[str] = []
-        for edge in list(self._relations.all()):
+        self.last_revalidated_pairs = []
+        for edge in edges:
             if edge.is_explicit or edge.semantic_relation != "generic_relation":
                 continue
             n_a = self._mentions.get(edge.source_id, 0)
@@ -363,6 +392,7 @@ class HebbianEngine:
             if self._association(edge.source_id, edge.target_id, cooccurrences) < cutoff:
                 if self._relations.remove(edge.id):
                     removed.append(edge.id)
+                    self.last_revalidated_pairs.append((edge.source_id, edge.target_id))
                     # Back to the pending counter: the pair is unlinked
                     # again but its co-occurrence history is real.
                     count = self._linked.pop(key, 0)

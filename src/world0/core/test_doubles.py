@@ -631,6 +631,7 @@ class FakeHebbianLearner:
     def __init__(self) -> None:
         self.calls: list[tuple[list[str], str]] = []
         self.next_new_relation_ids: list[str] = []
+        self.last_revalidated_pairs: list[tuple[str, str]] = []
 
     def revalidate(self) -> list[str]:
         return []

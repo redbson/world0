@@ -356,6 +356,11 @@ class IngestPipeline:
             tgt = self._concepts.get(edge.target_id)
             if src and tgt:
                 result.hebbian_relations.append(f"{src.name} ↔ {tgt.name}")
+        for src_id, tgt_id in self._hebbian.last_revalidated_pairs:
+            src = self._concepts.get(src_id)
+            tgt = self._concepts.get(tgt_id)
+            if src and tgt:
+                result.stale_relations.append(f"{src.name} ↔ {tgt.name}")
 
     def _step_descriptions(
         self, observation: Observation, local_refs: dict[str, str]
