@@ -21,11 +21,26 @@ World 0 is not a knowledge graph, not a memory system, not an ontology. It is a 
 
 World 0 不是知识图谱，不是记忆系统，不是本体论。它是一个认知结构，将积累的观察转化为聚焦的、与任务相关的投影。
 
+## What's new in 0.3.0 / 0.3.0 新增
+
+0.3.0 is the first release in which the whole state of the world is a function of the observation stream alone: nothing depends on when `reflect()` runs. Highlights (full list in [`CHANGELOG.md`](CHANGELOG.md)):
+
+0.3.0 是第一个"世界的全部状态只是观察流的函数"的版本：没有任何东西取决于 `reflect()` 何时运行。要点（完整列表见 [`CHANGELOG.md`](CHANGELOG.md)）：
+
+- **Compact render is the default** — `Projection.render()` is the prompt-ready form; `render(style="full")` keeps the sectioned view. / 紧凑渲染成为默认，`render(style="full")` 保留分节视图。
+- **Hard retraction and read-time settlement** — a claim that no longer holds leaves the view and is listed under "No Longer Holds"; reads see settled values. / 硬撤回与读取时结算。
+- **Task-conditioned projections** — task words are weighted by distinctiveness, claims are split by the task that stated them, and a view is never filled with another task's concepts. / 任务词按区分度加权、主张按陈述任务拆分、不用别的任务的概念填满预算。
+- **Relation semantics** — a stated conflict makes its partner visible; new `contrast` relation; `part_of` is inclusion read from the part; bare axis words map to the weakest relation on their axis. / 冲突使对方可见；新增 `contrast`；`part_of` 即包含；轴名别名不夸大。
+- **Hebbian revalidation at the event** — chance co-occurrence edges die when their endpoints are mentioned, not at the next reflect. / Hebbian 再验证在事件上发生。
+- **Evidence** — a formal model with a numerical verifier ([`docs/paper/`](docs/paper/world0-formal.md)) and the reproducible LongRun benchmark with a real-LLM-reader stage ([`docs/eval/`](docs/eval/01-report.md)). / 形式化论文与数值验证；可复现的 LongRun 评测与真实读者阶段。
+
+Migration notes are in the `[0.3.0]` section of the changelog. / 迁移说明见 changelog 的 `[0.3.0]` 节。
+
 ## Roadmap / 路线
 
-The current agent development priorities are tracked in [`TODO.md`](TODO.md).
+The 0.3.0 scope, release checklist and what is deferred to 0.4 are in [`docs/ROADMAP.md`](docs/ROADMAP.md); agent-feature priorities are tracked in [`TODO.md`](TODO.md).
 
-当前 Agent 的功能开发优先级记录在 [`TODO.md`](TODO.md)。
+0.3.0 的范围、发布清单与推迟到 0.4 的工作见 [`docs/ROADMAP.md`](docs/ROADMAP.md)；Agent 功能的开发优先级记录在 [`TODO.md`](TODO.md)。
 
 ## Documentation / 文档
 

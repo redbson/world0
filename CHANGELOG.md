@@ -4,9 +4,69 @@ All notable changes to World 0 are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.3.0] - 2026-10-01
+
+**A cognitive layer whose state is a function of the observation stream.**
+Since 0.2.0 the chain concept → card → typed relation → task context →
+activation → projection was reworked in 30 rounds (analysis doc §7, paper,
+LongRun benchmark).  The headline properties of this release:
+
+- *Schedule independence*: maturity, existence, forgetting, confidence and
+  the set of co-occurrence edges no longer depend on when `reflect()` runs
+  (paper Theorems 3.2 and 3.7, §5.3; `docs/paper/verify.py` checks every
+  proposition against the code).
+- *Views are task-conditioned and honest*: claims are split by the task that
+  stated them, a view is never filled with another task's concepts, a
+  retracted claim leaves the view, a stated conflict brings its partner into
+  it, and the default render is the compact prompt-ready form.
+- *Relations are typed and say what was stated*: claim identity is
+  (source, target, axis, label), negative claims carry belief, `contrast`
+  is a first-class relation and axis-word aliases map to the weakest
+  relation on their axis.
+- *Evidence*: a formal model with proofs and a numerical verifier, and the
+  reproducible LongRun benchmark (10 seeds, real-LLM extraction, a
+  real-LLM-reader stage) in which `world0_tuned` ties well-configured
+  structured memory and beats raw context at 200–600 tokens
+  (`docs/eval/01-report.md`).
+
+### Migration from 0.2.0
+
+- `Projection.render()` now returns the compact form; pass
+  `render(style="full")` for the sectioned view with ids and link lists.
+- `(part, whole, "part_of")` is stored and rendered as `inclusion` from the
+  whole ("whole contains part").  Relations written by 0.2.0 as
+  `membership` in the other direction are not migrated (nothing records
+  which were `part_of`); re-ingest or edit them if the direction matters.
+- `contrasts`, `negative` and `repulsion` as relation labels now mean
+  `contrast` (negative axis, no conflict), not `conflict`; say `conflict`
+  when you mean it.  `mutual_understanding` maps to
+  `recursive_co_modeling`.
+- A `contradicted_relations` entry with no matching claim no longer weakens
+  the endpoint concepts; a denial is about the relation.
+- `Observation.retracted_relations` is the way to say a claim no longer
+  holds; a denial only lowers belief.
+- `PROPAGATION_MIN_RATIO` lives in `world0.dynamics.coefficients`.
+- Stores written by 0.2.0 open unchanged: learning counters and relation
+  belief / inhibition fields are migrated once on first load.  The
+  optional SQLite backend (`World(store_path, backend="sqlite")`) is not
+  the default; `backend="auto"` picks it only for `.sqlite` / `.db` paths.
+- `world0.__version__` is new.
 
 ### Changed
+- **Evaluation refresh** (analysis doc §7.33, LongRun report v5) — the
+  real-LLM-reader stage was rerun on the release code with Claude Haiku 4.5
+  readers (132 questions × 7 conditions, 4 seeds, no cross-world leakage):
+  `world0_tuned`@1200 0.95 [0.92, 0.97], `state_doc` 0.93, `fact_task`
+  0.91, `rag` 0.80, `full_context` 0.74 — the raw-history reader misses
+  the correction on 17 % of revision questions, the structured systems on
+  none; no answer is a concept id any more (54–59 % before compact render
+  became the default).  Template text (seed 0) was re-extracted with the
+  shipped prompt (0.968 vs 0.994 with the old one: a single sentence
+  missed at step 399); the natural-text runs on three seeds cost every
+  structured system 0.03–0.05 against generator extraction, World 0 the
+  most (0.996 → 0.952).  All LongRun studies were rerun on the release
+  code (`docs/eval/results/*.meta.json`); `readers.py` gained the
+  `world0_tuned` conditions at 600 and 1 200 tokens.
 - **Hebbian revalidation happens at the event** (analysis doc §7.32, paper
   §3.5 / §5.3) — a co-occurrence edge's association changes only when one
   of its endpoints is mentioned, so `HebbianEngine.learn()` now re-judges

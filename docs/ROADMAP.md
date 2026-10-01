@@ -39,9 +39,9 @@
 
 ### 发布清单
 
-- [ ] `pyproject.toml` 0.3.0，`world0.__version__`
-- [ ] `CHANGELOG.md`：`[0.3.0]` 节（摘要 + 迁移说明：`render()` 默认紧凑、`part_of` 语义、`contrasts` 语义、否证无对象时不削弱概念）
-- [ ] README：What's new、文档索引
+- [x] `pyproject.toml` 0.3.0，`world0.__version__`（也更新了 web / MCP 客户端上报的版本）
+- [x] `CHANGELOG.md`：`[0.3.0]` 节（摘要 + 迁移说明：`render()` 默认紧凑、`part_of` 语义、`contrasts` 语义、否证无对象时不削弱概念）
+- [x] README：What's new、文档索引（路线图链接）
 - [ ] 全部测试、`docs/paper/verify.py`、LongRun `main` / `bigworld` / `taskmode` / `llm` 在发布提交上重跑
 - [ ] 独立评审
 - [ ] PR #2 说明更新；合并到 `main` 后打 `v0.3.0` 标签

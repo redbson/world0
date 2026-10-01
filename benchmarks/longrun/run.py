@@ -25,7 +25,7 @@ TUNE = ["w0-d1-r0", "w0-d2-r0", "w0-d3-r0", "w0-d1-r25", "w0-d2-r25", "w0-d3-r25
 DEV_SEEDS = range(100, 105)
 # cached LLM extractions (benchmarks/longrun/llm_cache): (text style, prompt version, seeds);
 # "" is the current prompt, "prompt_v1" the one before round 26
-LLM_RUNS = [("natural", "", [0, 1, 2]), ("natural", "prompt_v1", [0]), ("template", "prompt_v1", [0])]
+LLM_RUNS = [("natural", "", [0, 1, 2]), ("natural", "prompt_v1", [0]), ("template", "", [0]), ("template", "prompt_v1", [0])]
 
 
 def studies(seeds: int) -> dict[str, list[dict]]:

@@ -1,6 +1,6 @@
 {
  "study": "llm",
- "jobs": 9,
+ "jobs": 10,
  "seeds": [
   0,
   1,
@@ -14,9 +14,9 @@
   2400,
   4800
  ],
- "commit": "2639350",
+ "commit": "1de189a",
  "dirty_src_or_benchmarks": true,
- "seconds": 44.3,
+ "seconds": 58.4,
  "python": "3.11.15",
  "cpus": 4,
  "workers": 4

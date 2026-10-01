@@ -96,12 +96,12 @@ Agent 每次在一个领域里工作一段（run），每个事件陈述当前�
 | `scale` | 视野 H = 300 / 3000 / 6000 |
 | `bigworld` | 40 个领域 × 每领域 40 个概念、领域随时间出现、H=6000（已知状态约 2.3 万 tokens，装不进一个提示词） |
 | `extraction` | 抽取误差 p = 0.05 / 0.1 / 0.2 / 0.3；另含"只展示至少被陈述两次的主张"的证据阈值变体 |
-| `llm` | 真实 LLM 抽取（生产 prompt + 生产解析器，原始输出缓存于 `benchmarks/longrun/llm_cache/`，见 `llm_extract.py`）与读标准答案的抽取器在同一条流上对比；600 个事件，抽取模型 Claude Haiku：改写文本（`text_style="natural"`，`paraphrase.py`）seed 0–2 用当前 prompt，改写文本 seed 0 与模板文本 seed 0 用第 26 轮之前的 prompt（`llm_cache/prompt_v1/`） |
+| `llm` | 真实 LLM 抽取（生产 prompt + 生产解析器，原始输出缓存于 `benchmarks/longrun/llm_cache/`，见 `llm_extract.py`）与读标准答案的抽取器在同一条流上对比；600 个事件，抽取模型 Claude Haiku：改写文本（`text_style="natural"`，`paraphrase.py`）seed 0–2 与模板文本 seed 0 用当前 prompt，改写文本 seed 0 与模板文本 seed 0 另用第 26 轮之前的 prompt（`llm_cache/prompt_v1/`）作对照 |
 | `taskmode` | 查询里的任务标签：精确 / 缺失 / 错误（另一个领域的标签） |
 | `chatter` | 闲聊比例 0 / 0.5 / 0.75 |
 | `verbosity` | 每事件填充词 0 / 120 / 400 |
 | `ablation` | World 0 变体 |
-| 读者阶段 | 真实 LLM 读者：每个（问题，上下文）一份独立文件，只读这一份（见 `readers.py`） |
+| 读者阶段 | 真实 LLM 读者：每个（问题，上下文）一份独立文件，文件名经哈希打乱，金标准另存（见 `readers.py`）；第五版用 Claude Haiku 4.5 读者，4 个 seed × 33 个问题 × 7 个条件 = 924 份文件，一个读者代理一次拿 4 份**来自不同 seed** 的文件（不同隐藏世界，记忆不可能串用），结果在 `results/readers.md` |
 
 ## 6. 独立评审与据此做的修改
 
@@ -126,7 +126,7 @@ Agent 每次在一个领域里工作一段（run），每个事件陈述当前�
 
 - **没有真实的抽取与链接。** 结构化系统读的是生成器给的抽取结果（可注入误差，但不是真 LLM 抽取）；
   实体链接是精确子串匹配。抽取的 LLM 成本没有计入任何系统。
-- **读者阶段规模有限**（4 个 seed、130 个问题），且用的是同一个模型；不覆盖长上下文退化的全部形态。
+- **读者阶段规模有限**（4 个 seed、132 个问题、7 个条件），且只用了一个读者模型（Claude Haiku 4.5）；第三版的读者设置没有记录，两版的 `full_context` 分数（1.00 对 0.74）因此不能直接比。不覆盖长上下文退化的全部形态。
 - **隐藏世界是合成的**：名字唯一且无别名、无同义词、无指代；概念身份（别名、合并、拆分）、
   视角（perspective）、reflect 机制等 World 0 的其余功能在本实验里基本没有被用到，
   因此**本实验不能评价这些功能**。

@@ -1,7 +1,14 @@
 {
  "study": "taskmode",
  "jobs": 12,
- "seeds": 10,
+ "seeds": [
+  0,
+  1,
+  2,
+  3,
+  4,
+  5
+ ],
  "budgets": [
   150,
   300,
@@ -10,9 +17,9 @@
   2400,
   4800
  ],
- "commit": "bd8c33d",
- "dirty_src_or_benchmarks": false,
- "seconds": 162.4,
+ "commit": "1de189a",
+ "dirty_src_or_benchmarks": true,
+ "seconds": 114.1,
  "python": "3.11.15",
  "cpus": 4,
  "workers": 4

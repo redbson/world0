@@ -194,7 +194,7 @@ def create_app(
 
     app = FastAPI(
         title="World 0 Concept World",
-        version="0.2.0",
+        version="0.3.0",
         # Persist the amortised learning record when the server stops.
         on_shutdown=[_agent.close],
     )

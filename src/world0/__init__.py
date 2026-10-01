@@ -1,5 +1,7 @@
 """World 0 — A persistent cognitive layer for LLM Agents."""
 
+__version__ = "0.3.0"
+
 from world0.extraction.extractor import ConceptExtractor
 from world0.llm.base import LLMProvider
 from world0.schemas.context import Perspective
@@ -15,6 +17,7 @@ from world0.schemas.types import (
 from world0.world import World
 
 __all__ = [
+    "__version__",
     "ConceptExtractor",
     "ConceptCandidate",
     "LLMProvider",
