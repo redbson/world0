@@ -19,6 +19,9 @@ an LLM, and the raw JSON is parsed by the production parser
     python -m benchmarks.longrun.llm_extract profile --seed 0 --horizon 600
 
 Runs then use ``GenConfig(extract_mode="llm")`` (``run.py --study llm``).
+Every command takes ``--style template|natural`` (``GenConfig.text_style``):
+the natural text of a seed is the same stream in varied wording
+(``paraphrase.py``), cached separately.
 """
 
 from __future__ import annotations
@@ -39,25 +42,28 @@ CACHE_DIR = os.path.join(os.path.dirname(__file__), "llm_cache")
 _SEM2REL = {"dependence": "depends_on", "inclusion": "contains", "conflict": "conflict", "enables": "enables"}
 
 
-def cache_path(seed: int, horizon: int) -> str:
-    return os.path.join(CACHE_DIR, f"seed{seed}_h{horizon}.json")
+def cache_path(seed: int, horizon: int, style: str = "template") -> str:
+    suffix = "" if style == "template" else f"_{style}"
+    return os.path.join(CACHE_DIR, f"seed{seed}_h{horizon}{suffix}.json")
 
 
 @functools.lru_cache(maxsize=8)
-def load_cache(seed: int, horizon: int) -> dict[str, str]:
-    path = cache_path(seed, horizon)
+def load_cache(seed: int, horizon: int, style: str = "template") -> dict[str, str]:
+    path = cache_path(seed, horizon, style)
     try:
         with open(path) as fh:
             return json.load(fh)
     except OSError as exc:
         raise FileNotFoundError(
-            f"no LLM extraction cache for seed {seed}, horizon {horizon} ({path}); "
+            f"no LLM extraction cache for seed {seed}, horizon {horizon}, {style} text ({path}); "
             "see benchmarks/longrun/llm_extract.py"
         ) from exc
 
 
 def _key(name: str) -> str:
-    return re.sub(r"\s+", " ", re.sub(r"[_\W]+", " ", name.lower())).strip()
+    """Case, punctuation and a leading article do not make another concept."""
+    k = re.sub(r"\s+", " ", re.sub(r"[_\W]+", " ", name.lower())).strip()
+    return k[4:] if k.startswith("the ") else k
 
 
 def _parser():
@@ -118,15 +124,15 @@ def to_extraction(raw: str, ev: Event, known: dict[str, str]) -> Extraction:
     return Extraction(concepts, got, retractions, ev.ticket if keep else None, ev.ticket_claim if keep else None)
 
 
-def _events(seed: int, horizon: int) -> list[Event]:
-    return [ev for ev, _ in Stream(GenConfig(seed=seed, horizon=horizon)).events()]
+def _events(seed: int, horizon: int, style: str = "template") -> list[Event]:
+    return [ev for ev, _ in Stream(GenConfig(seed=seed, horizon=horizon, text_style=style)).events()]
 
 
-def export(seed: int, horizon: int, out: str, batch: int) -> None:
+def export(seed: int, horizon: int, out: str, batch: int, style: str = "template") -> None:
     os.makedirs(out, exist_ok=True)
     with open(os.path.join(out, "system.txt"), "w") as fh:
         fh.write(system_prompt())
-    evs = _events(seed, horizon)
+    evs = _events(seed, horizon, style)
     for i in range(0, len(evs), batch):
         items = [{"id": str(ev.step), "user": user_prompt(ev)} for ev in evs[i:i + batch]]
         with open(os.path.join(out, f"batch_{i // batch:03d}.json"), "w") as fh:
@@ -150,23 +156,23 @@ def answer(directory: str, model: str) -> None:
             json.dump(done, fh, ensure_ascii=False)
 
 
-def collect(seed: int, horizon: int, directory: str) -> None:
+def collect(seed: int, horizon: int, directory: str, style: str = "template") -> None:
     raw: dict[str, str] = {}
     for path in sorted(glob.glob(os.path.join(directory, "answers_*.json"))):
         for k, v in json.load(open(path)).items():
             raw[str(k)] = v if isinstance(v, str) else json.dumps(v, ensure_ascii=False)
-    missing = [str(ev.step) for ev in _events(seed, horizon) if str(ev.step) not in raw]
+    missing = [str(ev.step) for ev in _events(seed, horizon, style) if str(ev.step) not in raw]
     if missing:
         raise SystemExit(f"{len(missing)} events unanswered, e.g. {missing[:5]}")
     os.makedirs(CACHE_DIR, exist_ok=True)
-    with open(cache_path(seed, horizon), "w") as fh:
+    with open(cache_path(seed, horizon, style), "w") as fh:
         json.dump(raw, fh, ensure_ascii=False, sort_keys=True)
-    print(f"{len(raw)} answers → {cache_path(seed, horizon)}")
+    print(f"{len(raw)} answers → {cache_path(seed, horizon, style)}")
 
 
-def profile(seed: int, horizon: int) -> dict:
+def profile(seed: int, horizon: int, style: str = "template") -> dict:
     """The extractor measured against gold, in the simulator's error categories."""
-    cfg = GenConfig(seed=seed, horizon=horizon, extract_mode="llm")
+    cfg = GenConfig(seed=seed, horizon=horizon, extract_mode="llm", text_style=style)
     s = Stream(cfg)
     n = Counter({k: 0 for k in ("kept", "relabelled", "reversed", "dropped", "spurious", "extra_label",
                                  "retraction_kept",
@@ -228,6 +234,7 @@ def main() -> None:
         p = sub.add_parser(name)
         p.add_argument("--seed", type=int, default=0)
         p.add_argument("--horizon", type=int, default=600)
+        p.add_argument("--style", default="template", choices=["template", "natural"])
         if name == "export":
             p.add_argument("--out", required=True)
             p.add_argument("--batch", type=int, default=50)
@@ -238,13 +245,13 @@ def main() -> None:
     p.add_argument("--model", default="gpt-5.4-nano")
     a = ap.parse_args()
     if a.cmd == "export":
-        export(a.seed, a.horizon, a.out, a.batch)
+        export(a.seed, a.horizon, a.out, a.batch, a.style)
     elif a.cmd == "answer":
         answer(a.dir, a.model)
     elif a.cmd == "collect":
-        collect(a.seed, a.horizon, a.dir)
+        collect(a.seed, a.horizon, a.dir, a.style)
     else:
-        print(json.dumps(profile(a.seed, a.horizon), indent=1))
+        print(json.dumps(profile(a.seed, a.horizon, a.style), indent=1))
 
 
 if __name__ == "__main__":

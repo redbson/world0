@@ -81,6 +81,7 @@ class GenConfig:
     growth: bool = False            # domains appear over time instead of all existing from the start
     extract_p: float = 0.0          # extractor error level (drop p, wrong p/2, spurious p, missed retraction p)
     extract_mode: str = "sim"       # "sim": gold + injected errors (extract_p); "llm": cached real LLM output (llm_extract.py)
+    text_style: str = "template"    # "template": one canonical sentence per claim; "natural": paraphrase.py (same stream, other words)
     allow_pair_collision: bool = False  # two typed claims on one ordered pair (revisions can still create one)
     popularity_skew: float = 0.8    # Zipf exponent over claims: rarely-stated claims exist
     verbosity: int = 30             # filler words per event (real transcripts are mostly not concepts)
@@ -346,20 +347,43 @@ class Stream:
                     self._ticket_ids.add(ticket)
                     break
             ticket_claim = stated[0]
-        parts = [f"[step {step}] Working on {self.task_label(d)}:"]
-        for i, c in enumerate(stated):
-            tag = f" (ticket {ticket})" if ticket and i == 0 else ""
-            parts.append(c.sentence() + tag + ".")
-        if retire:
-            parts.append(f"Correction: {retire.src} no longer {REL_PHRASE[retire.rel]} {retire.tgt}.")
         rest = [x for x in concepts if x not in {y for c in stated + ([retire] if retire else []) for y in (c.src, c.tgt)}]
-        if rest:
-            parts.append("Also touched: " + ", ".join(rest) + ".")
         filler = self._filler()
-        if filler:
-            parts.append(filler)
+        if self.cfg.text_style == "natural":
+            text = self._natural_task_text(step, d, stated, retire, rest, ticket, filler)
+        else:
+            parts = [f"[step {step}] Working on {self.task_label(d)}:"]
+            for i, c in enumerate(stated):
+                tag = f" (ticket {ticket})" if ticket and i == 0 else ""
+                parts.append(c.sentence() + tag + ".")
+            if retire:
+                parts.append(f"Correction: {retire.src} no longer {REL_PHRASE[retire.rel]} {retire.tgt}.")
+            if rest:
+                parts.append("Also touched: " + ", ".join(rest) + ".")
+            if filler:
+                parts.append(filler)
+            text = " ".join(parts)
         return Event(step, "task", d, self.task_label(d), concepts, stated,
-                     [retire] if retire else [], ticket, ticket_claim, " ".join(parts))
+                     [retire] if retire else [], ticket, ticket_claim, text)
+
+    def _natural_task_text(self, step: int, d: str, stated: list[Claim], retire: Claim | None,
+                           rest: list[str], ticket: str | None, filler: str) -> str:
+        """The same event in varied wording; draws only from the event's own rng."""
+        from benchmarks.longrun.paraphrase import Realiser, event_rng
+
+        rng = event_rng(self.cfg.seed, step)
+        negated = None
+        if rng.random() < 0.25:
+            # a pair the domain has no claim about, stated as *not* holding
+            linked = {frozenset((c.src, c.tgt)) for c in self.world.truth[d]}
+            if retire:
+                linked.add(frozenset((retire.src, retire.tgt)))
+            for _ in range(10):
+                a, b = rng.sample(self.world.concepts[d], 2)
+                if frozenset((a, b)) not in linked:
+                    negated = (a, b)
+                    break
+        return Realiser(rng).task_text(step, self.task_label(d), stated, retire, rest, ticket, filler, negated)
 
     def _noise_event(self, step: int) -> Event:
         rng = self.rng
@@ -368,10 +392,15 @@ class Stream:
         if rng.random() < 0.5:
             self.junk += 1
             concepts.append(f"{_pseudo_word(rng)} scratch{self.junk}")
-        text = f"[step {step}] Chatter about " + ", ".join(concepts) + "."
         filler = self._filler()
-        if filler:
-            text += " " + filler
+        if self.cfg.text_style == "natural":
+            from benchmarks.longrun.paraphrase import Realiser, event_rng
+
+            text = Realiser(event_rng(self.cfg.seed, step)).noise_text(step, concepts, filler)
+        else:
+            text = f"[step {step}] Chatter about " + ", ".join(concepts) + "."
+            if filler:
+                text += " " + filler
         return Event(step, "noise", None, "misc chatter", concepts, [], [], None, None, text)
 
     def events(self) -> Iterator[tuple[Event, list[Query]]]:
@@ -416,7 +445,7 @@ class Stream:
         if self.cfg.extract_mode == "llm":
             from benchmarks.longrun import llm_extract
 
-            raw = llm_extract.load_cache(self.cfg.seed, self.cfg.horizon)[str(ev.step)]
+            raw = llm_extract.load_cache(self.cfg.seed, self.cfg.horizon, self.cfg.text_style)[str(ev.step)]
             if self._known is None:
                 self._known = {llm_extract._key(c): c for c in self.world.all_concepts}
             return llm_extract.to_extraction(raw, ev, self._known)
