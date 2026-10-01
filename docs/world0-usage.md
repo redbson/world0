@@ -353,6 +353,25 @@ Environment variables:
 
 ## 8. CLI 使用 / CLI Usage
 
+### 8.0 `world0` — 统一 API 的命令行入口 / the unified API on the command line
+
+`pip install -e .` 之后有两个命令：`world0`（认知层本身，`docs/world0-api.md` §5 的动词）和 `pkm`（Agent 壳：会话、prompt、skill、MCP 客户端）。
+
+```bash
+world0 --store .world0 state api depends_on db --task backend     # 一条陈述（= ingest 一条观察）
+world0 ingest obs.json                                           # 完整观察（statements / withdrawals / denials / cards）
+cat obs.json | world0 ingest -
+world0 project api db --task backend                             # 打印可直接放进提示词的渲染
+world0 project api --task backend --json                         # 与 HTTP /v1/project 返回体相同的 JSON
+world0 card api · world0 claims api --task backend · world0 find auth · world0 status · world0 reflect --light
+world0 withdraw api conflict cache --task backend · world0 deny api conflict cache
+world0 merge <keeper> <absorbed> · world0 split api "api v2" --alias v2 · world0 weaken cache
+```
+
+出错时退出码 1，`--json` 下输出 `{"api": "world0/1", "error": {"code": "...", "message": "..."}}`。
+同一组操作在 HTTP（`/v1/<op>`，见 §9）和 MCP（`python -m world0.agents.mcp.server --store .world0`，工具名 `world0.<op>`）上同名同形。
+
+
 安装后可用 `pkm` 命令。默认存储目录是 `~/.pkm_world`，默认 provider 是 `anthropic`。
 
 After install, `pkm` is available. Default store: `~/.pkm_world`. Default provider: `anthropic`.
@@ -404,6 +423,11 @@ Running `pkm` without a subcommand enters the interactive terminal.
 ---
 
 ## 9. Web / GUI
+
+> 认知层的 HTTP 接口在 `/v1/*`（`world0.http.v1_router`，随 `pkm-web` 一起挂载；`world0.http.create_app(world)` 可单独起一个只有 `/v1` 的服务）：
+> `POST /v1/ingest`、`POST /v1/project`、`GET /v1/card/{name}`、`GET /v1/claims/{name}?task=`、`GET /v1/find?q=`、`GET /v1/status`、
+> `POST /v1/reflect`、`POST /v1/merge|split|weaken|state|withdraw|deny`；`GET /v1` 列出操作。下面的 `/api/*` 是 Agent 壳的路由。
+
 
 浏览器版：
 

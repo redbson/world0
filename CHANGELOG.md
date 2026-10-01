@@ -27,6 +27,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `ReflectResult` and `WorldStatus` carry `api`.  The pipeline field
   names stay accepted without warning until the internals read the new
   ones (0.5); `tests/test_api_contract.py`.
+- **The unified API's entry points** (`docs/world0-api.md` §5, 0.5 step) —
+  one operation table, `world0.ops` (`call(world, op, params)`: request
+  model, JSON result and error code per operation; errors are
+  `not_found`, `invalid_observation`, `unknown_relation`,
+  `identity_conflict`, `llm_unavailable`, `invalid_request`,
+  `unknown_operation`), behind three surfaces that cannot drift from it:
+  the `world0` command (`world0.cli`; `world0 project api --task backend`,
+  `world0 ingest obs.json`, `world0 state api depends_on db`; `--json`
+  prints the HTTP body), HTTP `/v1/<op>` (`world0.http`: `v1_router(world)`
+  is mounted in the Agent shell's web app next to `/api/*`, `create_app`
+  serves it alone), and World 0 as an MCP server
+  (`python -m world0.agents.mcp.server --store .world0`: tools
+  `world0.<op>` over stdio, input schemas from the request models, a
+  projection's text content is the render and every result is
+  `structuredContent`).  `McpClient.call_tool_raw()` returns the MCP
+  result object.  The wire form of `project` carries `text` and
+  activation scores quantised to 1e-6.  `tests/test_api_surfaces.py` reads
+  the same world through all four entry points and asserts identical JSON.
 
 ## [0.3.0] - 2026-10-01
 

@@ -160,8 +160,10 @@ class McpClient:
         """Return discovered resources."""
         return list(self.resources)
 
-    def call_tool(self, tool_name: str, arguments: dict | None = None) -> Any:
-        """Execute a tool call on the MCP server."""
+    def call_tool_raw(self, tool_name: str, arguments: dict | None = None) -> dict[str, Any]:
+        """Execute a tool call and return the MCP result object itself
+        (``content``, ``isError``, ``structuredContent`` when the server
+        gives one)."""
         if self.status != McpStatus.CONNECTED:
             raise McpError(f"Server {self.name} is not connected (status: {self.status.value})")
 
@@ -175,7 +177,11 @@ class McpClient:
             err = response["error"]
             raise McpError(f"Tool call failed: {err.get('message', err)}")
 
-        result = response.get("result", {})
+        return response.get("result", {})
+
+    def call_tool(self, tool_name: str, arguments: dict | None = None) -> Any:
+        """Execute a tool call on the MCP server and return its text content."""
+        result = self.call_tool_raw(tool_name, arguments)
         # Extract text content from MCP response format
         content = result.get("content", [])
         texts = []

@@ -42,6 +42,7 @@ dev = [
 ]
 
 [project.scripts]
+world0 = "world0.cli:main"
 pkm = "world0.agents.cli:main"
 pkm-gui = "world0.agents.gui:main"
 pkm-web = "world0.agents.web_main:main"
