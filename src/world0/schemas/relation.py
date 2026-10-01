@@ -372,6 +372,7 @@ _T = TypeVar("_T")
 # the canonical direction, so a claim reads the same whichever label stated
 # it.
 _REVERSED_ALIASES: frozenset[str] = frozenset({"precedes", "part_of"})
+_AXIS_NAMES: frozenset[str] = frozenset(t.value for t in RelationType)
 
 
 def orient_relation(source: _T, target: _T, label: str | None) -> tuple[_T, _T, str]:
@@ -525,6 +526,29 @@ class RelationEdge(BaseModel):
     # an extractor prior); 0 on co-occurrence edges and on edges stored
     # before it was counted (``support`` then falls back to confirmations).
     statements: int = 0
+
+    @model_validator(mode="before")
+    @classmethod
+    def _migrate_legacy_label(cls, data: object) -> object:
+        """A 0.2.0 edge stored its label (``depends_on``, ``part_of``,
+        ``contrasts`` ...) in ``relation_type`` and had no
+        ``semantic_relation``.  Keep the label's semantics instead of
+        collapsing it to an axis default, and store a label phrased from
+        the other end (``part_of``, ``precedes``) in the canonical direction,
+        as ``orient_relation`` does for a stated claim."""
+        if not isinstance(data, dict) or data.get("semantic_relation"):
+            return data
+        raw = data.get("relation_type")
+        if isinstance(raw, RelationType) or raw is None:
+            return data
+        key = str(raw).strip().lower().replace(" ", "_")
+        if key in _AXIS_NAMES or key not in _SEMANTIC_RELATION_ALIASES:
+            return data
+        data = dict(data)
+        data["semantic_relation"] = _SEMANTIC_RELATION_ALIASES[key]
+        if key in _REVERSED_ALIASES and "source_id" in data and "target_id" in data:
+            data["source_id"], data["target_id"] = data["target_id"], data["source_id"]
+        return data
 
     @field_validator("relation_type", mode="before")
     @classmethod

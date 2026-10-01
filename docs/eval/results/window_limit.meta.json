@@ -1,7 +1,12 @@
 {
  "study": "window_limit",
  "jobs": 4,
- "seeds": 4,
+ "seeds": [
+  0,
+  1,
+  2,
+  3
+ ],
  "budgets": [
   150,
   300,
@@ -10,9 +15,9 @@
   2400,
   4800
  ],
- "commit": "716042e",
+ "commit": "05302c2",
  "dirty_src_or_benchmarks": false,
- "seconds": 230.1,
+ "seconds": 156.1,
  "python": "3.11.15",
  "cpus": 4,
  "workers": 4

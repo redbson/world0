@@ -1,7 +1,7 @@
 # World 0 路线图：0.3.0
 
-> 上一个发布版本是 0.2.0（"可配置的概念系统"）。此后 `dev` 上累积了 26 轮工作（`CHANGELOG.md` 的
-> Unreleased 节、分析文档 §7、论文、LongRun 评测）。0.3.0 是把这些工作收口成一个版本：
+> 上一个发布版本是 0.2.0（"可配置的概念系统"）。此后 `dev` 上累积了 30 轮工作（`CHANGELOG.md` 的
+> `[0.3.0]` 节、分析文档 §7、论文、LongRun 评测）。0.3.0 是把这些工作收口成一个版本：
 > **一个随观察流连续演化、读写都与 reflect 调度无关、能在长期运行的 Agent 里与配置良好的结构化记忆打平的认知层。**
 
 版本号沿用 `pyproject.toml` 的语义化版本：0.x 阶段，0.3.0 是下一个"大版本"（接口可以不兼容 0.2.0）。
@@ -30,8 +30,8 @@
 2. **第 28 轮 — 关系语义。** (a) 一次陈述的 `conflict` 让对方可见：负向边给对方"可见性"激活（终点，不再向外扩散），
    抑制通道只压制经其他路径到达的激活；(b) 新增 `contrast` 语义关系（设计哲学里的一等关系，弱于 `conflict`），
    `contrasts` 别名不再被读成 `conflict`；(c) `part_of` 读成 `inclusion`（整体为源），与抽取 prompt 一致；
-   (d) 轴名（`positive` / `negative` / `parallel`）与 `mutual_understanding` 等旧别名映射到该轴上最弱的关系，
-   不再夸大。
+   (d) 负轴的轴名（`negative` / `repulsion`）映射到 `contrast`（负轴上最弱的关系），`mutual_understanding` 映射到
+   `recursive_co_modeling`，别名不再夸大；(e) 0.2.0 把标签本身存在 `relation_type` 里的存储在加载时迁移，保留语义与方向。
 3. **第 29 轮 — Hebbian 再验证与调度无关。** 关联已低于移除线的共现边在读取与事件上视为已死，不等 reflect；
    定理 3.7 的最后一个前提消失。
 4. **第 30 轮 — 评测刷新。** 模板文本用当前 prompt 重新抽取；真实 LLM 读者阶段用当前代码重跑（紧凑渲染、撤回、
@@ -42,8 +42,8 @@
 - [x] `pyproject.toml` 0.3.0，`world0.__version__`（也更新了 web / MCP 客户端上报的版本）
 - [x] `CHANGELOG.md`：`[0.3.0]` 节（摘要 + 迁移说明：`render()` 默认紧凑、`part_of` 语义、`contrasts` 语义、否证无对象时不削弱概念）
 - [x] README：What's new、文档索引（路线图链接）
-- [ ] 全部测试、`docs/paper/verify.py`、LongRun `main` / `bigworld` / `taskmode` / `llm` 在发布提交上重跑
-- [ ] 独立评审
+- [x] 全部测试（1 541 通过）、`docs/paper/verify.py`（全部命题验证通过）、LongRun 全部研究在发布候选上重跑（`docs/eval/results/*.meta.json`；`main` 1 200 token 下 `world0_tuned` 0.99）
+- [x] 独立评审（12 条发现：0.2.0 存储的标签在加载时丢失语义 → 加载时迁移；其余为文档措辞，均已修正）
 - [ ] PR #2 说明更新；合并到 `main` 后打 `v0.3.0` 标签
 
 ## 推迟到 0.4

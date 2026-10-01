@@ -28,7 +28,7 @@ World 0 不是知识图谱，不是记忆系统，不是本体论。它是一个
 0.3.0 是第一个"世界的全部状态只是观察流的函数"的版本：没有任何东西取决于 `reflect()` 何时运行。要点（完整列表见 [`CHANGELOG.md`](CHANGELOG.md)）：
 
 - **Compact render is the default** — `Projection.render()` is the prompt-ready form; `render(style="full")` keeps the sectioned view. / 紧凑渲染成为默认，`render(style="full")` 保留分节视图。
-- **Hard retraction and read-time settlement** — a claim that no longer holds leaves the view and is listed under "No Longer Holds"; reads see settled values. / 硬撤回与读取时结算。
+- **Hard retraction and read-time settlement** — a claim that no longer holds leaves the view and is listed under "No longer holds"; reads see settled values. / 硬撤回与读取时结算。
 - **Task-conditioned projections** — task words are weighted by distinctiveness, claims are split by the task that stated them, and a view is never filled with another task's concepts. / 任务词按区分度加权、主张按陈述任务拆分、不用别的任务的概念填满预算。
 - **Relation semantics** — a stated conflict makes its partner visible; new `contrast` relation; `part_of` is inclusion read from the part; bare axis words map to the weakest relation on their axis. / 冲突使对方可见；新增 `contrast`；`part_of` 即包含；轴名别名不夸大。
 - **Hebbian revalidation at the event** — chance co-occurrence edges die when their endpoints are mentioned, not at the next reflect. / Hebbian 再验证在事件上发生。
@@ -386,26 +386,32 @@ World 0 的时间是**认知时间**：每摄入一条观察，世界时钟前�
 
 ## Relation Types / 关系类型
 
-Relations are typed and influence activation propagation strength:
+A relation is a **claim** identified by (source, target, axis, label). Every label lives on one of three cognitive axes, which decide how activation moves across the edge; the label itself (the *semantic relation*) is kept and rendered, and sets the claim's initial belief and propagation gain.
 
-关系是有类型的，且影响激活传播强度：
+关系是一条**主张**，身份为（源, 目标, 轴, 标签）。每个标签落在三条认知轴之一上，轴决定激活如何穿过这条边；标签本身（*语义关系*）被保留并渲染，并决定主张的初始信念与传播增益。
 
-| Type / 类型 | Propagation Factor / 传播系数 | Description / 说明 |
-|------|-------------------|-------------|
-| `depends_on` | 1.0 | Strong structural dependency / 强结构依赖 |
-| `contains` | 0.95 | Part-whole containment / 整体-部分包含 |
-| `part_of` | 0.95 | Inverse of contains / contains 的逆关系 |
-| `activates` | 0.90 | Causal activation / 因果激活 |
-| `supports` | 0.85 | Supportive association / 支持性关联 |
-| `precedes` | 0.80 | Temporal/logical ordering / 时间/逻辑顺序 |
-| `derived_from` | 0.80 | Origin relationship / 来源关系 |
-| `similar_to` | 0.70 | Similarity / 相似 |
-| `related_to` | 0.50 | Generic fallback / 通用回退 |
-| `contrasts` | 0.40 | Opposition / contrast / 对立/对比 |
+| Axis / 轴 | Effect on activation / 对激活的作用 | Semantic relations (initial belief · propagation) / 语义关系（初始信念 · 传播） |
+|---|---|---|
+| `positive` (directed / 有向) | excitation along the stated direction / 沿陈述方向兴奋 | `dependence` 0.78 · 0.70, `enables` 0.82 · 0.76, `inclusion` 0.92 · 0.86, `membership` 0.94 · 0.88, `functional_map` 0.90 · 0.84, `co_creation`, `mutual_reinforcement`, `future_coupling`, `proper_inclusion` |
+| `negative` (directed / 有向) | inhibition of the partner's excitation through other paths; the partner is still **visible** at the strength of the claim (a terminal) / 抑制对方经其他路径获得的兴奋；对方仍以主张的强度**可见**（终点，不再外扩） | `contrast` 0.70 · 0.06 (weakest: "differ, without conflicting" / 最弱："值得区分，但不冲突"), `conflict` 0.84 · 0.10, `complement`, `exclusion`, `disjointness`, `violates_constraint`, `incompatible_ontology`, `instability`, `adversarial_prediction` |
+| `parallel` (symmetric / 对称) | excitation both ways / 双向兴奋 | `generic_relation` 0.55 · 0.45 (co-occurrence edges / 共现边), `similarity_kernel` 0.70 · 0.64, `overlap`, `approximate_equivalence`, `equivalence` 0.96 · 0.92, `recursive_co_modeling`, `co_membership`, `quotient_map`, `persistent_attention` |
 
-Hebbian relations (`related_to`, auto-discovered from co-occurrence) are capped at weight 0.7. Explicit relations declared by the Agent can reach 1.0.
+Common labels are aliases, read as what they state / 常用标签是别名，按它们陈述的内容读：
 
-Hebbian 关系（`related_to`，从共现中自动发现）权重上限为 0.7。Agent 显式声明的关系可达 1.0。
+| Label / 标签 | Stored as / 存为 | Convention / 约定 |
+|---|---|---|
+| `depends_on`, `derived_from`, `precedes` | `dependence` | `(A, B, "precedes")` is stored as "B depends on A" / 存为 "B depends on A" |
+| `supports`, `activates` | `enables` | source enables target / 源使能目标 |
+| `contains`, `part_of` | `inclusion` | `(wheel, car, "part_of")` is stored and rendered as "car contains wheel" / 存储与渲染都是 "car contains wheel" |
+| `contrasts`, `negative`, `repulsion` | `contrast` | not a conflict; say `conflict` when you mean it / 不是冲突；要表达冲突请用 `conflict` |
+| `positive`, `attraction`, `trust` | `mutual_reinforcement` | |
+| `similar_to` | `similarity_kernel` | |
+| `mutual_understanding` | `recursive_co_modeling` | |
+| `related_to`, `parallel` | `generic_relation` | the fallback; co-occurrence edges are born here / 回退类型；共现边从这里诞生 |
+
+A stated claim starts at the belief above and is confirmed, disconfirmed or withdrawn by later statements (`retracted_relations`). Co-occurrence edges are discovered from the stream (two co-mentions **and** Jaccard association ≥ 0.2), re-judged whenever an endpoint is mentioned, and can be upgraded to a typed claim by a statement. Stores written by 0.2.0, which kept the label itself as the type, are migrated on load (see `CHANGELOG.md`).
+
+陈述的主张从上表的信念出发，被之后的陈述确认、否证或撤回（`retracted_relations`）。共现边从观察流中发现（共现两次**且** Jaccard 关联度 ≥ 0.2），任一端被提及时重判，一次陈述可以把它升级为类型化主张。0.2.0 把标签本身存为类型的存储在加载时迁移（见 `CHANGELOG.md`）。
 
 ## Model Selection / 模型选择
 
@@ -515,7 +521,7 @@ Writes use a dirty-flag mechanism: in-memory mutations are batched and flushed a
 
 **Projection is the output. / 投影是输出。** The system is only useful if it can turn a larger concept-world into a smaller, task-relevant view. Projection uses MMR selection to balance relevance against diversity. / 系统只有在能将更大的概念世界转化为更小的、与任务相关的视图时才有用。投影使用 MMR 选择来平衡相关性和多样性。
 
-**Hebbian learning with two gates. / 双门 Hebbian 学习。** Co-occurring concepts don't immediately form relations — they need to co-occur at least twice *and* co-occur more than chance would predict (Jaccard association over observations ≥ 0.2) before a connection is created. This prevents noise from single observations and stops frequently mentioned concepts from linking to everything they happen to share an observation with. / 共现概念不会立即形成关系——需要至少共现两次，**且**共现程度超过偶然水平（观察层面的 Jaccard 关联度 ≥ 0.2）才会创建连接。这既防止单次观察产生噪声，也防止高频概念与所有偶然同框的概念连成一团。 `reflect()` re-judges auto-discovered edges against the accumulated statistics and drops the ones that no longer pass. / `reflect()` 会用累积统计重判自动发现的边，删除不再达标的。
+**Hebbian learning with two gates. / 双门 Hebbian 学习。** Co-occurring concepts don't immediately form relations — they need to co-occur at least twice *and* co-occur more than chance would predict (Jaccard association over observations ≥ 0.2) before a connection is created. This prevents noise from single observations and stops frequently mentioned concepts from linking to everything they happen to share an observation with. / 共现概念不会立即形成关系——需要至少共现两次，**且**共现程度超过偶然水平（观察层面的 Jaccard 关联度 ≥ 0.2）才会创建连接。这既防止单次观察产生噪声，也防止高频概念与所有偶然同框的概念连成一团。 An auto-discovered edge is re-judged against the accumulated statistics whenever one of its endpoints is mentioned, and dropped when it no longer passes; `reflect()` only backstops this. / 自动发现的边在任一端被提及时用累积统计重判，不再达标即删除；`reflect()` 只是后备。
 
 **Graceful decay. / 优雅衰减。** Unused concepts decay exponentially in cognitive time (observations), with maturity- and evidence-dependent half-lives. Core concepts resist decay (2160-observation base half-life); embryonic concepts fade within a few dozen observations. This keeps the world clean without manual pruning. / 未使用的概念在认知时间（观察次数）上按指数衰减，半衰期取决于成熟度与证据量。核心概念抵抗衰减（基础半衰期 2160 次观察）；萌芽概念在几十次观察内衰退。这让概念世界保持整洁，无需手动修剪。
 

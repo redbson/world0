@@ -13,16 +13,16 @@ LongRun benchmark).  The headline properties of this release:
 
 - *Schedule independence*: maturity, existence, forgetting, confidence and
   the set of co-occurrence edges no longer depend on when `reflect()` runs
-  (paper Theorems 3.2 and 3.7, §5.3; `docs/paper/verify.py` checks every
-  proposition against the code).
+  (paper Theorems 3.2 and 3.7, §5 Prop. 5.4; `docs/paper/verify.py` checks
+  every proposition against the code).
 - *Views are task-conditioned and honest*: claims are split by the task that
   stated them, a view is never filled with another task's concepts, a
   retracted claim leaves the view, a stated conflict brings its partner into
   it, and the default render is the compact prompt-ready form.
 - *Relations are typed and say what was stated*: claim identity is
   (source, target, axis, label), negative claims carry belief, `contrast`
-  is a first-class relation and axis-word aliases map to the weakest
-  relation on their axis.
+  is a first-class relation and the bare negative-axis words map to it,
+  the weakest negative relation, not to `conflict`.
 - *Evidence*: a formal model with proofs and a numerical verifier, and the
   reproducible LongRun benchmark (10 seeds, real-LLM extraction, a
   real-LLM-reader stage) in which `world0_tuned` ties well-configured
@@ -31,28 +31,50 @@ LongRun benchmark).  The headline properties of this release:
 
 ### Migration from 0.2.0
 
-- `Projection.render()` now returns the compact form; pass
-  `render(style="full")` for the sectioned view with ids and link lists.
-- `(part, whole, "part_of")` is stored and rendered as `inclusion` from the
-  whole ("whole contains part").  Relations written by 0.2.0 as
-  `membership` in the other direction are not migrated (nothing records
-  which were `part_of`); re-ingest or edit them if the direction matters.
-- `contrasts`, `negative` and `repulsion` as relation labels now mean
-  `contrast` (negative axis, no conflict), not `conflict`; say `conflict`
-  when you mean it.  `mutual_understanding` maps to
+- `Projection.render()` now returns the compact prompt form; pass
+  `render(style="full")` for the diagnostic view with ids, maturity and
+  link lists.
+- Relation labels: 0.2.0 stored the label itself (`depends_on`, `part_of`,
+  `contrasts`, ...) in `relation_type`; 0.3.0 stores a three-axis
+  `relation_type` plus a `semantic_relation`.  A 0.2.0 store is migrated
+  on load: each label keeps its semantics (`depends_on` → `dependence`,
+  `supports` / `activates` → `enables`, `contrasts` → `contrast`,
+  `similar_to` → `similarity_kernel`, `related_to` → `generic_relation`),
+  and a label phrased from the other end is stored in the canonical
+  direction: `(wheel, car, "part_of")` becomes `inclusion` from `car`
+  ("car contains wheel"), `(build, deploy, "precedes")` becomes
+  `dependence` from `deploy`.  The same holds for new input: `part_of` is
+  inclusion read from the part.
+- `contrasts` (and the bare axis words `negative` / `repulsion`) now mean
+  `contrast` — "differ in a way worth keeping apart" — not `conflict`; say
+  `conflict` when you mean it.  `mutual_understanding` maps to
   `recursive_co_modeling`.
-- A `contradicted_relations` entry with no matching claim no longer weakens
-  the endpoint concepts; a denial is about the relation.
-- `Observation.retracted_relations` is the way to say a claim no longer
-  holds; a denial only lowers belief.
+- A negative claim's belief is seeded at 0.70, like a positive one; a
+  0.2.0 / early-dev edge whose belief was the inhibition gain is rebased
+  once on load.  Learning-state counters stored inline by early dev
+  versions are moved to their own record on first open.
 - `PROPAGATION_MIN_RATIO` lives in `world0.dynamics.coefficients`.
-- Stores written by 0.2.0 open unchanged: learning counters and relation
-  belief / inhibition fields are migrated once on first load.  The
-  optional SQLite backend (`World(store_path, backend="sqlite")`) is not
-  the default; `backend="auto"` picks it only for `.sqlite` / `.db` paths.
-- `world0.__version__` is new.
+- The optional SQLite backend (`World(store_path, backend="sqlite")`) is not
+  the default; `backend="auto"` picks it only for `.sqlite` / `.sqlite3` /
+  `.db` paths.  JSON stores open unchanged.
+- New since 0.2.0, for callers that adapt extraction output:
+  `Observation.retracted_relations` withdraws a claim that no longer holds
+  (it leaves views and is listed under "No longer holds");
+  `Observation.contradicted_relations` only lowers a claim's belief, and a
+  denial of a claim nobody made changes nothing.  `IngestResult` gained
+  `retracted_relations`, `stale_relations` and `prediction`;
+  `ReflectResult` gained `stale_relations`.  `world0.__version__` is new.
 
 ### Changed
+- **A 0.2.0 store keeps what its relations said** — 0.2.0 stored the label
+  itself (`depends_on`, `part_of`, `contrasts`, ...) in `relation_type`;
+  opening such a store used to collapse every label to its axis default
+  (`depends_on` and `part_of` both became `mutual_reinforcement`,
+  `contrasts` became `conflict`).  `RelationEdge` now migrates a legacy
+  label on load: the semantics are kept and a label phrased from the other
+  end (`part_of`, `precedes`) is stored in the canonical direction, as a
+  stated claim is.  Found by the release review;
+  `tests/test_legacy_store_relations.py`.
 - **Evaluation refresh** (analysis doc §7.33, LongRun report v5) — the
   real-LLM-reader stage was rerun on the release code with Claude Haiku 4.5
   readers (132 questions × 7 conditions, 4 seeds, no cross-world leakage):
@@ -65,8 +87,11 @@ LongRun benchmark).  The headline properties of this release:
   missed at step 399); the natural-text runs on three seeds cost every
   structured system 0.03–0.05 against generator extraction, World 0 the
   most (0.996 → 0.952).  All LongRun studies were rerun on the release
-  code (`docs/eval/results/*.meta.json`); `readers.py` gained the
-  `world0_tuned` conditions at 600 and 1 200 tokens.
+  candidate (`docs/eval/results/*.meta.json`): at 1 200 tokens
+  `world0_tuned` scores 0.99 (fourth version 0.95), +0.05 over `fact_task`
+  (10/10 seeds, Holm p = 0.027) and +0.04 / +0.03 over `state_doc` /
+  `summary_task`; at 600 tokens the three are still tied.  `readers.py`
+  gained the `world0_tuned` conditions at 600 and 1 200 tokens.
 - **Hebbian revalidation happens at the event** (analysis doc §7.32, paper
   §3.5 / §5.3) — a co-occurrence edge's association changes only when one
   of its endpoints is mentioned, so `HebbianEngine.learn()` now re-judges

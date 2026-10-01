@@ -122,10 +122,10 @@ The minimal loop:
 
 1. `ingest` — 输入观察
 2. `project` — 为任务生成局部投影
-3. `reflect` — 任务结束后做巩固、衰减和修剪
+3. `reflect` — 任务结束后做巩固（社群、色场、物理删除）；衰减与成熟度在每次事件与读取时按认知时间结算，不等 reflect
 1. `ingest` — feed an observation in
 2. `project` — produce a task-local projection
-3. `reflect` — consolidate, decay, and prune after the task
+3. `reflect` — consolidate after the task (communities, colour, physical deletion); decay and maturity settle in cognitive time at every event and read, not at reflect
 
 ### 4.1 Python API
 
@@ -212,7 +212,7 @@ Passing `llm=...` is what enables `ingest_text()`.
 - updates per-concept domain color field
 - facade owns the flush boundary — pipelines never persist
 
-返回 `IngestResult`：`new_concepts`、`reinforced_concepts`、`weakened_concepts`、`new_relations`、`reinforced_relations`、`weakened_relations`、`hebbian_relations`。
+返回 `IngestResult`：`new_concepts`、`reinforced_concepts`、`weakened_concepts`、`new_relations`、`reinforced_relations`、`weakened_relations`、`retracted_relations`（被撤回的主张）、`hebbian_relations`、`stale_relations`（本次事件上被再验证删除的共现边）、`prediction`（摄入前的预测误差）。
 
 ### `World.ingest_text(text, *, task="", source="") -> IngestResult`
 
@@ -252,7 +252,7 @@ Five-stage pipeline:
 4. lifecycle catch-up (promotion already happens at the activation / connection event; this only covers records changed some other way; never demotes — fading is decay's job)
 5. prune relations → prune concepts
 
-`ReflectResult` 包含：`decayed_*`、`promoted_concepts`、`demoted_concepts`、`pruned_*`、`new_communities`、`stable_communities`、`pruned_communities`、`color_sources`。
+`ReflectResult` 包含：`decayed_*`、`promoted_concepts`、`demoted_concepts`、`pruned_*`、`stale_relations`（后备再验证删除的共现边，普通的流之后为空）、`new_communities`、`stable_communities`、`pruned_communities`、`color_sources`。
 
 建议在任务结束或阶段切换时调用，不要每轮交互都 reflect。
 
@@ -546,9 +546,9 @@ Long-running agents:
 
 **`ingest_text()` fails?** No `llm=...` passed, provider extra not installed, or API key missing.
 
-**为什么 `reflect` 要显式调用？** 把“输入”和“巩固”拆开。这样每次输入不会立刻触发衰减和修剪，避免行为抖动，也更贴近批次式任务节奏。
+**为什么 `reflect` 要显式调用？** 把“输入”和“巩固”拆开。衰减、成熟度、撤回与再验证都在事件与读取时按认知时间结算（世界的状态是观察流的函数，与 reflect 何时运行无关）；reflect 只做重的一遍：社群、色场、已死对象的物理删除。所以它可以按批次节奏调用。
 
-**Why is `reflect` explicit?** It separates observation ingestion from consolidation — keeps every input from triggering decay and pruning, reduces jitter, matches batch-oriented task rhythms.
+**Why is `reflect` explicit?** It separates observation ingestion from consolidation. Decay, maturity, withdrawal and revalidation settle in cognitive time at every event and read (the world's state is a function of the observation stream, whatever the reflect schedule); reflect only runs the heavy passes — communities, colour, physical deletion of dead objects — so it can follow a batch rhythm.
 
 **能不能完全关掉色彩场和社区？** 可以。继承 `World` 后覆盖 `self._color_diffusion` / `self._communities` 为 no-op 实现（满足 `ColorField` / `CommunityDetectorP` 即可）。
 
