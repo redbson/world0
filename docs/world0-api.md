@@ -271,7 +271,7 @@ w.close()
 
 | 版本 | 工作 | 兼容 |
 |---|---|---|
-| **0.4** | 新模块 `world0.api`：`Statement`、`ConceptCard`、`Claim`；`ConceptNode.to_card()`、`RelationEdge.to_claim()`；`World.card()` / `claims()` / `find()`（`find_similar` 转发）；`Observation` 接受 `statements` / `withdrawals` / `denials` / `cards`，旧字段名转换 + 警告；`Projection` 增加 `cards` / `claims` / `no_longer_holds` / `other_tasks` / `hold_loosely` / `why` 字段，旧字段保留；`api` 版本字段；稳定性分级写进 docstring | 完全兼容 |
+| **0.4** ✅ | 新模块 `world0.api`：`Statement`、`ConceptCard`、`Claim`；`ConceptNode.to_card()`、`RelationEdge.to_claim()`；`World.card()` / `claims()` / `find()`（`find_similar` 转发）；`Observation` 接受 `statements` / `withdrawals` / `denials` / `cards`（构造时折叠进流水线字段，并以同名属性读回；流水线字段名在 0.4 不告警，内部改读新名之后再弃用）；`Projection` 增加 `cards` / `claims` / `no_longer_holds` / `other_tasks` / `hold_loosely` / `why` 字段，旧字段保留；`api` 版本字段；稳定性分级写进 docstring | 完全兼容 |
 | **0.5** | CLI 入口 `world0`（§5 子命令，`--json`）；HTTP `/v1/*`（独立于 `/api/*` 的 Agent 壳路由）；MCP 服务端 `world0.agents.mcp.server`（TODO P2-11）；`pkm` 的 `learn/ask/explore/connect` 文档化为别名 | 旧 `/api/*`、`pkm` 继续工作 |
 | **0.6** | 移除 `Projection` 的 `ConceptNode` / `RelationEdge` 直出字段与 `Observation` 旧字段名（按 §7 弃用期）；`world0` 顶层不再导出内部记录 | 破坏性，在 CHANGELOG `Migration` 节说明 |
 | **1.0** | 冻结 §3–§6；`api: "world0/1"` 成为长期承诺 | — |

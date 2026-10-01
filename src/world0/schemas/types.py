@@ -5,8 +5,9 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, computed_field, model_validator
 
+from world0.api import API_VERSION, Claim, ConceptCard, ConceptCardInput, Statement
 from world0.schemas.concept import ConceptNode, Maturity
 from world0.schemas.relation import RelationEdge
 
@@ -94,9 +95,100 @@ class Observation(BaseModel):
     task: str = ""
     source: str = ""
     source_id: str = ""
+    # API input names (docs/world0-api.md §4.1).  ``statements`` /
+    # ``withdrawals`` / ``denials`` / ``cards`` are accepted at construction
+    # and folded into the fields above, which the pipeline reads; the
+    # properties of the same names read them back.
     timestamp: datetime = Field(
         default_factory=lambda: datetime.now(timezone.utc)
     )
+
+
+    @model_validator(mode="before")
+    @classmethod
+    def _fold_api_input(cls, data: object) -> object:
+        """Accept the API shapes (``Statement`` lists and ``ConceptCardInput``)
+        next to the pipeline fields, and fold them in."""
+        if not isinstance(data, dict):
+            return data
+        if not any(k in data for k in ("statements", "withdrawals", "denials", "cards")):
+            return data
+        data = dict(data)
+
+        def statements(key: str) -> list[Statement]:
+            raw = data.pop(key, None) or []
+            return [s if isinstance(s, Statement) else Statement(**s) if isinstance(s, dict)
+                    else Statement(*s) for s in raw]
+
+        stated = statements("statements")
+        if stated:
+            data["relations"] = [*data.get("relations", []), *(s.as_triple() for s in stated)]
+            # A statement mentions its endpoints (a withdrawal or denial
+            # does not: they must not create concepts).
+            mentioned = list(data.get("concepts", []))
+            for s in stated:
+                for name in (s.source, s.target):
+                    if name not in mentioned:
+                        mentioned.append(name)
+            data["concepts"] = mentioned
+            priors = list(data.get("relation_priors", []))
+            for s in stated:
+                if s.belief is not None:
+                    priors.append(RelationPrior(source=s.source, target=s.target, relation_type=s.relation,
+                                                probability=s.belief, rationale=s.rationale))
+            data["relation_priors"] = priors
+        withdrawn = statements("withdrawals")
+        if withdrawn:
+            data["retracted_relations"] = [*data.get("retracted_relations", []),
+                                           *(s.as_triple() for s in withdrawn)]
+        denied = statements("denials")
+        if denied:
+            data["contradicted_relations"] = [*data.get("contradicted_relations", []),
+                                              *(s.as_triple() for s in denied)]
+        cards = data.pop("cards", None) or []
+        if cards:
+            cards = [c if isinstance(c, ConceptCardInput) else ConceptCardInput(**c) for c in cards]
+            candidates = list(data.get("concept_candidates", []))
+            named = {getattr(c, "name", None) or c.get("name") for c in candidates}
+            for card in cards:
+                if card.name in named:
+                    continue
+                candidates.append(ConceptCandidate(uid=card.name, name=card.name, kind=card.kind, sense=card.sense,
+                                                   domain=card.domain, description=card.description,
+                                                   aliases=list(card.aliases)))
+                named.add(card.name)
+            # Names given only in ``concepts`` still need a candidate once
+            # candidates are present (the pipeline reads one or the other).
+            for name in data.get("concepts", []):
+                if name not in named:
+                    candidates.append(ConceptCandidate(uid=name, name=name))
+                    named.add(name)
+            data["concept_candidates"] = candidates
+            mentioned = list(data.get("concepts", []))
+            for card in cards:
+                if card.name not in mentioned:
+                    mentioned.append(card.name)
+            data["concepts"] = mentioned
+        return data
+
+    @property
+    def statements(self) -> list[Statement]:
+        """The stated relations as ``Statement`` objects (priors attached)."""
+        priors = {(pr.source, pr.target): pr for pr in self.relation_priors}
+        out = []
+        for src, tgt, rel in self.relations:
+            pr = priors.get((src, tgt))
+            out.append(Statement(src, rel, tgt, belief=pr.probability if pr else None,
+                                 rationale=pr.rationale if pr else ""))
+        return out
+
+    @property
+    def withdrawals(self) -> list[Statement]:
+        return [Statement(s, r, t) for s, t, r in self.retracted_relations]
+
+    @property
+    def denials(self) -> list[Statement]:
+        return [Statement(s, r, t) for s, t, r in self.contradicted_relations]
 
 
 class PredictionError(BaseModel):
@@ -125,6 +217,7 @@ class PredictionError(BaseModel):
 class IngestResult(BaseModel):
     """Result of ingesting an observation."""
 
+    api: str = API_VERSION
     new_concepts: list[str] = Field(default_factory=list)
     reinforced_concepts: list[str] = Field(default_factory=list)
     weakened_concepts: list[str] = Field(default_factory=list)
@@ -208,6 +301,11 @@ class Projection(BaseModel):
     This is what gets injected into the Agent's prompt to shape its reasoning.
     """
 
+    api: str = API_VERSION
+    # The seed names as asked, and the perspective profile name if one was
+    # used (docs/world0-api.md §4.5).
+    seeds: list[str] = Field(default_factory=list)
+    perspective: str = ""
     concepts: list[ConceptNode] = Field(default_factory=list)
     relations: list[RelationEdge] = Field(default_factory=list)
     # Claims about concepts in view that were observed only under other
@@ -226,6 +324,158 @@ class Projection(BaseModel):
     task: str = ""
     epistemic: EpistemicStatus = Field(default_factory=EpistemicStatus)
     attention: dict[str, AttentionTrace] = Field(default_factory=dict)
+
+    # ── API views (docs/world0-api.md §4.5) ───────────────────────────
+    # The structured form of what ``render()`` prints: concept cards and
+    # claims grouped by status.  ``render()``'s text is provisional; these
+    # fields are the stable contract.
+
+    @computed_field  # type: ignore[misc]
+    @property
+    def cards(self) -> list[ConceptCard]:
+        """The concepts in view as concept cards, in view order."""
+        return [c.to_card() for c in self.concepts]
+
+    @computed_field  # type: ignore[misc]
+    @property
+    def claims(self) -> list[Claim]:
+        """Current claims, strongest belief first (what ``render()`` lists first)."""
+        names = self._display_names()
+        return [self._claim(r, names, "current") for r in self._classify()["current"]]
+
+    @computed_field  # type: ignore[misc]
+    @property
+    def no_longer_holds(self) -> list[Claim]:
+        """Withdrawn claims about the seeds, most recent first."""
+        names = self._display_names()
+        return [self._claim(r, names, "withdrawn") for r in self.retracted]
+
+    @computed_field  # type: ignore[misc]
+    @property
+    def other_tasks(self) -> list[Claim]:
+        """Claims about concepts in view that were stated under other tasks."""
+        names = self._display_names()
+        return [self._claim(r, names, "current") for r in self.other_contexts]
+
+    @computed_field  # type: ignore[misc]
+    @property
+    def hold_loosely(self) -> list[Claim]:
+        """Contested, outvoted and doubted claims (``render()``'s "Hold loosely")."""
+        names = self._display_names()
+        parts = self._classify()
+        out: list[Claim] = []
+        for _status, lead, _lead_belief, opposing in parts["contested"]:
+            out.append(self._claim(lead, names, "contested"))
+            out.extend(self._claim(r, names, "contested") for r, _b in opposing)
+        out.extend(self._claim(r, names, "outvoted") for r, _o in parts["outvoted"])
+        out.extend(self._claim(r, names, "doubted") for r in parts["doubted"])
+        out.extend(self._claim(r, names, "outvoted") for r, _o in parts["minority"])
+        return out
+
+    @computed_field  # type: ignore[misc]
+    @property
+    def why(self) -> dict[str, str]:
+        """One line per concept in view: why it is there (seed, reached via
+        which neighbour and relation, named by the task, held in focus)."""
+        names = {c.id: c.name for c in self.concepts}
+        out: dict[str, str] = {}
+        for c in self.concepts:
+            trace = self.attention.get(c.id)
+            if trace is None:
+                continue
+            if trace.kind == "seed":
+                out[c.id] = "seed"
+                continue
+            reasons = []
+            if trace.via in names:
+                reasons.append(f"via {trace.relation or 'relation'} from {names[trace.via]}")
+            if trace.task_named:
+                reasons.append("named by the task")
+            elif trace.task_history:
+                reasons.append("used in this task before")
+            if trace.in_focus:
+                reasons.append("still in focus")
+            elif trace.sustained:
+                reasons.append("next to the current focus")
+            out[c.id] = "; ".join(reasons) if reasons else "reached"
+        return out
+
+    @staticmethod
+    def _claim(r: RelationEdge, names: dict[str, str], status: str) -> Claim:
+        return r.to_claim(names.get(r.source_id, r.source_id), names.get(r.target_id, r.target_id), status=status)
+
+    def _classify(self) -> dict:
+        """Sort the explicit relations in view into current claims and what
+        to hold loosely — shared by ``render()`` and the API views.
+
+        Current claims are the explicit relations in view except those that
+        evidence against them has brought below ``DOUBTED_BELIEF`` and those
+        with ``OUTVOTE_RATIO`` times less support than an opposing claim
+        ("outvoted") or another label for the same pair ("minority", "also
+        stated as").  ``contested`` lists ``(status, lead, lead_belief,
+        [(opposing, belief)])`` for the contested pairs among what is
+        shown, recomputed on the shown claims (``CONTEST_MARGIN``).
+        """
+        from world0.projection.metacognition import CONTEST_MARGIN
+
+        explicit = sorted((r for r in self.relations if r.is_explicit), key=lambda r: -r.probability)
+        # Doubted: evidence against it brought it below even odds (a low
+        # starting prior alone, e.g. ``related_to``, is not doubt).
+        doubted = [r for r in explicit if r.disconfirmation_count > 0 and r.probability < DOUBTED_BELIEF]
+
+        def support(r: RelationEdge) -> int:
+            return r.support
+
+        # Support against a claim about the same pair, stated OUTVOTE_RATIO
+        # times as often: an opposing claim ("outvoted"), or another label
+        # for the same ordered pair on the same axis ("also stated as") —
+        # both are how extraction noise looks; two well-stated labels are
+        # two claims and both stay.
+        outvoted: dict[str, tuple[RelationEdge, RelationEdge]] = {}
+        minority: dict[str, tuple[RelationEdge, RelationEdge]] = {}
+        for r in explicit:
+            for o in explicit:
+                if o.id == r.id or {o.source_id, o.target_id} != {r.source_id, r.target_id}:
+                    continue
+                if support(o) < OUTVOTE_RATIO * support(r):
+                    continue
+                if r.opposes(o.relation_type, o.semantic_relation):
+                    outvoted[r.id] = (r, o)
+                    break
+                same_way = o.source_id == r.source_id or not (r.is_directed and o.is_directed)
+                if (same_way and o.relation_type == r.relation_type
+                        and "generic_relation" not in (o.semantic_relation, r.semantic_relation)):
+                    minority[r.id] = (r, o)
+                    break
+        hidden = set(outvoted) | set(minority)
+        doubted = [r for r in doubted if r.id not in hidden]  # listed once, as outvoted / minority
+        doubted_ids = {r.id for r in doubted}
+        current = [r for r in explicit if r.id not in doubted_ids and r.id not in hidden]  # stable
+        rels = {r.id: r for r in (*self.relations, *self.other_contexts)}
+        contested: list[tuple[str, RelationEdge, float, list[tuple[RelationEdge, float]]]] = []
+        # Contested pairs among what is shown: the claims set aside above
+        # neither lead nor oppose here, and the status is recomputed on the
+        # shown claims (``CONTEST_MARGIN``, projection/metacognition.py).
+        for claim in self.epistemic.contested:
+            shown = [
+                (rels[rid], belief) for rid, _sem, belief in claim.claims
+                if rid in rels and rid not in hidden and rid not in doubted_ids
+            ]
+            if len(shown) < 2:
+                continue
+            lead, lead_belief = max(shown, key=lambda rb: (rb[1], rb[0].id))
+            opposing = [(r, b) for r, b in shown
+                        if r.id != lead.id and lead.opposes(r.relation_type, r.semantic_relation)]
+            if not opposing:
+                continue
+            margin = lead_belief - max(b for _, b in opposing)
+            status = "contested" if margin < CONTEST_MARGIN else "leaning"
+            contested.append((status, lead, lead_belief, opposing))
+        return {
+            "current": current, "doubted": doubted,
+            "outvoted": list(outvoted.values()), "minority": list(minority.values()),
+            "contested": contested, "tentative": self.epistemic.tentative_ids(),
+        }
 
     def ignited_ids(self) -> list[str]:
         """Concepts that crossed the ignition threshold in this view."""
@@ -304,40 +554,13 @@ class Projection(BaseModel):
         if not self.concepts:
             lines.append("No concepts in view.")
             return "\n".join(lines)
-        explicit = sorted((r for r in self.relations if r.is_explicit), key=lambda r: -r.probability)
-        # Doubted: evidence against it brought it below even odds (a low
-        # starting prior alone, e.g. ``related_to``, is not doubt).
-        doubted = [r for r in explicit if r.disconfirmation_count > 0 and r.probability < DOUBTED_BELIEF]
-        doubted_ids = {r.id for r in doubted}
+        parts = self._classify()
+        claims = parts["current"]
+        doubted = parts["doubted"]
 
         def support(r: RelationEdge) -> int:
             return r.support
 
-        # Support against a claim about the same pair, stated OUTVOTE_RATIO
-        # times as often: an opposing claim ("outvoted"), or another label
-        # for the same ordered pair on the same axis ("also stated as") —
-        # both are how extraction noise looks; two well-stated labels are
-        # two claims and both stay.
-        outvoted: dict[str, tuple[RelationEdge, RelationEdge]] = {}
-        minority: dict[str, tuple[RelationEdge, RelationEdge]] = {}
-        for r in explicit:
-            for o in explicit:
-                if o.id == r.id or {o.source_id, o.target_id} != {r.source_id, r.target_id}:
-                    continue
-                if support(o) < OUTVOTE_RATIO * support(r):
-                    continue
-                if r.opposes(o.relation_type, o.semantic_relation):
-                    outvoted[r.id] = (r, o)
-                    break
-                same_way = o.source_id == r.source_id or not (r.is_directed and o.is_directed)
-                if (same_way and o.relation_type == r.relation_type
-                        and "generic_relation" not in (o.semantic_relation, r.semantic_relation)):
-                    minority[r.id] = (r, o)
-                    break
-        hidden = set(outvoted) | set(minority)
-        doubted = [r for r in doubted if r.id not in hidden]  # listed once, as outvoted / minority
-        doubted_ids = {r.id for r in doubted}
-        claims = [r for r in explicit if r.id not in doubted_ids and r.id not in hidden]  # stable
         mentioned: set[str] = set()
         for r in claims:
             lines.append(f"- {sentence(r)} (belief {r.probability:.2f})")
@@ -365,36 +588,17 @@ class Projection(BaseModel):
 
             lines.extend(capped(self.other_contexts, other))
         loose: list[str] = []
-        rels = {r.id: r for r in (*self.relations, *self.other_contexts)}
-        # Contested pairs among what is shown: the claims set aside above
-        # neither lead nor oppose here, and the status is recomputed on the
-        # shown claims (``CONTEST_MARGIN``, projection/metacognition.py).
-        from world0.projection.metacognition import CONTEST_MARGIN
-
-        for claim in self.epistemic.contested:
-            shown = [
-                (rels[rid], belief) for rid, _sem, belief in claim.claims
-                if rid in rels and rid not in hidden and rid not in doubted_ids
-            ]
-            if len(shown) < 2:
-                continue
-            lead, lead_belief = max(shown, key=lambda rb: (rb[1], rb[0].id))
-            opposing = [(r, b) for r, b in shown
-                        if r.id != lead.id and lead.opposes(r.relation_type, r.semantic_relation)]
-            if not opposing:
-                continue
-            margin = lead_belief - max(b for _, b in opposing)
-            status = "contested" if margin < CONTEST_MARGIN else "leaning"
-            parts = [f"{sentence(r)} ({b:.2f})" for r, b in opposing]
+        for status, lead, lead_belief, opposing in parts["contested"]:
+            parts_txt = [f"{sentence(r)} ({b:.2f})" for r, b in opposing]
             joiner = " vs " if status == "contested" else " over "
-            loose.append(f"- {status}: {sentence(lead)} ({lead_belief:.2f}){joiner}{' / '.join(parts)}")
-        for r, o in outvoted.values():
+            loose.append(f"- {status}: {sentence(lead)} ({lead_belief:.2f}){joiner}{' / '.join(parts_txt)}")
+        for r, o in parts["outvoted"]:
             loose.append(f"- outvoted: {sentence(r)} ({support(r)} vs {support(o)} statements)")
         for r in doubted:
             loose.append(f"- doubted: {sentence(r)} (belief {r.probability:.2f})")
-        for r, o in minority.values():
+        for r, o in parts["minority"]:
             loose.append(f"- also stated as: {sentence(r)} ({support(r)} vs {support(o)} statements)")
-        tentative = [names[cid] for cid in self.epistemic.tentative_ids() if cid in names]
+        tentative = [names[cid] for cid in parts["tentative"] if cid in names]
         room = COMPACT_SECTION_LIMIT - (1 if tentative else 0)
         if len(loose) > room:
             loose[room - 1:] = [f"- … and {len(loose) - room + 1} more"]
@@ -578,6 +782,7 @@ class Projection(BaseModel):
 class ReflectResult(BaseModel):
     """Result of a reflect() cycle."""
 
+    api: str = API_VERSION
     decayed_concepts: list[str] = Field(default_factory=list)
     promoted_concepts: list[str] = Field(default_factory=list)
     demoted_concepts: list[str] = Field(default_factory=list)
@@ -597,6 +802,7 @@ class ReflectResult(BaseModel):
 class WorldStatus(BaseModel):
     """Overview of the cognitive world's current state."""
 
+    api: str = API_VERSION
     # Cognitive time: number of observations ingested so far (see
     # ``schemas/clock.py``).  Decay and freshness are measured in ticks.
     cognitive_tick: int = 0

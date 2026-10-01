@@ -4,6 +4,30 @@ All notable changes to World 0 are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **`world0.api`: the interface data shapes** (`docs/world0-api.md`, 0.4
+  step of the roadmap) — `Statement`, `ConceptCardInput`, `ConceptCard`,
+  `Claim` and `API_VERSION` (`"world0/1"`), exported from `world0`.
+  `ConceptNode.to_card()` and `RelationEdge.to_claim()` produce them.
+  `Observation` accepts `statements` / `withdrawals` / `denials` / `cards`
+  next to the pipeline fields (`relations`, `relation_priors`,
+  `retracted_relations`, `contradicted_relations`, `concept_candidates`),
+  folds them in at construction and reads them back as properties; a
+  statement mentions its endpoints, a withdrawal or denial does not.
+  `Projection` gained the structured form of what `render()` prints:
+  `cards`, `claims`, `no_longer_holds`, `other_tasks`, `hold_loosely`
+  (claims with `status` contested / outvoted / doubted), `why` (one line
+  per concept), `seeds`, `perspective` and `api`; the render's
+  classification moved into `Projection._classify()` so text and
+  structure cannot drift apart.  `World.card()`, `World.claims(task=)` and
+  `World.find()` are the zero- and one-hop reads; `World.state()` /
+  `withdraw()` / `deny()` are spellings of `ingest`.  `IngestResult`,
+  `ReflectResult` and `WorldStatus` carry `api`.  The pipeline field
+  names stay accepted without warning until the internals read the new
+  ones (0.5); `tests/test_api_contract.py`.
+
 ## [0.3.0] - 2026-10-01
 
 **A cognitive layer whose state is a function of the observation stream.**

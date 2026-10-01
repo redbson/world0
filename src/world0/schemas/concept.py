@@ -388,6 +388,33 @@ class ConceptNode(BaseModel):
             )
         return self.identity_key
 
+    def to_card(self) -> "ConceptCard":
+        """The concept as the API presents it (``world0.api.ConceptCard``):
+        the editable, relation-bearing part without the dynamics internals."""
+        from world0.api import ConceptCard
+
+        tasks = [t for t, _ in sorted(self.task_profile.items(), key=lambda kv: (-kv[1], kv[0])) if t]
+        sources: list[str] = []
+        for ref in self.source_refs:
+            label = ref.source or ref.source_id
+            if label and label not in sources:
+                sources.append(label)
+        return ConceptCard(
+            id=self.id,
+            name=self.name,
+            aliases=list(self.aliases),
+            sense=self.sense,
+            kind=self.kind,
+            domain=self.domain,
+            description=self.description,
+            maturity=self.maturity.value,
+            evidence=round(self.evidence(), 4),
+            confidence=round(self.confidence, 4),
+            tasks=tasks,
+            last_seen_tick=self.last_activated_tick,
+            sources=sources,
+        )
+
     def representation_feature(self) -> str:
         """Return the semantic feature word used in human-facing IDs."""
         for value in (self.sense, self.kind, self.domain):

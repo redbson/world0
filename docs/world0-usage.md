@@ -184,7 +184,10 @@ Positive + negative channels: `concepts`/`relations` give positive evidence; `we
 
 ## 5. 核心 API / Core API
 
-> 长期稳定的统一接口（动词表、数据形状、四个入口的映射、稳定性分级）见 [`world0-api.md`](world0-api.md)；本节描述 0.3.0 现有的方法。
+> 长期稳定的统一接口（动词表、数据形状、四个入口的映射、稳定性分级）见 [`world0-api.md`](world0-api.md)。
+> 0.4 的第一步已实现：`from world0 import Statement, ConceptCard, Claim`；`Observation(statements=[Statement("api", "depends_on", "db")],
+> withdrawals=[…], denials=[…], cards=[…])`；`projection.cards / claims / no_longer_holds / other_tasks / hold_loosely / why`；
+> `world.card(name)`、`world.claims(name, task=…)`、`world.find(text)`；`world.state(...)` / `withdraw(...)` / `deny(...)` 是 `ingest` 的拼写。
 
 ### `World(store_path=".world0", llm=None)`
 

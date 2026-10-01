@@ -753,6 +753,36 @@ class RelationEdge(BaseModel):
             return 0
         return self.statements or self.probability_observation_count + 1
 
+    def to_claim(self, source_name: str, target_name: str, *, status: str | None = None) -> "Claim":
+        """The edge as the API presents it (``world0.api.Claim``).
+
+        ``status`` defaults to what the edge alone can tell — ``withdrawn``,
+        ``co_occurrence`` or ``current``; a projection refines it to
+        ``doubted`` / ``contested`` / ``outvoted`` from the other claims in
+        view (``Projection.hold_loosely``)."""
+        from world0.api import Claim
+
+        if status is None:
+            if self.is_retracted:
+                status = "withdrawn"
+            elif not self.is_explicit:
+                status = "co_occurrence"
+            else:
+                status = "current"
+        return Claim(
+            source=source_name,
+            source_id=self.source_id,
+            relation=self.semantic_relation,
+            target=target_name,
+            target_id=self.target_id,
+            axis=self.relation_type.value,
+            belief=round(self.probability, 4),
+            support=self.support,
+            status=status,
+            stated_under=sorted({t for t in self.claim_tasks if t.strip()}),
+            text=f"{source_name} {relation_phrase(self.semantic_relation)} {target_name}",
+        )
+
     def claim_affinity(self, task: str, vocabulary: TaskVocabulary | None = None) -> float | None:
         """Best match of ``task`` against the tasks the claim was stated under;
         None when the claim was never stated under a task (neutral)."""

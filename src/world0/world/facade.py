@@ -15,6 +15,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from world0.api import Claim, ConceptCard, Statement
 from world0.communities.manager import CommunityManager
 from world0.concepts.api import Concepts
 from world0.dynamics.activation import ActivationEngine
@@ -27,7 +28,7 @@ from world0.extraction.extractor import ConceptExtractor
 from world0.context import Focus
 from world0.perspectives import get_perspective
 from world0.prompts import PromptRegistry
-from world0.projection.engine import ProjectionEngine
+from world0.projection.engine import CONTEXT_MATCH, ProjectionEngine
 from world0.relations.manager import RelationManager
 from world0.schemas.clock import CognitiveClock
 from world0.schemas.context import Perspective
@@ -361,6 +362,7 @@ class World:
         from ``world0.perspectives`` (``"dependency_map"``, ``"taxonomy"``,
         …); a bare ``task`` is applied to a named profile that has none.
         """
+        perspective_name = perspective if isinstance(perspective, str) else ""
         if isinstance(perspective, str):
             perspective = get_perspective(perspective, task=task)
         seed_ids: list[str] = []
@@ -374,7 +376,7 @@ class World:
         )
 
         if not seed_ids:
-            return Projection(task=effective_task)
+            return Projection(task=effective_task, seeds=list(seeds), perspective=perspective_name)
 
         activations = self._activation.activate(
             seed_ids,
@@ -399,7 +401,73 @@ class World:
         )
         if self.sustained_attention:
             self.focus.update(projection.ignited_ids(), effective_task)
+        projection.seeds = list(seeds)
+        projection.perspective = perspective_name
         return projection
+
+    # ── Inspect (docs/world0-api.md §3): zero- and one-hop reads ──────
+
+    def card(self, concept: str) -> ConceptCard | None:
+        """The concept card of ``concept`` (a name, alias or id), or None."""
+        node = self.concepts.resolve(concept) or self.concepts.get(concept)
+        return node.to_card() if node else None
+
+    def claims(self, concept: str, *, task: str = "") -> list[Claim]:
+        """Every claim about ``concept`` — current, withdrawn and
+        co-occurrence — without the selection a projection makes.
+
+        With ``task``, claims stated under tasks that do not match it are
+        left out (claims stated without a task are neutral and kept), the
+        same line ``project(task=...)`` draws (``CONTEXT_MATCH``).
+        """
+        node = self.concepts.resolve(concept) or self.concepts.get(concept)
+        if node is None:
+            return []
+        task_lower = task.strip().lower()
+        vocabulary = getattr(self.concepts, "task_vocabulary", None)
+        out: list[Claim] = []
+        for edge in self.relations.for_concept(node.id):
+            if task_lower and edge.is_explicit:
+                affinity = edge.claim_affinity(task_lower, vocabulary)
+                if affinity is not None and affinity < CONTEXT_MATCH:
+                    continue
+            src = self.concepts.get(edge.source_id)
+            tgt = self.concepts.get(edge.target_id)
+            out.append(edge.to_claim(src.name if src else edge.source_id, tgt.name if tgt else edge.target_id))
+        order = {"current": 0, "contested": 1, "doubted": 2, "outvoted": 3, "co_occurrence": 4, "withdrawn": 5}
+        out.sort(key=lambda c: (order.get(c.status, 9), -c.belief, c.text))
+        return out
+
+    def find(self, text: str, *, limit: int = 5, min_similarity: float = 0.3) -> list[tuple[ConceptCard, float]]:
+        """Concepts whose name, alias or signature resembles ``text``,
+        best first, as ``(card, score)``."""
+        out: list[tuple[ConceptCard, float]] = []
+        for name, score in self.find_similar(text, min_similarity=min_similarity, limit=limit):
+            node = self.concepts.resolve(name) or self.concepts.get(name)
+            if node is not None:
+                out.append((node.to_card(), score))
+        return out
+
+    # ── Statement sugar (docs/world0-api.md §4.2): spellings of ingest ─
+
+    def state(self, source: str, relation: str, target: str, *, task: str = "", source_label: str = "",
+              belief: float | None = None) -> IngestResult:
+        """``ingest`` one statement: "<source> <relation> <target>"."""
+        return self.ingest(Observation(statements=[Statement(source, relation, target, belief=belief)],
+                                       task=task, source=source_label))
+
+    def withdraw(self, source: str, relation: str, target: str, *, task: str = "",
+                 source_label: str = "") -> IngestResult:
+        """``ingest`` one withdrawal: the claim no longer holds and leaves views."""
+        return self.ingest(Observation(withdrawals=[Statement(source, relation, target)],
+                                       task=task, source=source_label))
+
+    def deny(self, source: str, relation: str, target: str, *, task: str = "",
+             source_label: str = "") -> IngestResult:
+        """``ingest`` one denial: lowers the claim's belief; a denial of a
+        claim nobody made changes nothing."""
+        return self.ingest(Observation(denials=[Statement(source, relation, target)],
+                                       task=task, source=source_label))
 
     def reflect(self, *, light: bool = False) -> ReflectResult:
         """Cognitive consolidation — run after a task is complete.
