@@ -39,6 +39,8 @@ CONDITIONS = [
     ("world0@1200", "world0", 1200),
     ("world0_compact@600", "world0_compact", 600),
     ("world0_compact@1200", "world0_compact", 1200),
+    ("world0_tuned@600", "world0_tuned", 600),
+    ("world0_tuned@1200", "world0_tuned", 1200),
 ]
 CAPS = {"focus": 8, "chain": 8, "bridge": 6, "stale": 6, "detail": 5}   # queries kept per kind per seed
 SALT = "longrun-readers-v1"
