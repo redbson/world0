@@ -90,8 +90,9 @@ def to_extraction(raw: str, ev: Event, known: dict[str, str]) -> Extraction:
     ``known`` maps normalised names to the world's concept names, so an
     extracted "zakonax router" is the same concept as "Zakonax router";
     names the world does not have are kept (spurious concepts).  Withdrawn
-    and contradicted relations both become retractions: the baselines have
-    no other channel for "do not hold this now".
+    and contradicted relations both become retractions, since the baselines
+    have no other channel for "do not hold this now"; contradicted ones are
+    also kept apart for World 0, whose API distinguishes the two.
     """
     obs = _parser()._parse_response(raw, task=ev.task, source=f"step{ev.step}")
     by_uid = {c.uid: c.name for c in obs.concept_candidates if c.uid}
@@ -115,13 +116,15 @@ def to_extraction(raw: str, ev: Event, known: dict[str, str]) -> Extraction:
         if n not in concepts:
             concepts.append(n)
     got = claims(obs.relations)
+    contradictions = claims(obs.contradicted_relations)
     retractions = claims([*obs.retracted_relations, *obs.contradicted_relations])
     for c in got:
         for x in (c.src, c.tgt):
             if x not in concepts:
                 concepts.append(x)
     keep = ev.ticket_claim is not None and ev.ticket_claim in got
-    return Extraction(concepts, got, retractions, ev.ticket if keep else None, ev.ticket_claim if keep else None)
+    return Extraction(concepts, got, retractions, ev.ticket if keep else None, ev.ticket_claim if keep else None,
+                      contradictions)
 
 
 def _events(seed: int, horizon: int, style: str = "template") -> list[Event]:

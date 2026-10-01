@@ -548,7 +548,9 @@ class World0(System):
             relations=[(c.src, c.tgt, c.rel) for c in x.claims],
             # "Correction: X no longer depends on Y" is a revision of the
             # world, not evidence the claim was wrong: withdraw it.
-            retracted_relations=[(c.src, c.tgt, c.rel) for c in x.retractions],
+            retracted_relations=[(c.src, c.tgt, c.rel) for c in x.retractions if c not in x.contradictions],
+            # "this was wrong" from a real extractor (llm mode): World 0's own channel
+            contradicted_relations=[(c.src, c.tgt, c.rel) for c in x.contradictions],
             task=ev.task if self.ingest_task else "", source=f"step{ev.step}",
         ))
 

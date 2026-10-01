@@ -96,6 +96,9 @@ class Extraction:
     retractions: list["Claim"]
     ticket: str | None
     ticket_claim: "Claim | None"
+    # the extractor's "this is wrong" claims (a subset of ``retractions``,
+    # which is all a baseline can act on); World 0 takes them as contradictions
+    contradictions: list["Claim"] = field(default_factory=list)
 
 
 @dataclass
