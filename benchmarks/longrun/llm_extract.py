@@ -6,17 +6,18 @@ it with what World 0 actually ships: every event's text goes through the
 production extraction prompt (``extraction.concepts_relations.system``) to
 an LLM, and the raw JSON is parsed by the production parser
 (``ConceptExtractor._parse_response``).  Raw outputs are cached per
-(seed, horizon), so a stream extracted once replays identically.
+(seed, horizon, text style, prompt version), so a stream extracted once
+replays identically.
 
     # 1. write the prompts (no gold in the batch files)
-    python -m benchmarks.longrun.llm_extract export --seed 0 --horizon 600 --out DIR
+    python -m benchmarks.longrun.llm_extract export --seed 0 --horizon 600 --style natural --out DIR
     # 2. an LLM answers DIR/batch_*.json into DIR/answers_*.json ({id: raw}),
     #    either through a provider ...
     python -m benchmarks.longrun.llm_extract answer --dir DIR --model gpt-5.4-nano
     #    ... or by any agent given only system.txt and one batch file
     # 3. collect into the cache, then measure the extractor against gold
-    python -m benchmarks.longrun.llm_extract collect --seed 0 --horizon 600 --dir DIR
-    python -m benchmarks.longrun.llm_extract profile --seed 0 --horizon 600
+    python -m benchmarks.longrun.llm_extract collect --seed 0 --horizon 600 --style natural --dir DIR
+    python -m benchmarks.longrun.llm_extract profile --seed 0 --horizon 600 --style natural
 
 Runs then use ``GenConfig(extract_mode="llm")`` (``run.py --study llm``).
 Every command takes ``--style template|natural`` (``GenConfig.text_style``):

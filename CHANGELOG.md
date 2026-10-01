@@ -14,9 +14,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the needing side as source, never a reversed enables; membership,
   functional_map, disjointness, incompatible_ontology and conflict are
   scoped; a denial goes in `contradicted_relations`.  On paraphrased LongRun
-  text the old prompt kept 52 % of claims (35 % reversed, 13 % relabelled);
-  the new one keeps 90 / 88 / 93 % on seeds 0 / 1 / 2 (seeds 1 and 2 unseen
-  while revising).
+  text the old prompt kept 50 % of claims (37 % reversed, 13 % relabelled);
+  the new one keeps 90 / 88 / 93 % on seeds 0 / 1 / 2 (new events for seeds 1
+  and 2, but the same paraphrase phrasings).
+- **A denial of a claim nobody made weakens nothing** — a
+  `contradicted_relations` entry with no matching claim used to weaken both
+  endpoint concepts; a denial is about the relation, not about the concepts.
 
 ### Added
 - **Natural (paraphrased) LongRun text** (`benchmarks/longrun/paraphrase.py`,
@@ -26,7 +29,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the template text of the same seed.  Real LLM extraction is cached for
   seeds 0–2 (`llm_extract.py --style natural`); at 1 200 tokens, excluding
   episodic detail queries, real extraction costs `world0_tuned` 0.94 → 0.90,
-  `fact_task` 0.92 → 0.87, `state_doc` 0.95 → 0.90.  `llm_cache/prompt_v1/`
+  `fact_task` 0.92 → 0.87, `state_doc` 0.95 → 0.90.  A negated pair is never a
+  claim of the stream (any domain, any time, including later revisions).  `llm_cache/prompt_v1/`
   keeps the previous prompt's extractions (`GenConfig(llm_version=...)`).
 - **Withdrawn relations from the LLM extractor** (analysis doc §7.27) — the
   extraction prompt and `ConceptExtractor` emit `retracted_relations`

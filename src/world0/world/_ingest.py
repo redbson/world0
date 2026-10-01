@@ -402,20 +402,11 @@ class IngestPipeline:
             rel_type = semantic_relation_spec(semantic_relation).axis
             existing = self._stated_claim(src.id, tgt.id, rel_type, semantic_relation)
             if existing is None:
-                # Contradiction without an existing edge weakens both
-                # endpoint concepts instead — there is nothing else to
-                # attach disconfirmation to.  Report the applied
-                # disconfirmation so callers can observe it, mirroring the
-                # ``observation.weakened`` path above.
-                self._concepts.weaken(
-                    src.id, source=observation.source, task=observation.task
-                )
-                self._concepts.weaken(
-                    tgt.id, source=observation.source, task=observation.task
-                )
-                for node in (src, tgt):
-                    if node.name not in result.weakened_concepts:
-                        result.weakened_concepts.append(node.name)
+                # A denial of a claim nobody made ("we checked: A and B do
+                # not conflict") is about the relation, not evidence that A
+                # or B is less relevant or less likely (§7.28): nothing to
+                # weaken.  Concepts the text itself rejects arrive through
+                # ``observation.weakened``.
                 continue
             self._relations.weaken(existing.id, provenance=observation.task)
             result.weakened_relations.append(

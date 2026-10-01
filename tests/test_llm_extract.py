@@ -105,7 +105,9 @@ class TestNaturalText:
         for phrase in ("depends on", "is a prerequisite for", "is part of", "It ", "do not conflict"):
             assert phrase in text, phrase
 
-    def test_negated_distractors_name_no_true_claim(self, monkeypatch):
+    @pytest.mark.parametrize("seed", [0, 1, 245])
+    def test_negated_distractors_never_deny_a_claim_of_the_stream(self, monkeypatch, seed):
+        """Not in any domain (bridges), not stated before or after (revisions), not in the event."""
         from benchmarks.longrun import paraphrase
 
         seen = []
@@ -116,14 +118,14 @@ class TestNaturalText:
             return orig(self, step, task, stated, retire, rest, ticket, filler, negated)
 
         monkeypatch.setattr(paraphrase.Realiser, "task_text", spy)
-        s = Stream(GenConfig(seed=1, horizon=600, text_style="natural"))
-        evs = {ev.step: ev for ev, _ in s.events()}
-        negs = [(st, n) for st, n in seen if n]
-        assert len(negs) > 50
-        for st, (a, b) in negs:
-            d = evs[st].domain
-            assert not any({c.src, c.tgt} == {a, b} for c in s.world.truth[d])
-            assert not any({c.src, c.tgt} == {a, b} for c in evs[st].claims + evs[st].retractions)
+        s = Stream(GenConfig(seed=seed, horizon=600, text_style="natural"))
+        list(s.events())
+        negs = [n for _, n in seen if n]
+        assert len(negs) > 30
+        claimed = {frozenset((c.src, c.tgt)) for c in s.stated_at}
+        claimed |= {frozenset((c.src, c.tgt)) for d in s.world.domains for c in s.world.truth[d]}
+        claimed |= {frozenset((old.src, old.tgt)) for _, _, old, _ in s.revisions}
+        assert not [n for n in negs if frozenset(n) in claimed]
 
     def test_an_article_or_case_does_not_make_another_concept(self):
         assert llm_extract._key("the Zakonax router") == llm_extract._key("zakonax ROUTER") == "zakonax router"

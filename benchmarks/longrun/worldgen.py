@@ -378,16 +378,35 @@ class Stream:
         rng = event_rng(self.cfg.seed, step)
         negated = None
         if rng.random() < 0.25:
-            # a pair the domain has no claim about, stated as *not* holding
-            linked = {frozenset((c.src, c.tgt)) for c in self.world.truth[d]}
-            if retire:
-                linked.add(frozenset((retire.src, retire.tgt)))
+            # a pair stated as *not* holding: it must never be a claim of the stream
             for _ in range(10):
                 a, b = rng.sample(self.world.concepts[d], 2)
-                if frozenset((a, b)) not in linked:
+                if self._deniable(a, b, stated, retire):
                     negated = (a, b)
                     break
         return Realiser(rng).task_text(step, self.task_label(d), stated, retire, rest, ticket, filler, negated)
+
+    def _deniable(self, a: str, b: str, stated: list[Claim], retire: Claim | None) -> bool:
+        """No claim links a and b in any domain, now, before, in this event, or by a later revision.
+
+        Bridge concepts are in several domains; a revision adds a dependency
+        from a concept to one in the next layer (``_revision_candidate``), so
+        such a pair could become true later and is never denied.
+        """
+        pair = {a, b}
+        if any({c.src, c.tgt} == pair for c in [*stated, *([retire] if retire else [])]):
+            return False
+        if any({c.src, c.tgt} == pair for c in self.stated_at):
+            return False
+        last = self.cfg.layers - 2
+        for d in self.world.domains:
+            if any({c.src, c.tgt} == pair for c in self.world.truth[d]):
+                return False
+            la, lb = self.world.layer_of.get((d, a)), self.world.layer_of.get((d, b))
+            if la is not None and lb is not None and (
+                    (lb == la + 1 and la < last) or (la == lb + 1 and lb < last)):
+                return False
+        return True
 
     def _noise_event(self, step: int) -> Event:
         rng = self.rng

@@ -320,10 +320,12 @@ def test_contradicted_relation_with_existing_edge_weakens_relation() -> None:
     assert any(name == "weaken" for name, _ in rs.calls)
 
 
-# ── weakened concepts via contradiction WITHOUT an edge (the fix) ─────
+# ── contradiction WITHOUT an edge: a denial of a claim nobody made ─────
+# (analysis doc §7.28) "we checked: A and B do not conflict" says nothing
+# about whether A or B themselves hold; it weakens nothing and adds nothing.
 
 
-def test_contradiction_without_edge_weakens_both_endpoints() -> None:
+def test_contradiction_without_edge_weakens_nothing() -> None:
     pipeline, cs, rs, *_ = _pipeline()
     result = pipeline.run(
         Observation(
@@ -332,19 +334,15 @@ def test_contradiction_without_edge_weakens_both_endpoints() -> None:
             task="profiling",
         )
     )
-    assert sorted(result.weakened_concepts) == ["MongoDB", "bottleneck"]
-    # No edge existed, so nothing lands in weakened_relations.
+    assert result.weakened_concepts == []
     assert result.weakened_relations == []
     # No edge was created as a side effect.
     assert len(rs) == 0
-    # disconfirmation_count rose on both endpoints (the fix's effect).
     for node in cs.all():
-        assert node.disconfirmation_count >= 1
+        assert node.disconfirmation_count == 0
 
 
-def test_contradiction_without_edge_dedupes_shared_endpoints() -> None:
-    # Two contradicted relations sharing an endpoint must not report that
-    # endpoint twice in weakened_concepts.
+def test_contradiction_without_edge_on_shared_endpoints_weakens_nothing() -> None:
     pipeline, cs, *_ = _pipeline()
     result = pipeline.run(
         Observation(
@@ -356,12 +354,11 @@ def test_contradiction_without_edge_dedupes_shared_endpoints() -> None:
             task="t",
         )
     )
-    assert result.weakened_concepts.count("hub") == 1
-    assert sorted(result.weakened_concepts) == ["hub", "x", "y"]
+    assert result.weakened_concepts == []
+    assert all(node.disconfirmation_count == 0 for node in cs.all())
 
 
-def test_contradiction_without_edge_does_not_double_count_within_one_pair() -> None:
-    # Same name on both ends: only one concept exists, reported once.
+def test_contradiction_without_edge_self_pair_weakens_nothing() -> None:
     pipeline, cs, *_ = _pipeline()
     result = pipeline.run(
         Observation(
@@ -370,12 +367,9 @@ def test_contradiction_without_edge_does_not_double_count_within_one_pair() -> N
             task="t",
         )
     )
-    assert result.weakened_concepts == ["solo"]
+    assert result.weakened_concepts == []
     node = cs.resolve("solo")
-    assert node is not None
-    # Both weaken calls hit the same single node, so it disconfirms twice
-    # but is reported exactly once.
-    assert node.disconfirmation_count >= 2
+    assert node is not None and node.disconfirmation_count == 0
 
 
 # ── hebbian relations ────────────────────────────────────────────────
@@ -526,7 +520,7 @@ def test_world_facade_relation_new_then_reinforced(tmp_path) -> None:
     assert r2.reinforced_relations == ["Index → mutual_reinforcement → Query"]
 
 
-def test_world_facade_contradiction_without_edge_weakens_endpoints(
+def test_world_facade_contradiction_without_edge_weakens_nothing(
     tmp_path,
 ) -> None:
     world = World(store_path=tmp_path / "w", llm=None)
@@ -537,8 +531,7 @@ def test_world_facade_contradiction_without_edge_weakens_endpoints(
             task="t",
         )
     )
-    assert sorted(result.weakened_concepts) == ["Latency", "Sharding"]
+    assert result.weakened_concepts == []
     assert result.weakened_relations == []
-    # disconfirmation_count rose on both endpoints in the persisted world.
     for node in world.concepts.all():
-        assert node.disconfirmation_count >= 1
+        assert node.disconfirmation_count == 0
