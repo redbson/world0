@@ -132,6 +132,17 @@ REVIVAL_MIN_CONFIDENCE: float = 0.05
 SALIENCE_EVIDENCE_SHARE: float = 0.7
 SALIENCE_ERA_HL: float = 4380.0
 
+# ── Long-term memory ──────────────────────────────────────────────────
+# A concept that has crossed the consolidation gate (``dynamics/lifecycle``:
+# well evidenced *and* recurring in spaced windows) forgets on a much
+# slower curve: its confidence half-life and the era on which its evidence
+# floor and salience persistence forget both become LONG_TERM_ERA_HL
+# (eight eras, 35 040 observations) instead of the maturity half-life and
+# SALIENCE_ERA_HL.  Nothing is immortal — the curve is slow, not flat —
+# and a long-term concept that is argued down below the balance gate, or
+# that finally fades, leaves the mode.
+LONG_TERM_ERA_HL: float = 8.0 * SALIENCE_ERA_HL
+
 # ── Recurrence chain ─────────────────────────────────────────────────
 # ``recurrence_count`` counts the windows of the *current chain*: an idle
 # gap of at least RECURRENCE_CHAIN_GAP ticks (half an era) ends it, and the
@@ -343,6 +354,10 @@ class ConceptNode(BaseModel):
     recurrence_count: int = 0
     last_recurrence_window: int = -1
     last_recurrence_tick: int = -1
+    # Cognitive time at which the concept entered long-term memory (the
+    # consolidation gate of ``dynamics/lifecycle``), None while it has
+    # not.  Set and cleared only at events; see ``long_term``.
+    consolidated_tick: int | None = None
     last_weakened: datetime | None = None
     # Instant (both coordinates) at which time decay was last applied.
     # Lets the decay engine decay only the *elapsed interval* instead of
@@ -413,6 +428,7 @@ class ConceptNode(BaseModel):
             tasks=tasks,
             last_seen_tick=self.last_activated_tick,
             sources=sources,
+            long_term=self.long_term,
         )
 
     def representation_feature(self) -> str:
@@ -444,6 +460,13 @@ class ConceptNode(BaseModel):
 
     def all_names(self) -> list[str]:
         return [self.normalized_name()] + [a.strip().lower() for a in self.aliases]
+
+    @property
+    def long_term(self) -> bool:
+        """Whether the concept forgets on the long-term curve now: it has
+        been consolidated and has not faded since (a FADING concept is
+        back on the fast curve; a revival clears the flag)."""
+        return self.consolidated_tick is not None and self.maturity != Maturity.FADING
 
     def activate(
         self, source: str = "", task: str = "", *, tick: int | None = None
@@ -492,6 +515,8 @@ class ConceptNode(BaseModel):
                 else Maturity.EMBRYONIC
             )
             self.confidence = max(self.confidence, REVIVAL_MIN_CONFIDENCE)
+            # Long-term memory is re-earned after a fade.
+            self.consolidated_tick = None
         if chain_broken:
             # Judged after the revival above: the chain that justified the
             # landing rung is spent, this activation starts the next one.
@@ -744,8 +769,9 @@ class ConceptNode(BaseModel):
         if persistence <= fresh:
             return fresh
         elapsed = self.elapsed_since_activation(now_tick, now)
-        if elapsed > 0 and SALIENCE_ERA_HL > 0:
-            persistence *= math.pow(0.5, elapsed / SALIENCE_ERA_HL)
+        era = LONG_TERM_ERA_HL if self.long_term else SALIENCE_ERA_HL
+        if elapsed > 0 and era > 0:
+            persistence *= math.pow(0.5, elapsed / era)
         return max(fresh, persistence)
 
     def hours_since_activation(self, now: datetime | None = None) -> float:

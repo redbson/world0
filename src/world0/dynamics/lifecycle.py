@@ -87,6 +87,8 @@ Demotion:
 
 from __future__ import annotations
 
+import os
+
 from typing import TYPE_CHECKING
 
 from world0.dynamics.decay import (
@@ -134,6 +136,40 @@ _ORDER = {
 }
 
 
+# ── Long-term memory: the consolidation gate ─────────────────────────
+# A concept enters long-term memory (``ConceptNode.consolidated_tick``;
+# the slow curve of ``dynamics/decay``) when it is well evidenced
+# (e(n, d) ≥ LONG_TERM_EVIDENCE — metacognition's WELL_EVIDENCED line, so
+# n ≥ 10 confirmations with none against), has recurred in at least
+# LONG_TERM_RECURRENCE spaced windows (uses ≥ 24 observations apart: a
+# burst, however large, does not consolidate — spacing is the signal of
+# durability), and is not contested (β ≥ LONG_TERM_BALANCE).  All three
+# are event-time counters, so the gate turns true only at an activation
+# (Prop. 3.8).  It leaves the mode when a disconfirmation takes β below
+# the balance gate, or when it finally fades (``ConceptNode.long_term``).
+# ``LONG_TERM_MEMORY_DEFAULT`` is what ``World(long_term_memory=None)``
+# means; with the mode off nothing consolidates (concepts consolidated
+# earlier keep their curve).
+LONG_TERM_EVIDENCE: float = SPACED_ESTABLISHED_EVIDENCE
+LONG_TERM_RECURRENCE: int = 5
+LONG_TERM_BALANCE: float = SPACED_ESTABLISHED_BALANCE
+# The environment variable WORLD0_LONG_TERM_MEMORY=0 turns the default off
+# (used by the benchmark to measure the mode; a World's own argument wins).
+LONG_TERM_MEMORY_DEFAULT: bool = os.environ.get("WORLD0_LONG_TERM_MEMORY", "1").strip().lower() not in (
+    "0", "false", "off", "no",
+)
+
+
+def consolidation_gate(node: ConceptNode) -> bool:
+    """Whether ``node`` meets the long-term memory gate now (event-time counters only)."""
+    return (
+        node.maturity != Maturity.FADING
+        and node.recurrence_count >= LONG_TERM_RECURRENCE
+        and node.evidence() >= LONG_TERM_EVIDENCE
+        and node.evidence_balance() >= LONG_TERM_BALANCE
+    )
+
+
 def core_connections_required(activation_count: int) -> int:
     """Connections an ESTABLISHED concept needs for CORE at ``n`` activations."""
     reduction = max(0, activation_count - CORE_MIN_ACTIVATIONS) // ACTIVATION_REDUCTION_STEP
@@ -153,13 +189,21 @@ class LifecycleEngine:
         concepts: "ConceptStore",
         relations: "RelationStore",
         clock: CognitiveClock | None = None,
+        long_term_memory: bool | None = None,
     ) -> None:
         self._concepts = concepts
         self._relations = relations
         self._clock = clock
+        self.long_term_memory = (
+            LONG_TERM_MEMORY_DEFAULT if long_term_memory is None else bool(long_term_memory)
+        )
         # Promotions applied at events since the last ``evaluate()``, so
         # a reflect still reports what rose during its consolidation period.
         self._pending_promoted: dict[str, None] = {}
+        # Consolidations applied at events and not yet reported (``ingest``
+        # drains them into ``IngestResult``; ``evaluate`` reports the rest).
+        self._pending_consolidated: dict[str, None] = {}
+        self.last_consolidated: list[str] = []
 
     # ── event-time evaluation ────────────────────────────────────────
 
@@ -181,6 +225,37 @@ class LifecycleEngine:
     def on_activation(self, node: ConceptNode) -> None:
         """Hook: a concept was just activated (ConceptManager.reinforce)."""
         self.promote(node)
+        self.consolidate(node)
+
+    def on_weaken(self, node: ConceptNode) -> None:
+        """Hook: a concept was just disconfirmed (ConceptManager.weaken).
+
+        A long-term concept argued below the balance gate leaves long-term
+        memory; the decay owed under the slow curve was settled by the
+        manager before the disconfirmation."""
+        if node.consolidated_tick is not None and node.evidence_balance() < LONG_TERM_BALANCE:
+            node.consolidated_tick = None
+            self._concepts.mark_dirty(node.id)
+
+    # ── long-term memory ─────────────────────────────────────────────
+
+    def consolidate(self, node: ConceptNode) -> bool:
+        """Move ``node`` into long-term memory if it meets the gate; returns
+        True when it just did.  Idempotent; a no-op with the mode off."""
+        if not self.long_term_memory or node.consolidated_tick is not None:
+            return False
+        if not consolidation_gate(node):
+            return False
+        node.consolidated_tick = self._clock.tick if self._clock is not None else node.last_activated_tick
+        self._concepts.mark_dirty(node.id)
+        self._pending_consolidated[node.id] = None
+        return True
+
+    def pop_consolidated(self) -> list[str]:
+        """Ids consolidated at events since the last call (for ``IngestResult``)."""
+        out = [cid for cid in self._pending_consolidated if self._concepts.get(cid) is not None]
+        self._pending_consolidated.clear()
+        return out
 
     def on_connection(self, *concept_ids: str) -> None:
         """Hook: a relation touching these concepts was created / reinforced.
@@ -222,10 +297,12 @@ class LifecycleEngine:
         """
         for node in self._concepts.all():
             self.promote(node)
+            self.consolidate(node)
         promoted = [
             cid for cid in self._pending_promoted if self._concepts.get(cid) is not None
         ]
         self._pending_promoted.clear()
+        self.last_consolidated = self.pop_consolidated()
         return promoted, []
 
     # ── gates ────────────────────────────────────────────────────────

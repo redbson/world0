@@ -204,6 +204,13 @@ On construction, the facade will:
 
 传入 `llm=...` 才会启用 `ingest_text()`。
 
+其他构造参数 / other constructor arguments：`backend="auto"|"json"|"sqlite"`（见 §10）；`auto_reflect_every=N`（每 N 次观察自动做一次轻量 reflect）；
+`sustained_attention=False`（跨投影保持有限容量的焦点，`docs/mc/03-workspace.md`）；`long_term_memory=None`（默认开：在 ≥ 5 个间隔窗口复现、
+证据 ≥ 0.5 且无争议的概念进入**长期记忆**，之后按半衰期 35 040 次观察的慢曲线遗忘；`False` 关闭巩固；环境变量 `WORLD0_LONG_TERM_MEMORY=0`
+改默认值。`IngestResult.consolidated_concepts` 报告本次进入长期记忆的概念，`ConceptCard.long_term` 与 `WorldStatus.long_term_concepts` 可读）。
+/ `long_term_memory=None` (default on): a concept that recurred in ≥ 5 spaced windows, is well evidenced (≥ 0.5) and uncontested enters **long-term memory**
+and forgets on the slow curve (half-life 35 040 observations); `False` turns consolidation off; `WORLD0_LONG_TERM_MEMORY=0` changes the default.
+
 Passing `llm=...` is what enables `ingest_text()`.
 
 ### `World.ingest(observation) -> IngestResult`

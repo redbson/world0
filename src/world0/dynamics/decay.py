@@ -68,7 +68,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING
 
 from world0.schemas.clock import CognitiveClock, wall_now
-from world0.schemas.concept import SALIENCE_ERA_HL, ConceptNode, Maturity
+from world0.schemas.concept import LONG_TERM_ERA_HL, SALIENCE_ERA_HL, ConceptNode, Maturity
 from world0.schemas.relation import RelationEdge
 
 if TYPE_CHECKING:
@@ -110,6 +110,19 @@ CONCEPT_EVIDENCE_HL_MAX_SCALE: float = 8.0
 # Absolute ceiling on the effective half-life so heavily used core
 # concepts still forget on a bounded scale instead of becoming immortal.
 CONCEPT_MAX_HALF_LIFE: float = 8760.0
+
+# ── Long-term memory: the slow curve ──────────────────────────────────
+# A consolidated concept (``ConceptNode.long_term``; gate in
+# ``dynamics/lifecycle``) relaxes with this half-life whatever its maturity,
+# and its evidence floor forgets on the same era (``floor_era``).  Four
+# times the ceiling above: a concept consolidated at confidence 0.6 after
+# 12 spaced uses and never mentioned again stays above the FADING line for
+# ~145 000 observations (its floor alone holds it ~33 000), against
+# ~11 000 for the same concept on the ESTABLISHED curve (verify.py §3.6).
+# Once it does cross, the FADING profile applies.  Consolidation is an event
+# (Prop. 3.8), so the curve in force during a gap is fixed at the gap's
+# start and the settle operator stays an exact semigroup.
+LONG_TERM_HALF_LIFE: float = LONG_TERM_ERA_HL
 
 # ── Evidence floor (mean-reversion target) ────────────────────────────
 #   floor = EVIDENCE_FLOOR_MAX × evidence_balance × (n / (n + K))²
@@ -165,8 +178,16 @@ RELATION_FLOOR_SHARE: float = 0.1
 RELATION_PRUNE_THRESHOLD: float = 0.02
 
 
+def floor_era(node: ConceptNode) -> float:
+    """Era half-life on which this concept's evidence floor forgets."""
+    return LONG_TERM_ERA_HL if node.long_term else EVIDENCE_FLOOR_ERA_HL
+
+
 def concept_half_life(node: ConceptNode) -> float:
-    """Effective half-life in ticks: maturity base × evidence scale."""
+    """Effective half-life in ticks: maturity base × evidence scale, or the
+    long-term curve for a consolidated concept."""
+    if node.long_term:
+        return LONG_TERM_HALF_LIFE
     base = CONCEPT_HALF_LIFE.get(node.maturity, 168.0)
     extra_evidence = max(0, node.activation_count - 1)
     scale = min(
@@ -214,8 +235,9 @@ def evidence_floor(
     saturation = (n / (n + EVIDENCE_FLOOR_K)) ** 2
     floor = EVIDENCE_FLOOR_MAX * node.evidence_balance() * saturation
     elapsed = node.elapsed_since_activation(now_tick, now)
-    if elapsed > 0 and EVIDENCE_FLOOR_ERA_HL > 0:
-        floor *= math.pow(0.5, elapsed / EVIDENCE_FLOOR_ERA_HL)
+    era = floor_era(node)
+    if elapsed > 0 and era > 0:
+        floor *= math.pow(0.5, elapsed / era)
     return floor
 
 
@@ -223,12 +245,13 @@ _LN2 = math.log(2.0)
 
 
 def relax_confidence(
-    confidence: float, floor: float, half_life: float, dt: float
+    confidence: float, floor: float, half_life: float, dt: float, era: float = EVIDENCE_FLOOR_ERA_HL
 ) -> float:
     """Exact solution of ``c' = -λ · max(0, c − f(t))`` with ``f(t) = floor · 2^(-t/E)``.
 
-    ``λ = ln 2 / half_life`` and ``E`` is the era half-life of the evidence
-    floor, so the floor keeps *moving* while confidence relaxes toward it.
+    ``λ = ln 2 / half_life`` and ``E = era`` is the era half-life of the
+    evidence floor (``floor_era``: the long-term era for a consolidated
+    concept), so the floor keeps *moving* while confidence relaxes toward it.
     The flow of an ODE is a semigroup, which is why settling in any number
     of pieces gives the same confidence (docs/paper, Proposition 3.1):
 
@@ -238,7 +261,7 @@ def relax_confidence(
       ``A = λ f / (λ − μ)`` (``μ = ln 2 / E``); ``c ≥ f(t)`` throughout.
     """
     lam = _LN2 / half_life
-    mu = _LN2 / EVIDENCE_FLOOR_ERA_HL if EVIDENCE_FLOOR_ERA_HL > 0 else 0.0
+    mu = _LN2 / era if era > 0 else 0.0
     if confidence <= floor:
         if floor <= 0.0 or mu <= 0.0 or confidence <= 0.0:
             return confidence
@@ -278,24 +301,24 @@ def _settled_state(
         now=node.decay_reference_time(),
     )
     confidence = node.confidence
-    half_life = _half_life_for(node, maturity)
-    end = relax_confidence(confidence, floor, half_life, elapsed)
+    half_life, era = _profile_for(node, maturity)
+    end = relax_confidence(confidence, floor, half_life, elapsed, era)
     if maturity != Maturity.FADING and confidence >= FADING_THRESHOLD > end:
         # Crossing inside the interval: bisect for t* with c(t*) = θ.
         lo, hi = 0.0, elapsed
         for _ in range(60):
             mid = 0.5 * (lo + hi)
-            if relax_confidence(confidence, floor, half_life, mid) >= FADING_THRESHOLD:
+            if relax_confidence(confidence, floor, half_life, mid, era) >= FADING_THRESHOLD:
                 lo = mid
             else:
                 hi = mid
         maturity = Maturity.FADING
         entered_fading = True
-        era = EVIDENCE_FLOOR_ERA_HL
         floor_at_cross = floor * math.pow(0.5, hi / era) if era > 0 else floor
-        end = relax_confidence(
-            FADING_THRESHOLD, floor_at_cross, _half_life_for(node, maturity), elapsed - hi
-        )
+        # After the crossing the FADING profile applies (a long-term concept
+        # that fades is back on the fast curve and the ordinary era).
+        tail_half_life, tail_era = _profile_for(node, maturity)
+        end = relax_confidence(FADING_THRESHOLD, floor_at_cross, tail_half_life, elapsed - hi, tail_era)
     if end < FADING_THRESHOLD and maturity != Maturity.FADING:
         maturity = Maturity.FADING
         entered_fading = True
@@ -303,10 +326,13 @@ def _settled_state(
 
 
 def _half_life_for(node: ConceptNode, maturity: Maturity) -> float:
-    if maturity == node.maturity:
-        return concept_half_life(node)
-    probe = node.model_copy(update={"maturity": maturity})
-    return concept_half_life(probe)
+    return _profile_for(node, maturity)[0]
+
+
+def _profile_for(node: ConceptNode, maturity: Maturity) -> tuple[float, float]:
+    """(half-life, floor era) the concept would have at ``maturity``."""
+    probe = node if maturity == node.maturity else node.model_copy(update={"maturity": maturity})
+    return concept_half_life(probe), floor_era(probe)
 
 
 def settled_confidence(

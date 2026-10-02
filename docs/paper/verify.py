@@ -315,6 +315,78 @@ def check_maturity_schedule_independence() -> None:
         ok(f"{kind:<19}", f"{ref['c'][0]:<11} n={ref['c'][2]:<3} spread over reflect every {cadences}: {spread:.1e}")
 
 
+def check_long_term() -> None:
+    section("§3.6 long-term memory: the gate turns true only at events; the slow curve keeps Theorems 3.2 / 3.7")
+    from world0.dynamics.decay import LONG_TERM_HALF_LIFE, settled_confidence
+    from world0.dynamics.lifecycle import LONG_TERM_RECURRENCE, consolidation_gate
+    from world0.schemas.concept import LONG_TERM_ERA_HL
+    # (a) event-time gate
+    node = ConceptNode(name="x")
+    for i in range(LONG_TERM_RECURRENCE + 6):
+        node.activate(tick=24 * (i + 1))
+    node.recurrence_count = LONG_TERM_RECURRENCE - 1
+    assert not consolidation_gate(node)
+    node.last_activated_tick += 10 ** 6
+    assert not consolidation_gate(node), "time alone must not open the gate"
+    node.activate(tick=node.last_activated_tick + 24)
+    assert consolidation_gate(node)
+    ok("gate false → true only through an activation (Prop. 3.8)")
+    # (b) semigroup on the long era
+    rng = random.Random(3)
+    worst = 0.0
+    for _ in range(5000):
+        c, f = rng.uniform(0.05, 1.0), rng.uniform(0.0, 0.3)
+        t1, t2 = rng.uniform(0, 50000), rng.uniform(0, 50000)
+        whole = relax_confidence(c, f, LONG_TERM_HALF_LIFE, t1 + t2, LONG_TERM_ERA_HL)
+        split = relax_confidence(relax_confidence(c, f, LONG_TERM_HALF_LIFE, t1, LONG_TERM_ERA_HL),
+                                 f * 2 ** (-t1 / LONG_TERM_ERA_HL), LONG_TERM_HALF_LIFE, t2, LONG_TERM_ERA_HL)
+        worst = max(worst, abs(whole - split))
+    assert worst < 1e-9
+    ok("relax_confidence on the long era, 5 000 random splits", f"max |whole − split| = {worst:.1e}")
+    # (c) survival: consolidated vs the same concept on the ESTABLISHED curve
+    def twin(consolidated: bool) -> ConceptNode:
+        n = ConceptNode(name="t", maturity=Maturity.ESTABLISHED, confidence=0.6)
+        for i in range(12):
+            n.activate(tick=24 * (i + 1))
+        n.confidence = 0.6
+        if consolidated:
+            n.consolidated_tick = n.last_activated_tick
+        return n
+    def fades_at(n: ConceptNode) -> int:
+        lo, hi = 0, 400000
+        while hi - lo > 1:
+            mid = (lo + hi) // 2
+            if settled_confidence(n, n.last_activated_tick + mid) >= FADING_THRESHOLD:
+                lo = mid
+            else:
+                hi = mid
+        return hi
+    slow, fast = fades_at(twin(True)), fades_at(twin(False))
+    assert slow > 10 * fast
+    ok("idle until FADING from confidence 0.6 (n = 12)", f"long-term {slow} ticks vs established {fast} ticks")
+    # (d) cadence independence with consolidation and a long idle gap
+    def drive(every):
+        w = World(store_path=tempfile.mkdtemp())
+        for i in range(12):
+            if i:
+                for _ in range(47):
+                    w.clock.advance(1)
+                    if every and w.clock.tick % every == 0:
+                        w.reflect(light=True)
+            w.ingest(Observation(concepts=["c", "d"], relations=[("c", "d", "depends_on")], source="s"))
+        for _ in range(30000):
+            w.clock.advance(1)
+            if every and w.clock.tick % every == 0:
+                w.reflect(light=True)
+        w.reflect()
+        c = w.concepts.resolve("c")
+        return (c.maturity.value, c.confidence, c.activation_count, c.consolidated_tick, c.long_term)
+    res = [drive(e) for e in (1, 50, None)]
+    assert all(r[0] == res[0][0] and r[2:] == res[0][2:] for r in res) and max(r[1] for r in res) - min(r[1] for r in res) < 1e-6, res
+    assert res[0][4] is True
+    ok("12 spaced uses then 30 000 idle: reflect every 1 / 50 / never", f"{res[0][0]} long-term, confidence spread {max(r[1] for r in res) - min(r[1] for r in res):.1e}")
+
+
 def check_noise_threshold() -> None:
     section("§3.3 evidence floor below FADING_THRESHOLD ⇔ n ≤ 6 (no disconfirmation)")
     rows = []
@@ -927,6 +999,7 @@ def main() -> None:
     check_fading_boundary()
     check_schedule_independence()
     check_maturity_schedule_independence()
+    check_long_term()
     check_read_path()
     check_noise_threshold()
     check_one_off()

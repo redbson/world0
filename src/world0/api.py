@@ -88,6 +88,9 @@ class ConceptCard(BaseModel):
     tasks: list[str] = Field(default_factory=list)
     last_seen_tick: int = 0
     sources: list[str] = Field(default_factory=list)
+    # In long-term memory: well evidenced and recurring in spaced windows,
+    # so it forgets on the slow curve (one halving per 35 040 observations).
+    long_term: bool = False
 
 
 class Claim(BaseModel):

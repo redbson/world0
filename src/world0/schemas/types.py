@@ -274,6 +274,9 @@ class IngestResult(BaseModel):
     weakened_relations: list[str] = Field(default_factory=list)
     retracted_relations: list[str] = Field(default_factory=list)
     hebbian_relations: list[str] = Field(default_factory=list)
+    # Concepts that entered long-term memory at this observation
+    # (``dynamics/lifecycle`` consolidation gate).
+    consolidated_concepts: list[str] = Field(default_factory=list)
     # Co-occurrence edges this observation's mention counts pushed below the
     # association gate; removed at the event (dynamics/hebbian.py).
     stale_relations: list[str] = Field(default_factory=list)
@@ -682,7 +685,8 @@ class Projection(BaseModel):
                 neighbors = self._neighbor_names(c.id)
                 linked = f" Linked to: {', '.join(neighbors)}." if neighbors else ""
                 lines.append(
-                    f"- **{c.representation()}** ({c.name}, {c.maturity.value}, "
+                    f"- **{c.representation()}** ({c.name}, {c.maturity.value}"
+                    f"{', long-term' if c.long_term else ''}, "
                     f"confidence: {c.confidence:.2f}, evidence: {c.evidence():.2f})"
                     f"{desc}{linked}"
                 )
@@ -832,6 +836,9 @@ class ReflectResult(BaseModel):
     decayed_concepts: list[str] = Field(default_factory=list)
     promoted_concepts: list[str] = Field(default_factory=list)
     demoted_concepts: list[str] = Field(default_factory=list)
+    # Consolidations the catch-up evaluation applied (an ingest-driven
+    # world reports its consolidations in ``IngestResult``).
+    consolidated_concepts: list[str] = Field(default_factory=list)
     pruned_concepts: list[str] = Field(default_factory=list)
     decayed_relations: list[str] = Field(default_factory=list)
     pruned_relations: list[str] = Field(default_factory=list)
@@ -855,6 +862,7 @@ class WorldStatus(BaseModel):
     total_concepts: int = 0
     total_relations: int = 0
     by_maturity: dict[str, int] = Field(default_factory=dict)
+    long_term_concepts: int = 0
     avg_confidence: float = 0.0
     last_reflect: datetime | None = None
     # Color-field diagnostics (doc §12.3).  Populated whenever

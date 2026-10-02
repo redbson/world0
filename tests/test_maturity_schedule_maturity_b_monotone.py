@@ -32,6 +32,7 @@ from world0.dynamics.decay import (
     EVIDENCE_FLOOR_ERA_HL,
     FADING_THRESHOLD,
     concept_half_life,
+    settled_confidence,
     evidence_floor,
     relax_confidence,
     settle_concept,
@@ -385,19 +386,32 @@ class TestEraForgettingAndRevival:
             world.clock.advance(23)
         node = world.concepts.resolve("c")
         assert node.maturity == Maturity.ESTABLISHED
-        for _ in range(80):
-            world.clock.advance(1000)
-            world.reflect(light=True)
-            node = world.concepts.resolve("c")
-            if node is None or node.maturity == Maturity.FADING:
-                break
-        assert node is not None and node.maturity == Maturity.FADING  # forgetting: era scale
+        # Thirty spaced uses also consolidate it into long-term memory
+        # (paper §3.6), so forgetting is on the slow curve: ~165 000 idle
+        # observations instead of ~22 000 — slow, not immortal.
+        assert node.long_term
+        # Find the crossing on the read path (exact, Prop. 3.1'), then step
+        # just past it: on the fast FADING tail the concept is prunable within
+        # a few dozen ticks, so a coarse stepping would only see it gone.
+        lo, hi = 0, 400_000
+        while hi - lo > 1:
+            mid = (lo + hi) // 2
+            if settled_confidence(node, node.last_activated_tick + mid) >= FADING_THRESHOLD:
+                lo = mid
+            else:
+                hi = mid
+        assert 100_000 < hi < 250_000, hi  # forgetting: the slow curve, still finite
+        world.clock.advance(node.last_activated_tick + hi + 5 - world.clock.tick)
+        world.reflect(light=True)
+        node = world.concepts.resolve("c")
+        assert node is not None and node.maturity == Maturity.FADING
 
         world.ingest(use())  # one mention revives the same node ...
         revived = world.concepts.resolve("c")
         assert revived.id == node.id
         assert revived.maturity == Maturity.DEVELOPING  # ... one rung up the ladder, not ESTABLISHED
         assert revived.recurrence_count == 1  # the stale chain is spent
+        assert not revived.long_term  # ... and long-term memory is re-earned, not kept
 
         for _ in range(12):  # ... and it earns ESTABLISHED again by spaced use
             world.clock.advance(23)

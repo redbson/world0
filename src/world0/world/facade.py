@@ -89,7 +89,13 @@ class World:
         auto_reflect_every: int | None = None,
         backend: str = "auto",
         sustained_attention: bool = False,
+        long_term_memory: bool | None = None,
     ) -> None:
+        # ``long_term_memory``: concepts that are well evidenced and recur in
+        # spaced windows enter long-term memory and forget on the slow curve
+        # (dynamics/lifecycle ``consolidation_gate``, dynamics/decay
+        # ``LONG_TERM_HALF_LIFE``).  None means the library default (on).
+        self.long_term_memory = long_term_memory
         # ``sustained_attention``: keep a limited-capacity focus across
         # projections so the current line of attention biases the next
         # view (global-workspace style, docs/mc/03-workspace.md).  Off by
@@ -133,7 +139,8 @@ class World:
         self._hebbian = HebbianEngine(self.relations)
         self._decay = DecayEngine(self.concepts, self.relations, clock=self._clock)
         self._lifecycle = LifecycleEngine(
-            self.concepts, self.relations, clock=self._clock
+            self.concepts, self.relations, clock=self._clock,
+            long_term_memory=long_term_memory,
         )
         # Event-time lifecycle: maturity promotions are applied at the
         # activation / connection that earns them, so the maturity (and
@@ -144,7 +151,7 @@ class World:
         # engine swapped in after construction (the documented override
         # point) keeps sole authority over maturity; a policy without the
         # event hooks is simply evaluated at reflect.
-        self.concepts.connect_lifecycle(on_activation=self._on_activation)
+        self.concepts.connect_lifecycle(on_activation=self._on_activation, on_weaken=self._on_weaken)
         self._activation.connect_lifecycle(on_activation=self._on_activation)
         self.relations.connect_lifecycle(on_connection=self._on_connection)
         self._projection = ProjectionEngine(
@@ -234,6 +241,11 @@ class World:
         if hook is not None:
             hook(node)
 
+    def _on_weaken(self, node) -> None:
+        hook = getattr(self._lifecycle, "on_weaken", None)
+        if hook is not None:
+            hook(node)
+
     def _on_connection(self, *concept_ids: str) -> None:
         hook = getattr(self._lifecycle, "on_connection", None)
         if hook is not None:
@@ -244,6 +256,11 @@ class World:
         # Every observation is one unit of cognitive time.
         self._clock.advance()
         result = self._ingest_pipeline.run(observation)
+        pop = getattr(self._lifecycle, "pop_consolidated", None)
+        if pop is not None:
+            result.consolidated_concepts = [
+                node.name for cid in pop() if (node := self.concepts.get(cid)) is not None
+            ]
         # Pipelines never persist — facade owns the flush boundary.
         self.concepts.flush()
         self.relations.flush()

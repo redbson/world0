@@ -72,6 +72,7 @@ class ConceptManager:
         ] = {}
         # Event hook wired by the owning ``World`` (see ``connect_lifecycle``).
         self._on_activation: Callable[[ConceptNode], None] | None = None
+        self._on_weaken = None
         # Distinct task labels carried by concept profiles (for weighting
         # task words by distinctiveness).  Maintained incrementally by
         # ``reinforce`` / ``remove``; rebuilt from the profiles after
@@ -81,7 +82,10 @@ class ConceptManager:
         self._vocabulary_stale = False
 
     def connect_lifecycle(
-        self, *, on_activation: Callable[[ConceptNode], None] | None = None
+        self,
+        *,
+        on_activation: Callable[[ConceptNode], None] | None = None,
+        on_weaken: Callable[[ConceptNode], None] | None = None,
     ) -> None:
         """Wire the event-time lifecycle.
 
@@ -91,6 +95,7 @@ class ConceptManager:
         store (maturity then changes only at reflect).
         """
         self._on_activation = on_activation
+        self._on_weaken = on_weaken
 
     # ── persistence ───────────────────────────────────────────────────
 
@@ -515,6 +520,9 @@ class ConceptManager:
         if node.confidence < FADING_THRESHOLD and node.maturity != Maturity.FADING:
             node.maturity = Maturity.FADING
         self._dirty.add(node.id)
+        on_weaken = getattr(self, "_on_weaken", None)
+        if on_weaken is not None:
+            on_weaken(node)
         return node
 
     def update_description(self, concept_id: str, description: str) -> None:

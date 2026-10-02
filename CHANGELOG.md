@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Long-term memory: a slow forgetting curve past a consolidation gate**
+  (paper §3.6, analysis doc §7.34) — a concept that has recurred in at
+  least 5 spaced windows (uses ≥ 24 observations apart; a burst does not
+  count), is well evidenced (`evidence() ≥ 0.5`, i.e. ≥ 12 uses with none
+  against) and is uncontested (balance ≥ 0.8) enters long-term memory at
+  that activation (`ConceptNode.consolidated_tick`, `ConceptNode.long_term`,
+  `dynamics/lifecycle.consolidation_gate`).  It then relaxes with a
+  half-life of 35 040 observations whatever its maturity, and its
+  evidence floor and salience persistence forget on the same era
+  (`LONG_TERM_HALF_LIFE`, `LONG_TERM_ERA_HL`; `relax_confidence` gained an
+  `era` argument).  Dropped after twelve spaced uses it stays above the
+  FADING line for ~145 000 observations instead of ~11 000; it is slow,
+  not immortal.  A disconfirmation that takes the balance below 0.8
+  (`on_weaken`) or a fade ends the mode; a revived concept re-earns it.
+  The gate is made of event-time counters, so it turns true only at an
+  activation and the curve in force during a gap is fixed at the gap's
+  start: the settle operator stays an exact semigroup and the state stays
+  a function of the observation stream (Prop. 3.8; `verify.py §3.6`).
+  `World(long_term_memory=None|True|False)` (default on;
+  `WORLD0_LONG_TERM_MEMORY=0` changes the default), `IngestResult` /
+  `ReflectResult.consolidated_concepts`, `ConceptCard.long_term`,
+  `WorldStatus.long_term_concepts`, "long-term" in the full render.
+  `tests/test_long_term_memory.py`.  LongRun is unchanged with the mode on
+  or off (`main` 0.986 / 0.986, bigworld 0.871 / 0.870): in the 40×40 world
+  481 of 1 618 concepts consolidate, but nothing on the ESTABLISHED curve
+  dies within a 6 000-event horizon anyway, and the concepts the bigworld
+  gap loses are the 811 mentioned once (noise by design).  The mode
+  matters past ~10 000 idle observations, where the slow curve keeps a
+  consolidated concept in reach for another ~130 000.
 - **`world0.api`: the interface data shapes** (`docs/world0-api.md`, 0.4
   step of the roadmap) — `Statement`, `ConceptCardInput`, `ConceptCard`,
   `Claim` and `API_VERSION` (`"world0/1"`), exported from `world0`.

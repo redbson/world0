@@ -95,6 +95,7 @@ class ReflectPipeline:
         promoted, demoted = self._lifecycle.evaluate()
         result.promoted_concepts = promoted
         result.demoted_concepts = demoted
+        result.consolidated_concepts = list(getattr(self._lifecycle, "last_consolidated", []))
 
         # 5. Prune
         result.pruned_relations = self._decay.prune_relations()
