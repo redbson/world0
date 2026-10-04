@@ -20,6 +20,8 @@ from world0.dynamics.decay import (
     LONG_TERM_HALF_LIFE,
     concept_half_life,
     concept_prunable,
+    projected_relation_weight,
+    relation_dead,
     relax_confidence,
     settled_confidence,
 )
@@ -173,6 +175,41 @@ class TestSlowCurve:
         assert tail < relax_confidence(FADING_THRESHOLD, 0.0, LONG_TERM_HALF_LIFE, 2_000, LONG_TERM_ERA_HL) / 4
 
 
+class TestClaimsBetweenLongTermConcepts:
+    def test_a_claim_between_two_long_term_concepts_outlives_the_burst_twin(self, tmp_path):
+        slow, fast = World(store_path=tmp_path / "slow"), World(store_path=tmp_path / "fast")
+        _spaced(slow, 14, 24)
+        _spaced(fast, 14, 1)
+        e = slow.relations.for_concept(slow.concepts.resolve("c").id)[0]
+        b = fast.relations.for_concept(fast.concepts.resolve("c").id)[0]
+        assert e.long_term and not b.long_term
+        t, tb = e.last_reinforced_tick, b.last_reinforced_tick
+        assert not relation_dead(e, t + 20_000) and relation_dead(b, tb + 20_000)
+        assert projected_relation_weight(e, t + 20_000) > projected_relation_weight(b, tb + 20_000)
+        assert relation_dead(e, t + 150_000)  # slow, not immortal
+        slow.close(); fast.close()
+
+    def test_edge_flag_needs_both_endpoints(self, world):
+        _spaced(world, 14, 24)  # c and d both consolidate
+        world.ingest(Observation(concepts=["c", "e"], relations=[("c", "e", "enables")], task="t"))
+        c = world.concepts.resolve("c")
+        flags = {world.concepts.get(x.other_end(c.id)).name: x.long_term for x in world.relations.for_concept(c.id) if x.is_explicit}
+        assert flags == {"d": True, "e": False}
+
+    def test_edge_flag_follows_a_deconsolidation(self, world):
+        _spaced(world, 14, 24)
+        c = world.concepts.resolve("c")
+        assert all(x.long_term for x in world.relations.for_concept(c.id) if x.is_explicit)
+        while world.concepts.resolve("c").evidence_balance() >= LONG_TERM_BALANCE:
+            world.weaken("c", task="t")
+        assert not any(x.long_term for x in world.relations.for_concept(c.id) if x.is_explicit)
+
+    def test_legacy_edge_loads_without_the_flag(self):
+        from world0.schemas.relation import RelationEdge
+        e = RelationEdge.model_validate({"source_id": "a", "target_id": "b", "semantic_relation": "dependence"})
+        assert e.long_term is False
+
+
 class TestScheduleIndependence:
     @staticmethod
     def _drive(path, every, uses=12, gap=48, idle=30_000):
@@ -190,14 +227,17 @@ class TestScheduleIndependence:
                 w.reflect(light=True)
         w.reflect()
         c = w.concepts.resolve("c")
+        edges = [] if c is None else [(e.long_term, round(e.weight, 6), round(e.probability, 6))
+                                      for e in w.relations.for_concept(c.id) if e.is_explicit]
         state = None if c is None else (c.maturity.value, round(c.confidence, 6), c.activation_count,
-                                        c.consolidated_tick, c.long_term)
+                                        c.consolidated_tick, c.long_term, edges)
         w.close()
         return state
 
     def test_consolidation_and_the_slow_curve_do_not_depend_on_reflect_cadence(self, tmp_path):
         states = [self._drive(tmp_path / str(i), every) for i, every in enumerate((1, 50, None))]
         assert states[0] is not None and states[0][4] is True  # alive, long-term, after 30 000 idle
+        assert states[0][5] and states[0][5][0][0] is True  # its claim is alive and on the long era too
         assert states[0] == states[1] == states[2], states
 
 

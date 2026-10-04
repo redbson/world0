@@ -734,7 +734,10 @@ class TestRelationEvidenceFloor:
     def _idle_world(idle: int) -> tuple[World, dict[str, str]]:
         import tempfile
 
-        w = World(store_path=tempfile.mkdtemp())
+        # The ordinary relation era is under test: thirty spaced-enough
+        # mentions would consolidate A and B into long-term memory and put
+        # their claim on the long era (tests/test_long_term_memory.py).
+        w = World(store_path=tempfile.mkdtemp(), long_term_memory=False)
         w.ingest(Observation(concepts=["A", "B"], relations=[("A", "B", "depends_on")], source="s"))
         for _ in range(3):
             w.ingest(Observation(concepts=["E", "F"], source="s"))  # Hebbian only

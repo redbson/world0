@@ -380,11 +380,12 @@ def check_long_term() -> None:
                 w.reflect(light=True)
         w.reflect()
         c = w.concepts.resolve("c")
-        return (c.maturity.value, c.confidence, c.activation_count, c.consolidated_tick, c.long_term)
+        edges = [(e.long_term, round(e.weight, 7)) for e in w.relations.for_concept(c.id) if e.is_explicit]
+        return (c.maturity.value, c.confidence, c.activation_count, c.consolidated_tick, c.long_term, edges)
     res = [drive(e) for e in (1, 50, None)]
     assert all(r[0] == res[0][0] and r[2:] == res[0][2:] for r in res) and max(r[1] for r in res) - min(r[1] for r in res) < 1e-6, res
-    assert res[0][4] is True
-    ok("12 spaced uses then 30 000 idle: reflect every 1 / 50 / never", f"{res[0][0]} long-term, confidence spread {max(r[1] for r in res) - min(r[1] for r in res):.1e}")
+    assert res[0][4] is True and res[0][5] and res[0][5][0][0] is True
+    ok("12 spaced uses then 30 000 idle: reflect every 1 / 50 / never", f"{res[0][0]} long-term, confidence spread {max(r[1] for r in res) - min(r[1] for r in res):.1e}; its claim alive on the long era, weight {res[0][5][0][1]:.4f}")
 
 
 def check_noise_threshold() -> None:

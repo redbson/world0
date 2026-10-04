@@ -96,6 +96,7 @@ from world0.dynamics.decay import (
     concept_expired,
     projected_relation_weight,
     settle_concept,
+    settle_relation,
 )
 from world0.schemas.clock import CognitiveClock, wall_now
 from world0.schemas.concept import ConceptNode, Maturity
@@ -226,6 +227,9 @@ class LifecycleEngine:
         """Hook: a concept was just activated (ConceptManager.reinforce)."""
         self.promote(node)
         self.consolidate(node)
+        # A revival cleared the flag, or a consolidation set it: the
+        # claims around the concept follow (settled under the old profile).
+        self._sync_edges(node)
 
     def on_weaken(self, node: ConceptNode) -> None:
         """Hook: a concept was just disconfirmed (ConceptManager.weaken).
@@ -236,6 +240,7 @@ class LifecycleEngine:
         if node.consolidated_tick is not None and node.evidence_balance() < LONG_TERM_BALANCE:
             node.consolidated_tick = None
             self._concepts.mark_dirty(node.id)
+            self._sync_edges(node)
 
     # ── long-term memory ─────────────────────────────────────────────
 
@@ -250,6 +255,29 @@ class LifecycleEngine:
         self._concepts.mark_dirty(node.id)
         self._pending_consolidated[node.id] = None
         return True
+
+    def _sync_edges(self, node: ConceptNode) -> int:
+        """Re-judge ``long_term`` on the explicit claims around ``node``: true
+        when both endpoints are in long-term memory.  A claim whose profile
+        changes is settled under the old one first (the same discipline as
+        a concept's half-life change at promotion), so the floor era in
+        force during any gap is the one at the gap's start.  Returns how
+        many edges changed."""
+        changed = 0
+        for edge in self._relations.for_concept(node.id):
+            if not edge.is_explicit:
+                continue
+            other_id = edge.other_end(node.id)
+            other = self._concepts.get(other_id) if other_id else None
+            want = bool(node.long_term and other is not None and other.long_term)
+            if want == edge.long_term:
+                continue
+            if self._clock is not None:
+                settle_relation(edge, self._clock.tick)
+            edge.long_term = want
+            self._relations.mark_dirty(edge.id)
+            changed += 1
+        return changed
 
     def pop_consolidated(self) -> list[str]:
         """Ids consolidated at events since the last call (for ``IngestResult``)."""
@@ -298,6 +326,7 @@ class LifecycleEngine:
         for node in self._concepts.all():
             self.promote(node)
             self.consolidate(node)
+            self._sync_edges(node)
         promoted = [
             cid for cid in self._pending_promoted if self._concepts.get(cid) is not None
         ]

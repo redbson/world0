@@ -526,6 +526,12 @@ class RelationEdge(BaseModel):
     # an extractor prior); 0 on co-occurrence edges and on edges stored
     # before it was counted (``support`` then falls back to confirmations).
     statements: int = 0
+    # Both endpoints are in long-term memory: the claim's weight floor
+    # forgets on the long era (``dynamics/decay.relation_floor``).  Written
+    # only at endpoint events by the lifecycle (``LifecycleEngine._sync_edges``),
+    # after the decay owed under the previous profile has been settled, so
+    # the profile in force during a gap is fixed at the gap's start.
+    long_term: bool = False
 
     @model_validator(mode="before")
     @classmethod

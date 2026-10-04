@@ -28,7 +28,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `World(long_term_memory=None|True|False)` (default on;
   `WORLD0_LONG_TERM_MEMORY=0` changes the default), `IngestResult` /
   `ReflectResult.consolidated_concepts`, `ConceptCard.long_term`,
-  `WorldStatus.long_term_concepts`, "long-term" in the full render.
+  `WorldStatus.long_term_concepts`, "long-term" in the full render.  A
+  claim between two long-term concepts (`RelationEdge.long_term`, written
+  at endpoint events after settling the edge under its old profile) keeps
+  its weight floor on the long era too: a p = 0.7 claim dies after ~70 000
+  idle observations instead of ~8 000, so a concept kept in reach keeps
+  its claims.
   `tests/test_long_term_memory.py`.  LongRun is unchanged with the mode on
   or off (`main` 0.986 / 0.986, bigworld 0.871 / 0.870): in the 40×40 world
   481 of 1 618 concepts consolidate, but nothing on the ESTABLISHED curve

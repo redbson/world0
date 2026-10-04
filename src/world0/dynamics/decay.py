@@ -213,9 +213,20 @@ def relation_floor(
         return 0.0
     floor = RELATION_FLOOR_SHARE * edge.probability
     elapsed = edge.elapsed_since_reinforced(now_tick, now)
-    if elapsed > 0 and EVIDENCE_FLOOR_ERA_HL > 0:
-        floor *= math.pow(0.5, elapsed / EVIDENCE_FLOOR_ERA_HL)
+    era = relation_floor_era(edge)
+    if elapsed > 0 and era > 0:
+        floor *= math.pow(0.5, elapsed / era)
     return floor
+
+
+def relation_floor_era(edge: RelationEdge) -> float:
+    """Era on which a claim's weight floor forgets: the long era between two
+    long-term concepts (``RelationEdge.long_term``), else the ordinary one.
+    A claim between consolidated concepts therefore outlives the ordinary
+    ~7 900 idle observations (0.1·0.7 falling to the 0.02 prune line) by
+    a factor of eight; the weight itself still relaxes to the floor at the
+    reinforcement-scaled half-life."""
+    return LONG_TERM_ERA_HL if edge.long_term else EVIDENCE_FLOOR_ERA_HL
 
 
 def evidence_floor(
@@ -417,9 +428,10 @@ def _relaxed_relation(
     floor = relation_floor(
         edge, now_tick=edge.decay_reference_tick(), now=edge.decay_reference_time()
     )
+    era = relation_floor_era(edge)
     return (
-        relax_confidence(edge.weight, floor, half_life, elapsed),
-        relax_confidence(edge.confidence, floor, half_life, elapsed),
+        relax_confidence(edge.weight, floor, half_life, elapsed, era),
+        relax_confidence(edge.confidence, floor, half_life, elapsed, era),
     )
 
 
