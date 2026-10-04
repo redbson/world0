@@ -6,6 +6,7 @@ import colorsys
 import hashlib
 import math
 import re
+from functools import lru_cache
 import uuid
 from datetime import datetime, timezone
 from enum import Enum
@@ -28,8 +29,12 @@ _STOPWORDS: frozenset[str] = frozenset({
 })
 
 
+@lru_cache(maxsize=65536)
 def normalize_identity_part(value: str) -> str:
-    """Normalize one semantic identity component for stable comparison."""
+    """Normalize one semantic identity component for stable comparison.
+
+    Pure and cached: token references are re-normalised on every mention
+    (``record_token_ref``), mostly for the same few thousand strings."""
     lowered = value.strip().lower()
     compact = re.sub(r"[_\W]+", " ", lowered, flags=re.UNICODE)
     return re.sub(r"\s+", " ", compact).strip()

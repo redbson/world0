@@ -24,8 +24,9 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Iterable
+from typing import Iterable, Iterator
 
 from world0.schemas.concept import ConceptNode
 from world0.schemas.relation import RelationEdge
@@ -54,6 +55,9 @@ class SqliteStore(Store):
         self._conn.execute("PRAGMA synchronous=NORMAL")
         self._conn.executescript(_SCHEMA)
         self._conn.commit()
+        # Depth of ``transaction()`` nesting: while > 0 the per-call commits
+        # of ``_upsert`` / ``_delete`` are deferred to the outermost exit.
+        self._txn_depth = 0
 
     @property
     def path(self) -> Path:
@@ -64,19 +68,49 @@ class SqliteStore(Store):
 
     # ── generic helpers ───────────────────────────────────────────────
 
+    @contextmanager
+    def transaction(self) -> Iterator[None]:
+        """Group every write inside the block into one SQLite transaction.
+
+        A flush after an observation writes concepts, relations, the clock
+        and the learning record; as four commits that was a third of the
+        ingest cost (each commit is a WAL fsync).  Inside ``transaction()``
+        the writes share one commit at the outermost exit; an exception
+        rolls all of them back.  Nestable; the file backend's version is a
+        no-op.
+        """
+        if self._txn_depth > 0:
+            self._txn_depth += 1
+            try:
+                yield
+            finally:
+                self._txn_depth -= 1
+            return
+        self._txn_depth = 1
+        try:
+            with self._conn:
+                yield
+        finally:
+            self._txn_depth = 0
+
+    def _write(self, sql: str, rows: list) -> None:
+        if not rows:
+            return
+        if self._txn_depth > 0:
+            self._conn.executemany(sql, rows)
+        else:
+            with self._conn:
+                self._conn.executemany(sql, rows)
+
     def _upsert(self, table: str, rows: Iterable[tuple[str, str]]) -> None:
-        with self._conn:
-            self._conn.executemany(
-                f"INSERT INTO {table} (id, payload) VALUES (?, ?) "
-                "ON CONFLICT(id) DO UPDATE SET payload = excluded.payload",
-                list(rows),
-            )
+        self._write(
+            f"INSERT INTO {table} (id, payload) VALUES (?, ?) "
+            "ON CONFLICT(id) DO UPDATE SET payload = excluded.payload",
+            list(rows),
+        )
 
     def _delete(self, table: str, ids: Iterable[str]) -> None:
-        with self._conn:
-            self._conn.executemany(
-                f"DELETE FROM {table} WHERE id = ?", [(i,) for i in ids]
-            )
+        self._write(f"DELETE FROM {table} WHERE id = ?", [(i,) for i in ids])
 
     def _load_one(self, table: str, record_id: str) -> str | None:
         row = self._conn.execute(

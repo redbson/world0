@@ -11,6 +11,7 @@ through the attribute, never through a direct symbol import.
 
 from __future__ import annotations
 
+from contextlib import nullcontext
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -261,16 +262,23 @@ class World:
             result.consolidated_concepts = [
                 node.name for cid in pop() if (node := self.concepts.get(cid)) is not None
             ]
-        # Pipelines never persist — facade owns the flush boundary.
-        self.concepts.flush()
-        self.relations.flush()
-        self._persist_learning_state()
+        # Pipelines never persist — facade owns the flush boundary: one
+        # store transaction for concepts, relations, clock and counters.
+        with self._transaction():
+            self.concepts.flush()
+            self.relations.flush()
+            self._persist_learning_state()
         if (
             self._auto_reflect_every
             and self._clock.tick % self._auto_reflect_every == 0
         ):
             self.reflect(light=True)
         return result
+
+    def _transaction(self):
+        """The store's write transaction, or a no-op for backends without one."""
+        txn = getattr(self._store, "transaction", None)
+        return txn() if txn is not None else nullcontext()
 
     def _persist_learning_state(self, *, force: bool = False) -> None:
         """Save the clock (every observation) and the Hebbian counters.
@@ -494,15 +502,16 @@ class World:
         ``auto_reflect_every`` schedules between explicit reflects.
         """
         result = self._reflect_pipeline.run(light=light)
-        self.concepts.flush()
-        self.relations.flush()
-        self._state["tick"] = self._clock.tick
-        if not light:
-            self._state["last_reflect"] = datetime.now(timezone.utc).isoformat()
-            self._state["last_reflect_tick"] = self._clock.tick
-            self._state["communities"] = self._communities.snapshot()
-        self._store.save_state(self._state)
-        self._persist_learning_state(force=True)
+        with self._transaction():  # one commit for the whole reflect
+            self.concepts.flush()
+            self.relations.flush()
+            self._state["tick"] = self._clock.tick
+            if not light:
+                self._state["last_reflect"] = datetime.now(timezone.utc).isoformat()
+                self._state["last_reflect_tick"] = self._clock.tick
+                self._state["communities"] = self._communities.snapshot()
+            self._store.save_state(self._state)
+            self._persist_learning_state(force=True)
         return result
 
     # ── Identity operations (delegate to IdentityOps) ───────────────

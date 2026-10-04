@@ -6,6 +6,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Ingest is 20 % cheaper, state unchanged** — a flush after an
+  observation wrote concepts, relations, the clock and the learning record
+  as four SQLite commits (each a WAL fsync; a third of the ingest cost):
+  `SqliteStore.transaction()` groups them into one, used by `ingest` and
+  `reflect` (the file backend's is a no-op; an exception rolls the group
+  back).  The two pure normalisers colour diffusion and token references
+  call tens of thousands of times per stream (`normalize_domain_label`,
+  `normalize_identity_part`) are cached.  LongRun main: 5.4 → 4.3 ms per
+  event; every query row of the compact systems is identical to the run
+  before (the diagnostic full-render system `world0` drifts between any
+  two runs through the wall-clock term, as it did before).  What remains
+  is pydantic serialisation of the ~17 records a diffusion step dirties
+  per event.
+
 ### Added
 - **Long-term memory: a slow forgetting curve past a consolidation gate**
   (paper §3.6, analysis doc §7.34) — a concept that has recurred in at

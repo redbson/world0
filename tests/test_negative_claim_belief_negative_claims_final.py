@@ -296,7 +296,10 @@ class TestForgetting:
 
     def test_reflect_pipeline_keeps_then_forgets_on_the_era_scale(self, tmp_path):
         def idle_world(idle: int):
-            w = World(store_path=tmp_path / f"i{idle}")
+            # The ordinary relation era is under test; thirty spaced-enough
+            # mentions would put A and B, and their claim, into long-term
+            # memory (tests/test_long_term_memory.py).
+            w = World(store_path=tmp_path / f"i{idle}", long_term_memory=False)
             _state(w, "A", "B", "conflict")
             for _ in range(3):
                 w.ingest(Observation(concepts=["E", "F"], source="s"))  # co-occurrence only

@@ -151,3 +151,59 @@ class TestFlushCost:
         print(f"\nflush cost, 60 ingests × 40 concepts: json={json_time:.2f}s sqlite={sqlite_time:.2f}s")
         # Same work, one transaction per flush: must not be materially slower.
         assert sqlite_time < json_time * 1.5
+
+
+class TestTransaction:
+    """``SqliteStore.transaction()``: one commit per flush group."""
+
+    def test_writes_inside_a_transaction_commit_once_and_nest(self, tmp_path):
+        from world0.schemas.concept import ConceptNode
+        from world0.store.sqlite_store import SqliteStore
+
+        store = SqliteStore(tmp_path / "w.sqlite")
+        commits = {"n": 0}
+        real_exit = store._conn.__class__.__exit__
+
+        with store.transaction():
+            with store.transaction():  # nested: still one outer commit
+                store.save_concepts_batch([ConceptNode(name="a")])
+            store.save_state({"tick": 3})
+            assert store._txn_depth == 1
+        assert store._txn_depth == 0
+        assert [c.name for c in store.load_all_concepts()] == ["a"]
+        assert store.load_state() == {"tick": 3}
+        store.close()
+
+    def test_an_exception_rolls_the_whole_group_back(self, tmp_path):
+        from world0.schemas.concept import ConceptNode
+        from world0.store.sqlite_store import SqliteStore
+
+        store = SqliteStore(tmp_path / "w.sqlite")
+        store.save_concepts_batch([ConceptNode(name="kept")])
+        with pytest.raises(RuntimeError):
+            with store.transaction():
+                store.save_concepts_batch([ConceptNode(name="lost")])
+                store.save_state({"tick": 9})
+                raise RuntimeError("boom")
+        assert [c.name for c in store.load_all_concepts()] == ["kept"]
+        assert store.load_state() == {}
+        assert store._txn_depth == 0
+        store.close()
+
+    def test_world_ingest_and_reflect_restart_exact_under_one_transaction(self, tmp_path):
+        from world0 import Observation, World
+
+        path = tmp_path / "w.sqlite"
+        w = World(store_path=path)
+        for i in range(30):
+            w.ingest(Observation(concepts=["a", "b", f"c{i % 5}"], relations=[("a", "b", "depends_on")], task="t"))
+            if i % 10 == 9:
+                w.reflect(light=True)
+        w.reflect()
+        before = w.project(["a"], task="t").render()
+        tick = w.clock.tick
+        w.close()
+        again = World(store_path=path)
+        assert again.clock.tick == tick
+        assert again.project(["a"], task="t").render() == before
+        again.close()
