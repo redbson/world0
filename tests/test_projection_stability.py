@@ -77,3 +77,28 @@ class TestProjectionStability:
             assert current[0] == base[0]
             assert _jaccard(current, base) >= 5 / 7
             assert current[:2] == base[:2]
+
+
+class TestRelationOrderIsQuantised:
+    def test_wall_clock_drift_does_not_reorder_equal_claims(self, tmp_path):
+        """Two claims stated the same way, minutes apart in wall time, are
+        ordered by id — not by the 1e-9 their settled weights differ by."""
+        from datetime import timedelta
+
+        from world0 import Observation, World
+
+        w = World(store_path=tmp_path / ".world0")
+        w.ingest(Observation(concepts=["hub", "a1", "a2", "a3"],
+                             relations=[("hub", "a1", "depends_on"), ("hub", "a2", "depends_on"), ("hub", "a3", "depends_on")],
+                             task="t"))
+        hub = w.concepts.resolve("hub")
+        edges = sorted(w.relations.for_concept(hub.id), key=lambda e: e.id)
+        # Pretend the three statements were made hours apart (different wall drift).
+        for i, e in enumerate(edges):
+            e.last_reinforced = e.last_reinforced - timedelta(hours=3 * i)
+            e.last_decayed_at = None
+        w.clock.advance(200)
+        proj = w.project(["hub"], task="t")
+        shown = [r.id for r in proj.relations]
+        assert shown == sorted(shown), shown
+        w.close()

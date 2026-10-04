@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- **Relation order in a view is quantised like the activation scores**
+  (paper Prop. 7.6) — relations were sorted by exact settled weight, so two
+  claims stated the same way minutes apart in wall time could be ordered by
+  the wall-clock term of their weights.  Weights are now compared at 1e-6
+  of the strongest in view, then by id, the same discipline as concept
+  selection.  (The run-to-run differences of the diagnostic `world0`
+  system in LongRun turned out to be the random record ids its full render
+  prints, which tokenise differently and move the budget cut; not a
+  dynamics drift.  The compact systems are identical run to run.)
 - **Ingest is 20 % cheaper, state unchanged** — a flush after an
   observation wrote concepts, relations, the clock and the learning record
   as four SQLite commits (each a WAL fsync; a third of the ingest cost):

@@ -406,8 +406,14 @@ class ProjectionEngine:
                         outside_names[end] = node.name
                         outside_senses[end] = node.representation_feature()
         # Relation-index order depends on filesystem load order; sort so
-        # the rendered projection is identical across processes.
-        relations.sort(key=lambda r: (-live_weight(r), r.id))
+        # the rendered projection is identical across processes.  Weights
+        # are compared at the same relative quantum as activation scores:
+        # two claims stated the same way differ only by the wall-clock term
+        # of their settled weight (minutes between their statements), and
+        # that must not decide which of them the full render's first ten
+        # relations show from one run to the next.
+        peak_weight = max((live_weight(r) for r in relations), default=0.0) or 1.0
+        relations.sort(key=lambda r: (-round(live_weight(r) / peak_weight, SCORE_DIGITS), r.id))
         relations, other_contexts = self._split_by_context(
             relations, selected, task_lower, vocabulary, live_weight
         )
