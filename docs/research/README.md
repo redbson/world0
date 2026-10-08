@@ -1,7 +1,7 @@
 # World 0 每日研究与开发协议 / Daily research & development protocol
 
 每天一次（例行任务 "World 0 daily research"，北京时间 08:00 前后触发，新会话、无人值守），按下面的步骤做一轮
-**研究 → 决策 → 开发 → 验证 → 提交**。每一轮的记录写在 `notes/YYYY-MM-DD.md`，一天一份；索引在本文末尾。
+**研究 → 决策 → 开发 → 验证 → 提交**。每一轮的记录写在 `notes/YYYY-MM-DD.md`，一天一份；索引在本文末尾；`brief.html` 是由笔记生成的简报页面（`build_brief.py`）。
 
 A fresh, unattended session runs one round a day: **research → decide → develop → verify → commit**.
 Each round is one note in `notes/YYYY-MM-DD.md`; the index is at the end of this file.
@@ -67,6 +67,9 @@ python -m benchmarks.longrun.run --study main --seeds 10 --out /tmp/lr   # 动�
 - 一轮一到两个提交，信息写清问题与规则；提交信息末尾用会话系统提示里给出的署名行；提交、PR、代码里**不写模型 ID**。
 - `git push -u origin dev`。不要创建新 PR（redbson/world0#2 已存在）；若改了对外行为，在 PR 正文末尾追加一行日期 + 一句话。
 - 笔记 `notes/YYYY-MM-DD.md` 与本文末尾的索引一起提交。
+- **重建简报**：`python docs/research/build_brief.py` 从全部笔记生成 `brief.html`（最新一轮的简报 + 全部轮次 + 论文表），随笔记一起提交。
+  若会话里有 Artifact 工具，再把 `docs/research/brief.html` 发布到已有页面 **https://claude.ai/artifact/1fkRTFXv9Mm5tufx83hwoV**
+  （用 `url` 参数更新同一页面，不要新建；更新前先 `read` 一次该 URL）。没有该工具就只提交文件。
 
 ## 6. 笔记模板 / Note template
 
@@ -94,6 +97,14 @@ sha：一句话。
 
 ## 未完成 / 下一步
 ```
+
+## 6b. 简报 / Brief
+
+`build_brief.py` 只认模板里的七个二级标题（论文 / 决策 / 探针 / 开发 / 验证 / 提交 / 未完成）。写笔记时让简报能抓到重点：
+- 论文每篇一个 `- **标题** — … arXiv:ID …。… 与 World 0：**相同|相反|可借用|支持|边界外**——…`；标签词放在"与 World 0："之后，页面按它着色与筛选。
+- 决策首句以"选："开头、以句号结束，它成为该轮的一行标题。
+- 探针里的关键数字用 `**…**` 加粗（含数字与文字，如 `**65 个从未出现过**`），或写成"结论：…。"；简报的"探针数字"栏只取这些。
+- 验证里写 `N passed`，统计栏会读到。
 
 ## 7. 不做的事 / Never
 
