@@ -789,6 +789,8 @@ class RelationEdge(BaseModel):
             status=status,
             stated_under=sorted({t for t in self.claim_tasks if t.strip()}),
             text=f"{source_name} {relation_phrase(self.semantic_relation)} {target_name}",
+            since_tick=self.discovered_tick,
+            until_tick=self.retracted_tick,
         )
 
     def claim_affinity(self, task: str, vocabulary: TaskVocabulary | None = None) -> float | None:

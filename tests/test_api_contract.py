@@ -130,6 +130,20 @@ class TestGoldenSequence:
         assert data["no_longer_holds"][0]["status"] == "withdrawn"
         assert {"cards", "hold_loosely", "other_tasks", "why", "seeds"} <= set(data)
 
+    def test_claims_carry_their_cognitive_time(self, world):
+        """``since_tick`` is when the claim was first stated, ``until_tick`` when it was withdrawn."""
+        world.ingest(Observation(statements=[Statement("api", "depends_on", "db")], task="t"))   # tick 1
+        world.ingest(Observation(concepts=["other"], task="t"))                                 # tick 2
+        world.ingest(Observation(withdrawals=[Statement("api", "depends_on", "db")], task="t"))  # tick 3
+        world.ingest(Observation(statements=[Statement("api", "enables", "cache")], task="t"))   # tick 4
+        by_text = {c.text: c for c in world.claims("api")}
+        gone, held = by_text["api depends on db"], by_text["api enables cache"]
+        assert (gone.status, gone.since_tick, gone.until_tick) == ("withdrawn", 1, 3)
+        assert (held.status, held.since_tick, held.until_tick) == ("current", 4, None)
+        view = world.project(["api"], task="t")
+        assert view.no_longer_holds[0].until_tick == 3 and view.claims[0].until_tick is None
+        assert world.card("api").first_seen_tick == 1 and world.card("cache").first_seen_tick == 4
+
     def test_card_claims_find(self, world):
         _golden(world)
         card = world.card("db")

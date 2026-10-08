@@ -141,6 +141,7 @@ class ConceptCard(BaseModel):
     confidence: float          # 0–1：当前结算后的置信度
     tasks: list[str]           # 在哪些任务下被激活过（按频次降序）
     last_seen_tick: int        # 认知时间：最后一次被提及是第几个观察
+    first_seen_tick: int       # 认知时间：第一次被提及是第几个观察
     sources: list[str]         # 来源描述（去重）
 ```
 
@@ -159,7 +160,12 @@ class Claim(BaseModel):
     status: str                # current | withdrawn | doubted | contested | outvoted | co_occurrence
     stated_under: list[str]    # 陈述它的任务
     text: str                  # 一句话："api depends on db"
+    since_tick: int            # 第一次被陈述时的认知时间（观察序号）
+    until_tick: int | None     # 被撤回时的认知时间；成立中为 None
 ```
+
+时间是**系统时间**（世界何时被告知），不是事实的有效时间：World 0 记录"何时被告知 / 何时被收回"，不记录"事实何时为真"
+（有效时间属于只追加事件日志的范围，路线图 0.4）。
 
 `RelationEdge.to_claim()` 产生它。`status` 把 0.3.0 渲染里的四个分节（当前 / No longer holds / Hold loosely / Seen under other tasks）
 变成了结构化字段，调用方不必解析文本。边自己能判断 `current` / `withdrawn` / `doubted`（被否证到半数以下）/ `co_occurrence`；

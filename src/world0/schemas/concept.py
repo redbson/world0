@@ -432,6 +432,7 @@ class ConceptNode(BaseModel):
             confidence=round(self.confidence, 4),
             tasks=tasks,
             last_seen_tick=self.last_activated_tick,
+            first_seen_tick=self.created_tick,
             sources=sources,
             long_term=self.long_term,
         )

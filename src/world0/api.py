@@ -87,6 +87,7 @@ class ConceptCard(BaseModel):
     confidence: float = 0.0
     tasks: list[str] = Field(default_factory=list)
     last_seen_tick: int = 0
+    first_seen_tick: int = 0
     sources: list[str] = Field(default_factory=list)
     # In long-term memory: well evidenced and recurring in spaced windows,
     # so it forgets on the slow curve (one halving per 35 040 observations).
@@ -100,7 +101,9 @@ class Claim(BaseModel):
     ``inclusion``, ``contrast`` ...), ``axis`` the cognitive axis it lives
     on, ``belief`` its current belief, ``support`` the number of times it
     was stated (0 for a co-occurrence edge), ``stated_under`` the tasks it
-    was stated under, ``text`` a one-line sentence.  ``status`` is one of
+    was stated under, ``text`` a one-line sentence, ``since_tick`` /
+    ``until_tick`` the observation indices at which it was first stated and
+    withdrawn.  ``status`` is one of
     ``CLAIM_STATUSES``: ``current`` (holds), ``withdrawn`` (no longer
     holds), ``doubted`` (argued below even odds), ``contested`` (an
     opposing claim is close), ``outvoted`` (an opposing claim or another
@@ -119,6 +122,12 @@ class Claim(BaseModel):
     status: str = "current"
     stated_under: list[str] = Field(default_factory=list)
     text: str = ""
+    # Cognitive time (observation index) at which the claim was first
+    # stated, and at which it was withdrawn (None while it holds).  System
+    # time of the world, not the valid time of the fact: World 0 records
+    # when it was told, not when the fact was true.
+    since_tick: int = 0
+    until_tick: int | None = None
 
     def as_statement(self) -> Statement:
         """The statement that would restate (or withdraw) this claim."""

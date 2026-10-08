@@ -31,6 +31,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   per event.
 
 ### Added
+- **Claims carry their cognitive time** (`docs/world0-api.md` §4.4; research
+  note 2026-10-08) — `Claim.since_tick` (the observation at which the claim
+  was first stated) and `Claim.until_tick` (the observation at which it was
+  withdrawn; None while it holds), and `ConceptCard.first_seen_tick`.
+  Optional additions, wire format unchanged.  This is the world's system
+  time (when it was told), not the fact's valid time.
+- **Daily research-and-development routine** — `docs/research/README.md` is
+  the protocol a scheduled unattended session follows every morning
+  (orientation → papers of the last week → one decision → probe → develop →
+  verify → commit); notes live in `docs/research/notes/YYYY-MM-DD.md`.
 - **Long-term memory: a slow forgetting curve past a consolidation gate**
   (paper §3.6, analysis doc §7.34) — a concept that has recurred in at
   least 5 spaced windows (uses ≥ 24 observations apart; a burst does not
