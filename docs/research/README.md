@@ -73,8 +73,8 @@ python -m benchmarks.longrun.run --study main --seeds 10 --out /tmp/lr   # 动�
 
 ## 5b. 公开门户 / Public portal
 
-公开的研究门户 **https://redbson.github.io/world0/research-portal/**（英文）由例行任务 "Project World0 Auto Research" 维护：
-GitHub Pages 从分支 `agent/blissful-bohr-j9jvwm` 的 `/docs` 目录发布，门户在该分支的 `docs/research-portal/`，
+公开的研究门户 **https://redbson.github.io/world0/research-portal/**（中英双语）由例行任务 "Project World0 Auto Research" 维护：
+GitHub Pages 从分支 `agent/blissful-bohr-j9jvwm` 的根目录发布，门户在该分支的 `research-portal/`，
 全部页面由那里的 `build.py` 从 `data/*.json` 生成（校验、转义、只追加历史）；操作步骤见该目录的 `README.md`。
 本协议的笔记与 `brief.html` 仍是中文工作记录；若某一轮的结论值得公开，按门户 README 的格式补一份报告记录。
 
