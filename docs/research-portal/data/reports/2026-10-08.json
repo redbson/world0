@@ -1,0 +1,142 @@
+{
+ "date": "2026-10-08",
+ "generated": "2026-10-08T12:20:02Z",
+ "status": "PARTIAL",
+ "status_note": "First round, run by hand. Web search only: arxiv.org, Semantic Scholar, Hugging Face and alphaXiv could not be fetched, so every paper is recorded from search summaries without reading the full text.",
+ "importance": "MEDIUM",
+ "direction": "Forgetting, spreading activation and claim time",
+ "summary": "Thirteen 2026 papers and three surveys on agent memory consolidation, forgetting, spreading activation and contradiction resolution were found by web search. Independent systems converge on World0's primitives: Hebbian co-activation, spreading activation with decay, and deterministic claim resolution.\n\nTwo borrowable mechanisms were tested directly on World0 and refuted: rehearsal on read (from retrieval-driven reconsolidation) and suppressing co-occurrence edges. One change shipped: claims and concept cards now expose their system time (Claim.since_tick / until_tick, ConceptCard.first_seen_tick).",
+ "findings": [
+  {
+   "id": "F-1",
+   "title": "Rehearsal on read would not close World0's forgetting gap",
+   "category": "Cognitive Architecture",
+   "discovery": "Tested on bigworld: 65 of the 101 forgotten gold endpoints had never been shown in any view, so refreshing what reads show could save about one in ten.",
+   "relevance": "Retrieval-driven reconsolidation (REALM) is the opposite of World0's pure projection; its rehearsal form fails the probe, so projection stays a pure function.",
+   "strength": "SUPPORTED",
+   "action": "Do not add rehearsal (H-004 refuted, E-004).",
+   "paper": "arxiv:2609.16053"
+  },
+  {
+   "id": "F-2",
+   "title": "Hebbian co-activation and spreading activation recur in independent 2026 systems",
+   "category": "Cognitive Architecture",
+   "discovery": "HeLa-Mem (Hebbian links, reflective hub condensation) and SYNAPSE (spreading activation with lateral inhibition and decay) lead LoCoMo categories, per search summaries.",
+   "relevance": "Independent support for World0's activation primitives; lateral inhibition lives in World0's projection (MMR redundancy), not in activation.",
+   "strength": "SUPPORTED",
+   "action": "No change; hub condensation deferred (leans toward summary storage).",
+   "paper": "arxiv:2604.16839"
+  },
+  {
+   "id": "F-3",
+   "title": "Claims need a visible time dimension",
+   "category": "Memory & Forgetting",
+   "discovery": "TOKI (bitemporal write-time contradiction resolution) and RoMem (phase-rotated superseded facts) both make claim time explicit.",
+   "relevance": "World0 recorded when a claim was stated and withdrawn but did not expose it; an Agent could not tell until when a withdrawn claim held.",
+   "strength": "EXPERIMENTAL",
+   "action": "Shipped: Claim.since_tick / until_tick and ConceptCard.first_seen_tick (system time, optional fields).",
+   "paper": "arxiv:2604.11544"
+  }
+ ],
+ "radar": [
+  "arxiv:2609.16053",
+  "arxiv:2608.28978",
+  "arxiv:2608.12990",
+  "arxiv:2606.25161",
+  "arxiv:2606.15903",
+  "arxiv:2604.20300",
+  "arxiv:2604.20006",
+  "arxiv:2604.16839",
+  "arxiv:2601.02744",
+  "arxiv:2604.11544",
+  "title:toki-a-bitemporal-operator-algebra-for-contradiction-resolution",
+  "arxiv:2606.01435",
+  "arxiv:2604.08206",
+  "arxiv:2603.07670",
+  "arxiv:2605.06716",
+  "arxiv:2601.14287"
+ ],
+ "deep": [],
+ "deep_note": "No full-text deep analysis in this round: no paper could be fetched. Instead, the two most borrowable mechanisms were tested directly on World0 (E-004, E-005).",
+ "insights": [
+  {
+   "area": "Dynamic Ontology",
+   "label": "SPECULATIVE",
+   "note": "Nothing this round bears on ontology evolution directly; TOKI's bitemporal resolution concerns claim time, not structure."
+  },
+  {
+   "area": "Self-Model",
+   "label": "SPECULATIVE",
+   "note": "No self-model work recovered."
+  },
+  {
+   "area": "Dream Mechanism",
+   "label": "EXPERIMENTAL",
+   "note": "HeLa-Mem condenses dense hubs into summaries offline, analogous to World0's reflect communities; not adopted because it leans toward summary storage."
+  },
+  {
+   "area": "World Models",
+   "label": "SPECULATIVE",
+   "note": "No world-model result recovered."
+  },
+  {
+   "area": "Cognitive Architecture",
+   "label": "SUPPORTED",
+   "note": "HeLa-Mem and SYNAPSE independently use World0's activation primitives; deterministic version-aware aggregation beating LLM conflict resolution (arXiv:2606.01435) supports explicit claim identity plus withdrawal."
+  }
+ ],
+ "hypotheses": [
+  "H-004",
+  "H-005"
+ ],
+ "experiments": [
+  "E-004",
+  "E-005"
+ ],
+ "recommendations": [
+  "Keep projection a pure function: do not add rehearsal on read (H-004 refuted).",
+  "Keep the co-occurrence edge weight: suppressing it trades closure for precision (H-005 refuted).",
+  "Expose claim system time in the API: shipped as optional fields, wire format world0/1 unchanged.",
+  "Defer hub-to-summary condensation (HeLa-Mem): it leans toward summary storage and needs a design discussion first."
+ ],
+ "knowledge_updates": [
+  "world0.api: Claim.since_tick / Claim.until_tick and ConceptCard.first_seen_tick added (system time: when World0 was told, not when the fact held); commit fb34c5d on dev.",
+  "No dynamics change, so LongRun was not re-run; tests 1 598 passed, 10 skipped; every proposition in docs/paper/verify.py verified.",
+  "Research protocol docs/research/README.md and the brief page docs/research/brief.html added on dev."
+ ],
+ "open_questions": [
+  "What gold rule should define a silently outdated claim: the latest statement for the same (source, relation)?",
+  "Should World0 ever carry valid time, or stay with system time only?",
+  "What would it cost to evaluate World0 on LoCoMo / LongMemEval with real extraction and a real reader?"
+ ],
+ "priorities": [
+  "Design the roadmap-0.4 'silently outdated information' evaluation scenario following From Recall to Forgetting (arXiv:2604.20006).",
+  "Estimate the cost and changes needed to run World0 on LoCoMo / LongMemEval.",
+  "Performance: colour-field diffusion dirties about 17 records per event; consider deferring sub-1e-3 domain-profile changes to reflect.",
+  "Read the full texts of 2604.20006, 2609.16053 and 2604.16839 when fetching becomes possible."
+ ],
+ "queries": [
+  "agent memory consolidation forgetting",
+  "spreading activation concept graph",
+  "context engineering long-horizon benchmark",
+  "temporal knowledge graph belief revision",
+  "cognitive architecture global workspace metacognition"
+ ],
+ "links": [
+  {
+   "title": "Original research note (Chinese)",
+   "url": "https://github.com/redbson/world0/blob/dev/docs/research/notes/2026-10-08.md"
+  },
+  {
+   "title": "Commit fb34c5d: claim time fields and research protocol",
+   "url": "https://github.com/redbson/world0/commit/fb34c5d2010f427e6a8fb4818e253ed206d69030"
+  },
+  {
+   "title": "Research brief (Chinese)",
+   "url": "https://redbson.github.io/world0/research/brief.html"
+  }
+ ],
+ "editorial_notes": [
+  "Translated and structured from the Chinese research note on 2026-10-10, when the portal was configured."
+ ]
+}

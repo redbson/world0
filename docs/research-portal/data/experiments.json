@@ -1,0 +1,66 @@
+[
+ {
+  "id": "E-001",
+  "hypothesis": "H-001",
+  "description": "Add a non-learned dream-cycle script reusing scripts/sweep_projection_quality.py: generate probe contexts, flag low-quality projections, propose relation edits; compare projection metrics before/after.",
+  "status": "PENDING",
+  "history": [
+   {
+    "date": "2026-10-10",
+    "status": "PENDING"
+   }
+  ]
+ },
+ {
+  "id": "E-002",
+  "hypothesis": "H-002",
+  "description": "Run extraction eval with and without a validation pass (duplicate/contradiction/type checks) and count integrity violations.",
+  "status": "PENDING",
+  "history": [
+   {
+    "date": "2026-10-10",
+    "status": "PENDING"
+   }
+  ]
+ },
+ {
+  "id": "E-003",
+  "hypothesis": "H-003",
+  "description": "Apply bounded weight updates from projection feedback in the projection eval harness; measure stability across reruns.",
+  "status": "PENDING",
+  "history": [
+   {
+    "date": "2026-10-10",
+    "status": "PENDING"
+   }
+  ]
+ },
+ {
+  "id": "E-004",
+  "hypothesis": "H-004",
+  "status": "COMPLETED",
+  "description": "Rehearsal probe on LongRun bigworld (seed 0, a query every 40 steps): record which concepts every view shows; for the gold endpoints that focus queries miss and that were pruned, measure how long before their pruning they were last shown.",
+  "result": "Of 101 pruned, unreached gold endpoints, 65 never appeared in any of 115 views (mean 23.6 concepts per view); of the 36 that did, 6 were last shown < 500 steps earlier, 20 at 500–999 and 10 at ≥ 2 000. Rehearsal could save at most about 10–15 of 121 unreached endpoints (≈ 1 in 10); effect on the bigworld composite ≤ 0.01. It would also make projection impure.",
+  "artifact": "Probe script kept in the session scratchpad (not committed); numbers in docs/research/notes/2026-10-08.md on dev.",
+  "history": [
+   {
+    "date": "2026-10-08",
+    "status": "COMPLETED"
+   }
+  ]
+ },
+ {
+  "id": "E-005",
+  "hypothesis": "H-005",
+  "status": "COMPLETED",
+  "description": "Ablate the weight of co-occurrence edges in activation on LongRun main (seeds 0–2, 1 200-token budget): default vs × 0.5 vs 0.",
+  "result": "Default: composite 0.988, focus recall 0.988, chain 0.964, focus precision 0.604, 604 tokens. × 0.5: identical. Weight 0: composite 0.978, recall 0.979, chain 0.932, precision 0.640, 556 tokens. Co-occurrence edges supply reachability when explicit paths are missing; only their presence matters.",
+  "artifact": "Probe script kept in the session scratchpad (not committed); table in docs/research/notes/2026-10-08.md on dev.",
+  "history": [
+   {
+    "date": "2026-10-08",
+    "status": "COMPLETED"
+   }
+  ]
+ }
+]

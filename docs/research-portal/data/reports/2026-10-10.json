@@ -1,0 +1,114 @@
+{
+ "date": "2026-10-10",
+ "generated": "2026-10-10T06:54:31Z",
+ "status": "PARTIAL",
+ "status_note": "Papers identified via web search; primary full texts not retrievable this session.",
+ "importance": "HIGH",
+ "direction": "Offline consolidation and governed ontology/memory evolution",
+ "summary": "Offline consolidation (\"dreaming\") and governed, feedback-driven ontology/memory evolution are the dominant 2026 themes. Three findings are relevant to World0; all rest on search summaries, so evidence strength is capped at EXPERIMENTAL/SUPPORTED.",
+ "findings": [
+  {
+   "id": "F-1",
+   "title": "Pre-failure offline memory repair (MemDream)",
+   "category": "Dream Mechanism",
+   "discovery": "Offline Dreamer/Analyst/Consolidator agents probe and repair a memory graph before retrieval fails; reversible soft decay.",
+   "relevance": "Template for a World0 Dream Mechanism operating on concepts and relations rather than facts.",
+   "strength": "EXPERIMENTAL",
+   "action": "Prototype non-RL probe/diagnose/repair loop (E-001).",
+   "paper": "arxiv:2609.34545"
+  },
+  {
+   "id": "F-2",
+   "title": "Ontology as a dynamically refined agent kernel (OaK)",
+   "category": "Dynamic Ontology",
+   "discovery": "Task-oriented ontologies/KGs are built and refined from judge feedback.",
+   "relevance": "Validates feedback-driven ontology evolution; contrast with World0's single structure plus context projection.",
+   "strength": "EXPERIMENTAL",
+   "action": "Full-text read; extract judge-feedback loop design.",
+   "paper": "arxiv:2608.22974"
+  },
+  {
+   "id": "F-3",
+   "title": "Consolidation needs write governance (SSGM)",
+   "category": "Cognitive Architecture",
+   "discovery": "Evolving memory risks logical drift; validation at consolidation is proposed as a guard.",
+   "relevance": "Supports concept-integrity-first priority for LLM-written cards/relations.",
+   "strength": "SUPPORTED",
+   "action": "Design validation gate (E-002).",
+   "paper": "arxiv:2603.11768"
+  }
+ ],
+ "radar": [
+  "arxiv:2608.22974",
+  "arxiv:2609.34545",
+  "arxiv:2609.16053",
+  "arxiv:2603.11768",
+  "arxiv:2604.20943",
+  "arxiv:2606.03979",
+  "arxiv:2606.25161",
+  "arxiv:2605.20616"
+ ],
+ "deep": [
+  "arxiv:2608.22974",
+  "arxiv:2609.34545"
+ ],
+ "deep_note": "Verification: metadata and summary taken from web-search result summaries only; the arXiv page could not be fetched in this session (network egress to arxiv.org unavailable). Quantitative details are reported only where the search summary stated them.",
+ "insights": [
+  {
+   "area": "Dynamic Ontology",
+   "label": "EXPERIMENTAL",
+   "note": "OaK: judge-feedback ontology refinement (summary only)."
+  },
+  {
+   "area": "Self-Model",
+   "label": "SPECULATIVE",
+   "note": "Only SCM pairs a self-model with consolidation; prototype-scale."
+  },
+  {
+   "area": "Dream Mechanism",
+   "label": "EXPERIMENTAL",
+   "note": "MemDream and Auto-Dreamer indicate a growing offline-consolidation line."
+  },
+  {
+   "area": "World Models",
+   "label": "SPECULATIVE",
+   "note": "No 2026 world-model result recovered in this session's searches."
+  },
+  {
+   "area": "Cognitive Architecture",
+   "label": "SUPPORTED",
+   "note": "Multiple independent papers converge on governed, feedback-driven consolidation."
+  }
+ ],
+ "hypotheses": [
+  "H-001",
+  "H-002",
+  "H-003"
+ ],
+ "experiments": [
+  "E-001",
+  "E-002",
+  "E-003"
+ ],
+ "recommendations": [
+  "Prototype a non-RL dream cycle reusing existing projection-eval scripts (E-001).",
+  "Add a validation gate for LLM-written cards/relations (E-002).",
+  "Keep structure as shared concept-world with context-conditioned projection; do not adopt per-task ontologies wholesale."
+ ],
+ "knowledge_updates": [
+  "8 papers added; 3 hypotheses and 3 experiments registered. See data/."
+ ],
+ "open_questions": [
+  "What quantitative gains do MemDream and OaK report, and on which benchmarks?",
+  "Do dream repairs cause semantic drift in typed relations?",
+  "Is there 2026 work on world models relevant to concept graphs?"
+ ],
+ "priorities": [
+  "Obtain full texts of OaK, MemDream, Auto-Dreamer; fill authors and results.",
+  "Search world-model and self-model literature."
+ ],
+ "editorial_notes": [
+  "Converted on 2026-10-10, when the portal was configured, from the routine's hand-written HTML (commit 1b015e0 on branch claude/magical-gates-ids8mg) into structured data; the text is unchanged.",
+  "REALM (arXiv:2609.16053) and TRUSTMEM (arXiv:2606.25161) were also covered by the 2026-10-08 round, so the merged records list them as first seen on 2026-10-08; this session added 6 papers new to the records."
+ ]
+}
