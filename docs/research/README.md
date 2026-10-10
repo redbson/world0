@@ -71,6 +71,13 @@ python -m benchmarks.longrun.run --study main --seeds 10 --out /tmp/lr   # 动�
   若会话里有 Artifact 工具，再把 `docs/research/brief.html` 发布到已有页面 **https://claude.ai/artifact/1fkRTFXv9Mm5tufx83hwoV**
   （用 `url` 参数更新同一页面，不要新建；更新前先 `read` 一次该 URL）。没有该工具就只提交文件。
 
+## 5b. 公开门户 / Public portal
+
+公开的研究门户 **https://redbson.github.io/world0/research-portal/**（英文）由例行任务 "Project World0 Auto Research" 维护：
+GitHub Pages 从分支 `agent/blissful-bohr-j9jvwm` 的 `/docs` 目录发布，门户在该分支的 `docs/research-portal/`，
+全部页面由那里的 `build.py` 从 `data/*.json` 生成（校验、转义、只追加历史）；操作步骤见该目录的 `README.md`。
+本协议的笔记与 `brief.html` 仍是中文工作记录；若某一轮的结论值得公开，按门户 README 的格式补一份报告记录。
+
 ## 6. 笔记模板 / Note template
 
 ```markdown
