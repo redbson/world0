@@ -2,11 +2,13 @@
  "runs": [
   {
    "date": "2026-10-10",
-   "generated": "2026-10-10T07:13:16Z",
-   "papers_added": 0,
-   "status": "PARTIAL: primary sources not fetchable; summary-level verification"
+   "generated": "2026-10-10T07:45:15Z",
+   "status": "PARTIAL",
+   "papers_added": 8
   }
  ],
- "last_research_update": "2026-10-10T07:13:16Z",
- "last_successful_deployment": null
+ "last_research_update": "2026-10-10T07:45:15Z",
+ "last_successful_deployment": "2026-10-10T07:14:10Z",
+ "last_deployed_commit": "e027e3a",
+ "pages_url": "https://redbson.github.io/world0/research-portal/"
 }

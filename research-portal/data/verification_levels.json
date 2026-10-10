@@ -1,0 +1,28 @@
+{
+ "V0": {
+  "name": "TITLE_ONLY",
+  "description": "Only the title and identifier were seen. Nothing about method or results is verified."
+ },
+ "V1": {
+  "name": "SEARCH_SUMMARY",
+  "description": "Metadata and claims come from a web-search result summary, not from the paper itself."
+ },
+ "V2": {
+  "name": "ABSTRACT_READ",
+  "description": "The abstract was read on the primary source."
+ },
+ "V3": {
+  "name": "FULL_TEXT_READ",
+  "description": "The full text was read; methods, numbers and limitations are taken from the paper."
+ },
+ "V4": {
+  "name": "INDEPENDENTLY_CHECKED",
+  "description": "Claims were checked against a second source, code, or a reproduction."
+ },
+ "strength_rules": {
+  "CONFIRMED": "requires at least one V3+ source and no contradicting evidence",
+  "SUPPORTED": "requires >=2 independent sources or one V3 source",
+  "EXPERIMENTAL": "single source, any level, with a described mechanism",
+  "SPECULATIVE": "interpretation without direct evidence"
+ }
+}

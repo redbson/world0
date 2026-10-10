@@ -3,18 +3,42 @@
   "id": "E-001",
   "hypothesis": "H-001",
   "description": "Add a non-learned dream-cycle script reusing scripts/sweep_projection_quality.py: generate probe contexts, flag low-quality projections, propose relation edits; compare projection metrics before/after.",
-  "status": "PENDING"
+  "status": "PENDING",
+  "first_seen": "2026-10-10",
+  "last_updated": "2026-10-10",
+  "history": [
+   {
+    "date": "2026-10-10",
+    "status": "PENDING"
+   }
+  ]
  },
  {
   "id": "E-002",
   "hypothesis": "H-002",
   "description": "Run extraction eval with and without a validation pass (duplicate/contradiction/type checks) and count integrity violations.",
-  "status": "PENDING"
+  "status": "PENDING",
+  "first_seen": "2026-10-10",
+  "last_updated": "2026-10-10",
+  "history": [
+   {
+    "date": "2026-10-10",
+    "status": "PENDING"
+   }
+  ]
  },
  {
   "id": "E-003",
   "hypothesis": "H-003",
   "description": "Apply bounded weight updates from projection feedback in the projection eval harness; measure stability across reruns.",
-  "status": "PENDING"
+  "status": "PENDING",
+  "first_seen": "2026-10-10",
+  "last_updated": "2026-10-10",
+  "history": [
+   {
+    "date": "2026-10-10",
+    "status": "PENDING"
+   }
+  ]
  }
 ]

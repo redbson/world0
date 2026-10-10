@@ -15,7 +15,30 @@
   "evidence": "Datasets, baselines, metrics and quantitative results not recovered in this session.",
   "limitations": "Unverified: evaluation scope, cost of judge loop, drift of refined ontology. Full text not read.",
   "implications": "Closest external analogue to World0 dynamic concept/relation evolution. Judge-feedback refinement could drive relation retyping and card merging. Risk: task-oriented ontologies may be too narrow versus World0's context-sensitive projection of one shared structure.",
-  "first_seen": "2026-10-10"
+  "first_seen": "2026-10-10",
+  "verification_level": "V1",
+  "last_updated": "2026-10-10",
+  "doi": null,
+  "arxiv_id": "2608.22974",
+  "argument": {
+   "claims": [
+    "An ontology built and refined per task (ontology-as-kernel) makes LLM agents more effective and reliable."
+   ],
+   "premises": [
+    "Agent failures are partly caused by missing or unstable task structure.",
+    "Judge feedback is informative enough to refine an ontology."
+   ],
+   "evidence": [
+    "not recovered"
+   ],
+   "counterpoints": [
+    "Per-task ontologies may fragment knowledge across tasks; World0 instead keeps one shared structure and projects it per context.",
+    "Cost of a judge loop per task is unknown."
+   ],
+   "interpretation": [
+    "Feedback-driven refinement is the transferable idea, not per-task ontologies."
+   ]
+  }
  },
  {
   "id": "arxiv:2609.34545",
@@ -33,7 +56,30 @@
   "evidence": "Numerical results not recovered in this session.",
   "limitations": "Unverified: benchmark coverage, RL training cost, whether repairs introduce semantic drift.",
   "implications": "Maps directly onto a World0 Dream Mechanism: probe the concept-world with synthetic task contexts, diagnose weak projections, repair relations. Reversible decay matches the 'never silently delete' stance. Complexity: medium-high; start with a non-RL probe/diagnose/repair loop using the existing projection eval scripts.",
-  "first_seen": "2026-10-10"
+  "first_seen": "2026-10-10",
+  "verification_level": "V1",
+  "last_updated": "2026-10-10",
+  "doi": null,
+  "arxiv_id": "2609.34545",
+  "argument": {
+   "claims": [
+    "Repairing a memory graph offline, before retrieval fails, improves long-term agent memory."
+   ],
+   "premises": [
+    "Memory failures are detectable by self-probing before a user query exposes them.",
+    "A learned policy (GRPO) can prioritize what to probe and repair."
+   ],
+   "evidence": [
+    "not recovered"
+   ],
+   "counterpoints": [
+    "Repairs could introduce semantic drift in typed relations.",
+    "RL training cost and benchmark coverage are unknown."
+   ],
+   "interpretation": [
+    "A non-learned probe/diagnose/repair loop is a cheaper first test of the same idea inside World0's reflect() pipeline."
+   ]
+  }
  },
  {
   "id": "arxiv:2609.16053",
@@ -51,7 +97,11 @@
   "evidence": "Not recovered.",
   "limitations": "Not read.",
   "implications": "Retrieval/projection feedback as a signal for relation weight updates.",
-  "first_seen": "2026-10-10"
+  "first_seen": "2026-10-10",
+  "verification_level": "V1",
+  "last_updated": "2026-10-10",
+  "doi": null,
+  "arxiv_id": "2609.16053"
  },
  {
   "id": "arxiv:2603.11768",
@@ -69,7 +119,11 @@
   "evidence": "Not recovered.",
   "limitations": "Not read.",
   "implications": "Validation gate for concept-card and relation writes by LLMs (concept integrity, priority 1 in AGENTS.md).",
-  "first_seen": "2026-10-10"
+  "first_seen": "2026-10-10",
+  "verification_level": "V1",
+  "last_updated": "2026-10-10",
+  "doi": null,
+  "arxiv_id": "2603.11768"
  },
  {
   "id": "arxiv:2604.20943",
@@ -87,7 +141,11 @@
   "evidence": "Search summary reports perfect recall over ten-turn conversations and 90.9% memory-noise reduction on an eight-test suite (prototype scale; not independently checked).",
   "limitations": "Small-scale prototype per summary; not read.",
   "implications": "Only found paper pairing a self-model with offline consolidation; evidence weak.",
-  "first_seen": "2026-10-10"
+  "first_seen": "2026-10-10",
+  "verification_level": "V1",
+  "last_updated": "2026-10-10",
+  "doi": null,
+  "arxiv_id": "2604.20943"
  },
  {
   "id": "arxiv:2606.03979",
@@ -105,7 +163,11 @@
   "evidence": "Not recovered.",
   "limitations": "Parametric, outside World0 scope (conceptual structure, not weights).",
   "implications": "Low direct relevance; useful as contrast.",
-  "first_seen": "2026-10-10"
+  "first_seen": "2026-10-10",
+  "verification_level": "V1",
+  "last_updated": "2026-10-10",
+  "doi": null,
+  "arxiv_id": "2606.03979"
  },
  {
   "id": "arxiv:2606.25161",
@@ -123,7 +185,11 @@
   "evidence": "Not recovered.",
   "limitations": "Not read.",
   "implications": "Triage later.",
-  "first_seen": "2026-10-10"
+  "first_seen": "2026-10-10",
+  "verification_level": "V0",
+  "last_updated": "2026-10-10",
+  "doi": null,
+  "arxiv_id": "2606.25161"
  },
  {
   "id": "arxiv:2605.20616",
@@ -141,6 +207,10 @@
   "evidence": "Not recovered.",
   "limitations": "Not read.",
   "implications": "Priority for next session full-text read.",
-  "first_seen": "2026-10-10"
+  "first_seen": "2026-10-10",
+  "verification_level": "V0",
+  "last_updated": "2026-10-10",
+  "doi": null,
+  "arxiv_id": "2605.20616"
  }
 ]

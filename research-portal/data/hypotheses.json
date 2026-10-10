@@ -5,15 +5,18 @@
   "motivation": "MemDream reports pre-failure graph repair via dream cycles (unverified detail).",
   "status": "PROPOSED",
   "evidence": [
-   "arxiv:2609.34545 (summary only)"
+   "EV-001"
   ],
   "next_experiment": "E-001",
   "history": [
    {
     "date": "2026-10-10",
-    "status": "PROPOSED"
+    "status": "PROPOSED",
+    "reason": "Proposed from search-summary-level evidence (V1)."
    }
-  ]
+  ],
+  "last_updated": "2026-10-10",
+  "first_seen": "2026-10-10"
  },
  {
   "id": "H-002",
@@ -21,15 +24,19 @@
   "motivation": "SSGM frames consolidation as validation to prevent logical drift.",
   "status": "PROPOSED",
   "evidence": [
-   "arxiv:2603.11768 (summary only)"
+   "EV-003",
+   "EV-004"
   ],
   "next_experiment": "E-002",
   "history": [
    {
     "date": "2026-10-10",
-    "status": "PROPOSED"
+    "status": "PROPOSED",
+    "reason": "Proposed from search-summary-level evidence (V1)."
    }
-  ]
+  ],
+  "last_updated": "2026-10-10",
+  "first_seen": "2026-10-10"
  },
  {
   "id": "H-003",
@@ -37,15 +44,18 @@
   "motivation": "REALM and OaK both refine structure from feedback signals.",
   "status": "PROPOSED",
   "evidence": [
-   "arxiv:2609.16053",
-   "arxiv:2608.22974 (summaries only)"
+   "EV-002",
+   "EV-004"
   ],
   "next_experiment": "E-003",
   "history": [
    {
     "date": "2026-10-10",
-    "status": "PROPOSED"
+    "status": "PROPOSED",
+    "reason": "Proposed from search-summary-level evidence (V1)."
    }
-  ]
+  ],
+  "last_updated": "2026-10-10",
+  "first_seen": "2026-10-10"
  }
 ]
