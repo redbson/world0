@@ -2,11 +2,11 @@
  "runs": [
   {
    "date": "2026-10-10",
-   "generated": "2026-10-10T06:54:31Z",
-   "papers_added": 8,
+   "generated": "2026-10-10T07:13:16Z",
+   "papers_added": 0,
    "status": "PARTIAL: primary sources not fetchable; summary-level verification"
   }
  ],
- "last_research_update": "2026-10-10T06:54:31Z",
+ "last_research_update": "2026-10-10T07:13:16Z",
  "last_successful_deployment": null
 }
