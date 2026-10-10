@@ -864,3 +864,16 @@ class TestExternalAgents:
         assert "problem workspace:" in first.lower()
         assert "problem workspace:" in second.lower()
         assert first_workspace == second_workspace
+
+
+class TestClose:
+    def test_close_persists_learning_state_and_is_idempotent(self, tmp_store: Path) -> None:
+        from world0 import Observation
+
+        agent = PKMAgent(store_path=tmp_store, llm=None)
+        agent.world.ingest(Observation(concepts=["alpha", "beta"], source="t"))
+        agent.close()
+        agent.close()  # safe to call twice
+        learning = agent.world._store.load_learning_state()
+        assert learning["hebbian_stats"]["observations"] == 1
+        assert learning["hebbian_pending"]

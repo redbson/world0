@@ -192,7 +192,17 @@ def create_app(
     except Exception:
         pass  # Agentic mode unavailable (no API key, etc.)
 
-    app = FastAPI(title="World 0 Concept World", version="0.2.0")
+    app = FastAPI(
+        title="World 0 Concept World",
+        version="0.3.0",
+        # Persist the amortised learning record when the server stops.
+        on_shutdown=[_agent.close],
+    )
+    # The unified API (docs/world0-api.md §5) lives under /v1 next to the
+    # Agent shell's own /api/* routes.
+    from world0.http import v1_router
+
+    app.include_router(v1_router(lambda: _agent.world))  # follows space switches
 
     def _space_payload() -> dict[str, Any]:
         registry = _agent.space_registry

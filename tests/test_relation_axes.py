@@ -31,6 +31,9 @@ def test_legacy_relation_labels_normalize_to_axes():
 
 
 def test_relation_edge_coerces_legacy_saved_value():
+    """A 0.2.0 edge stored its label in ``relation_type``; the label's own
+    semantics are kept on load (``contrasts`` is ``contrast``, not the axis
+    default ``conflict``; see tests/test_legacy_store_relations.py)."""
     edge = RelationEdge(
         source_id="a",
         target_id="b",
@@ -39,9 +42,14 @@ def test_relation_edge_coerces_legacy_saved_value():
 
     assert edge.relation_type is RelationType.NEGATIVE
     assert edge.relation_type.value == "negative"
-    assert edge.semantic_relation == "conflict"
-    assert edge.structural_strength == pytest.approx(0.84)
-    assert edge.propagation_strength == pytest.approx(0.10)
+    assert edge.semantic_relation == "contrast"
+    assert edge.structural_strength == pytest.approx(0.70)
+    assert edge.propagation_strength == pytest.approx(0.06)
+
+    # A stored axis value (not a label) still takes the axis default.
+    for axis in ("negative", RelationType.NEGATIVE):
+        bare = RelationEdge(source_id="a", target_id="b", relation_type=axis)
+        assert bare.semantic_relation == "conflict"
 
 
 def test_semantic_relation_labels_map_to_axes_and_scores():
@@ -69,4 +77,5 @@ def test_world_ingest_stores_axis_links(tmp_path):
     semantic_relations = {r.semantic_relation for r in world.relations.all()}
 
     assert relation_types == {"positive", "negative", "parallel"}
-    assert semantic_relations == {"mutual_reinforcement", "conflict", "generic_relation"}
+    # a bare axis word asserts only the axis: the weakest claim on it (round 28)
+    assert semantic_relations == {"mutual_reinforcement", "contrast", "generic_relation"}

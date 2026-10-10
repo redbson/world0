@@ -68,7 +68,9 @@ class TestPromotion:
 
 
 class TestFadingAndRevival:
-    def test_fading_concept_revives_on_activation(self, world):
+    def test_faded_one_off_revives_as_embryonic(self, world):
+        """A concept without a history of spaced recurrence re-enters the
+        ladder at the bottom instead of skipping to DEVELOPING."""
         node, _ = world.concepts.get_or_create("OldConcept")
         node.maturity = Maturity.FADING
         node.confidence = 0.03
@@ -76,5 +78,19 @@ class TestFadingAndRevival:
         # Re-activate
         world.ingest(Observation(concepts=["OldConcept"], source="revival"))
         node = world.concepts.resolve("OldConcept")
-        assert node.maturity == Maturity.DEVELOPING
+        assert node.maturity == Maturity.EMBRYONIC
         assert node.confidence > 0.03
+
+    def test_recurrent_faded_concept_revives_as_developing(self, world):
+        """A concept seen in several distinct windows revives to DEVELOPING."""
+        for _ in range(3):
+            world.ingest(Observation(concepts=["OldConcept"], source="s"))
+            world.clock.advance(24)
+        node = world.concepts.resolve("OldConcept")
+        assert node.recurrence_count == 3
+        node.maturity = Maturity.FADING
+        node.confidence = 0.03
+
+        world.ingest(Observation(concepts=["OldConcept"], source="revival"))
+        node = world.concepts.resolve("OldConcept")
+        assert node.maturity == Maturity.DEVELOPING

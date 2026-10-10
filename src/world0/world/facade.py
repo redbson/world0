@@ -11,10 +11,12 @@ through the attribute, never through a direct symbol import.
 
 from __future__ import annotations
 
+from contextlib import nullcontext
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from world0.api import Claim, ConceptCard, Statement
 from world0.communities.manager import CommunityManager
 from world0.concepts.api import Concepts
 from world0.dynamics.activation import ActivationEngine
@@ -24,9 +26,12 @@ from world0.dynamics.decay import DecayEngine
 from world0.dynamics.hebbian import HebbianEngine
 from world0.dynamics.lifecycle import LifecycleEngine
 from world0.extraction.extractor import ConceptExtractor
+from world0.context import Focus
+from world0.perspectives import get_perspective
 from world0.prompts import PromptRegistry
-from world0.projection.engine import ProjectionEngine
+from world0.projection.engine import CONTEXT_MATCH, ProjectionEngine
 from world0.relations.manager import RelationManager
+from world0.schemas.clock import CognitiveClock
 from world0.schemas.context import Perspective
 from world0.schemas.types import (
     IngestResult,
@@ -38,6 +43,7 @@ from world0.schemas.types import (
 )
 from world0.sources import SourceLibrary
 from world0.store.json_store import JsonStore
+from world0.store.sqlite_store import SqliteStore
 from world0.visualization.renderer import visualize as _visualize
 from world0.world._identity import IdentityOps
 from world0.world._ingest import IngestPipeline
@@ -46,6 +52,11 @@ from world0.world._status import build_status
 
 if TYPE_CHECKING:
     from world0.core import LLMProvider
+
+
+# Learning-record persistence policy (see ``World._persist_learning_state``).
+LEARNING_EAGER_LIMIT: int = 2_000
+LEARNING_PERSIST_EVERY: int = 20
 
 
 class World:
@@ -76,40 +87,117 @@ class World:
         store_path: str | Path = ".world0",
         llm: LLMProvider | None = None,
         prompt_registry: PromptRegistry | None = None,
+        auto_reflect_every: int | None = None,
+        backend: str = "auto",
+        sustained_attention: bool = False,
+        long_term_memory: bool | None = None,
     ) -> None:
-        self._store = JsonStore(store_path)
+        # ``long_term_memory``: concepts that are well evidenced and recur in
+        # spaced windows enter long-term memory and forget on the slow curve
+        # (dynamics/lifecycle ``consolidation_gate``, dynamics/decay
+        # ``LONG_TERM_HALF_LIFE``).  None means the library default (on).
+        self.long_term_memory = long_term_memory
+        # ``sustained_attention``: keep a limited-capacity focus across
+        # projections so the current line of attention biases the next
+        # view (global-workspace style, docs/mc/03-workspace.md).  Off by
+        # default: a projection is then a pure function of the world.
+        self.sustained_attention = sustained_attention
+        self.focus = Focus()
+        # ``backend``: "json" (one file per record under ``store_path``),
+        # "sqlite" (a single database file at ``store_path``), or "auto"
+        # (sqlite when ``store_path`` ends in .sqlite/.sqlite3/.db, else json).
+        self._store = self._open_store(store_path, backend)
         self._prompts = prompt_registry or PromptRegistry()
+        # Continuous mode: run a light reflect (decay + lifecycle + prune,
+        # no community / colour passes) every N observations so the world
+        # keeps consolidating without anyone remembering to call
+        # ``reflect()``.  Decay is idempotent in cognitive time, so the
+        # cadence only changes *when* forgetting is applied, never how much.
+        self._auto_reflect_every = (
+            int(auto_reflect_every) if auto_reflect_every and auto_reflect_every > 0 else None
+        )
+
+        # ── Cross-cycle state + cognitive clock ───────────────────────
+        # Time in World 0 is counted in observations: the clock advances
+        # once per ``ingest()`` and is persisted with the world state.
+        self._state = self._store.load_state()
+        self._clock = CognitiveClock(int(self._state.get("tick") or 0))
 
         # ── Stores ────────────────────────────────────────────────────
-        self.concepts = Concepts(self._store)
-        self.relations = RelationManager(self._store)
+        self.concepts = Concepts(self._store, clock=self._clock)
+        self.relations = RelationManager(self._store, clock=self._clock)
         self.sources = SourceLibrary(self._store)
         self.concepts.load()
         self.relations.load()
 
         # ── Dynamics engines (each implements a core Protocol) ────────
-        self._activation = ActivationEngine(self.concepts, self.relations)
+        self._activation = ActivationEngine(
+            self.concepts, self.relations, clock=self._clock
+        )
         self._color_diffusion = ColorDiffusionEngine(
             self.concepts, self.relations
         )
         self._hebbian = HebbianEngine(self.relations)
-        self._decay = DecayEngine(self.concepts, self.relations)
-        self._lifecycle = LifecycleEngine(self.concepts, self.relations)
-        self._projection = ProjectionEngine(self.concepts, self.relations)
+        self._decay = DecayEngine(self.concepts, self.relations, clock=self._clock)
+        self._lifecycle = LifecycleEngine(
+            self.concepts, self.relations, clock=self._clock,
+            long_term_memory=long_term_memory,
+        )
+        # Event-time lifecycle: maturity promotions are applied at the
+        # activation / connection that earns them, so the maturity (and
+        # half-life) trajectory of a concept is a function of the
+        # observation stream and not of when reflect() happened to run
+        # (docs/paper, Theorem 3.7).
+        # The hooks call through ``self._lifecycle`` at event time, so an
+        # engine swapped in after construction (the documented override
+        # point) keeps sole authority over maturity; a policy without the
+        # event hooks is simply evaluated at reflect.
+        self.concepts.connect_lifecycle(on_activation=self._on_activation, on_weaken=self._on_weaken)
+        self._activation.connect_lifecycle(on_activation=self._on_activation)
+        self.relations.connect_lifecycle(on_connection=self._on_connection)
+        self._projection = ProjectionEngine(
+            self.concepts, self.relations, clock=self._clock
+        )
 
         # Optional LLM-powered extraction
         self._extractor = (
             ConceptExtractor(llm, prompt_registry=self._prompts) if llm else None
         )
 
-        # ── Cross-cycle state ────────────────────────────────────────
-        self._state = self._store.load_state()
+        # ── Communities ──────────────────────────────────────────────
         self._community_detector = CommunityDetector(
-            self.concepts, self.relations
+            self.concepts, self.relations, clock=self._clock
         )
         self._communities = CommunityManager.from_snapshot(
             self._state.get("communities"), self._community_detector
         )
+        # Hebbian co-occurrence counters are learning state: restore them
+        # so a pair first seen last session and again now still crosses
+        # the discovery threshold.
+        learning = self._store.load_learning_state()
+        migrated = False
+        if not learning and (
+            "hebbian_pending" in self._state or "hebbian_stats" in self._state
+        ):
+            # Stores written before the learning record existed kept the
+            # counters inside state.json; migrate them once.
+            learning = {
+                "hebbian_pending": self._state.pop("hebbian_pending", None),
+                "hebbian_stats": self._state.pop("hebbian_stats", None),
+            }
+            migrated = True
+        self._hebbian.restore(learning.get("hebbian_pending"))
+        self._hebbian.restore_stats(learning.get("hebbian_stats"))
+        self._learning_saved: dict = {
+            "hebbian_pending": self._hebbian.snapshot(),
+            "hebbian_stats": self._hebbian.stats_snapshot(),
+        }
+        self._learning_saved_tick = self._clock.tick
+        if migrated:
+            # Write the migrated counters to their new home at once so a
+            # crash before the next change cannot lose them.
+            self._store.save_learning_state(self._learning_saved)
+            self._store.save_state(self._state)
 
         # ── Pipelines ────────────────────────────────────────────────
         self._ingest_pipeline = IngestPipeline(
@@ -117,12 +205,14 @@ class World:
             relations=self.relations,
             hebbian=self._hebbian,
             color=self._color_diffusion,
+            clock=self._clock,
         )
         self._reflect_pipeline = ReflectPipeline(
             decay=self._decay,
             lifecycle=self._lifecycle,
             color=self._color_diffusion,
             communities=self._communities,
+            hebbian=self._hebbian,
         )
         self._identity = IdentityOps(
             concepts=self.concepts, relations=self.relations
@@ -130,13 +220,118 @@ class World:
 
     # ── Agent interface ───────────────────────────────────────────────
 
+    @staticmethod
+    def _open_store(store_path: str | Path, backend: str):
+        choice = (backend or "auto").strip().lower()
+        if choice == "auto":
+            suffix = Path(store_path).suffix.lower()
+            choice = "sqlite" if suffix in {".sqlite", ".sqlite3", ".db"} else "json"
+        if choice == "sqlite":
+            return SqliteStore(store_path)
+        if choice == "json":
+            return JsonStore(store_path)
+        raise ValueError(f"unknown store backend: {backend!r} (use 'json', 'sqlite' or 'auto')")
+
+    @property
+    def clock(self) -> CognitiveClock:
+        """The world's cognitive clock (one tick per observation)."""
+        return self._clock
+
+    def _on_activation(self, node) -> None:
+        hook = getattr(self._lifecycle, "on_activation", None)
+        if hook is not None:
+            hook(node)
+
+    def _on_weaken(self, node) -> None:
+        hook = getattr(self._lifecycle, "on_weaken", None)
+        if hook is not None:
+            hook(node)
+
+    def _on_connection(self, *concept_ids: str) -> None:
+        hook = getattr(self._lifecycle, "on_connection", None)
+        if hook is not None:
+            hook(*concept_ids)
+
     def ingest(self, observation: Observation) -> IngestResult:
         """Agent submits observations. World 0 updates itself."""
+        # Every observation is one unit of cognitive time.
+        self._clock.advance()
         result = self._ingest_pipeline.run(observation)
-        # Pipelines never persist — facade owns the flush boundary.
+        pop = getattr(self._lifecycle, "pop_consolidated", None)
+        if pop is not None:
+            result.consolidated_concepts = [
+                node.name for cid in pop() if (node := self.concepts.get(cid)) is not None
+            ]
+        # Pipelines never persist — facade owns the flush boundary: one
+        # store transaction for concepts, relations, clock and counters.
+        with self._transaction():
+            self.concepts.flush()
+            self.relations.flush()
+            self._persist_learning_state()
+        if (
+            self._auto_reflect_every
+            and self._clock.tick % self._auto_reflect_every == 0
+        ):
+            self.reflect(light=True)
+        return result
+
+    def _transaction(self):
+        """The store's write transaction, or a no-op for backends without one."""
+        txn = getattr(self._store, "transaction", None)
+        return txn() if txn is not None else nullcontext()
+
+    def _persist_learning_state(self, *, force: bool = False) -> None:
+        """Save the clock (every observation) and the Hebbian counters.
+
+        The counters are bulky at scale (up to ``MAX_PENDING_PAIRS`` pairs
+        plus one mention count per concept) and serialising them was 76 %
+        of ingest cost in a 2 000-concept world.  They are therefore
+        written to the store's separate learning record: on every
+        observation while small (``LEARNING_EAGER_LIMIT`` entries, so a
+        small world stays restart-exact), otherwise at most every
+        ``LEARNING_PERSIST_EVERY`` observations, and always at ``reflect()``
+        and ``close()``.  Concepts and relations are flushed on every
+        observation regardless; a crash can only lose a few observations'
+        worth of co-occurrence *counters*.
+        """
+        if self._state.get("tick") != self._clock.tick:
+            self._state["tick"] = self._clock.tick
+            self._store.save_state(self._state)
+        size = self._hebbian.pending_pairs + self._hebbian.tracked_concepts
+        due = (
+            force
+            or size <= LEARNING_EAGER_LIMIT
+            or self._clock.tick - self._learning_saved_tick >= LEARNING_PERSIST_EVERY
+        )
+        if not due:
+            return
+        learning = {
+            "hebbian_pending": self._hebbian.snapshot(),
+            "hebbian_stats": self._hebbian.stats_snapshot(),
+        }
+        if learning != self._learning_saved:
+            self._store.save_learning_state(learning)
+            self._learning_saved = learning
+        self._learning_saved_tick = self._clock.tick
+
+    def close(self) -> None:
+        """Persist everything and release the store.
+
+        Call this (or use the ``with`` form) before discarding a world so
+        the amortised learning record is exact on disk.
+        """
         self.concepts.flush()
         self.relations.flush()
-        return result
+        self._persist_learning_state(force=True)
+        close = getattr(self._store, "close", None)
+        if callable(close):
+            close()
+
+    def __enter__(self) -> "World":
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self.close()
 
     def ingest_text(
         self,
@@ -181,12 +376,20 @@ class World:
         seeds: list[str],
         *,
         task: str = "",
-        perspective: Perspective | None = None,
+        perspective: Perspective | str | None = None,
         max_concepts: int = 15,
         max_depth: int = 2,
         decay: float = 0.5,
     ) -> Projection:
-        """Generate a cognitive projection for the current task."""
+        """Generate a cognitive projection for the current task.
+
+        ``perspective`` may be a ``Perspective`` or the name of a profile
+        from ``world0.perspectives`` (``"dependency_map"``, ``"taxonomy"``,
+        …); a bare ``task`` is applied to a named profile that has none.
+        """
+        perspective_name = perspective if isinstance(perspective, str) else ""
+        if isinstance(perspective, str):
+            perspective = get_perspective(perspective, task=task)
         seed_ids: list[str] = []
         for name in seeds:
             node = self.concepts.resolve(name)
@@ -198,7 +401,7 @@ class World:
         )
 
         if not seed_ids:
-            return Projection(task=effective_task)
+            return Projection(task=effective_task, seeds=list(seeds), perspective=perspective_name)
 
         activations = self._activation.activate(
             seed_ids,
@@ -210,18 +413,105 @@ class World:
             perspective=perspective,
         )
 
-        return self._projection.project(
-            activations, max_concepts=max_concepts, task=effective_task
+        focus = None
+        if self.sustained_attention:
+            self.focus.release_if_task_changed(effective_task)
+            focus = self.focus
+        projection = self._projection.project(
+            activations,
+            max_concepts=max_concepts,
+            task=effective_task,
+            seed_ids=seed_ids,
+            focus=focus,
         )
+        if self.sustained_attention:
+            self.focus.update(projection.ignited_ids(), effective_task)
+        projection.seeds = list(seeds)
+        projection.perspective = perspective_name
+        return projection
 
-    def reflect(self) -> ReflectResult:
-        """Cognitive consolidation — run after a task is complete."""
-        result = self._reflect_pipeline.run()
-        self.concepts.flush()
-        self.relations.flush()
-        self._state["last_reflect"] = datetime.now(timezone.utc).isoformat()
-        self._state["communities"] = self._communities.snapshot()
-        self._store.save_state(self._state)
+    # ── Inspect (docs/world0-api.md §3): zero- and one-hop reads ──────
+
+    def card(self, concept: str) -> ConceptCard | None:
+        """The concept card of ``concept`` (a name, alias or id), or None."""
+        node = self.concepts.resolve(concept) or self.concepts.get(concept)
+        return node.to_card() if node else None
+
+    def claims(self, concept: str, *, task: str = "") -> list[Claim]:
+        """Every claim about ``concept`` — current, withdrawn and
+        co-occurrence — without the selection a projection makes.
+
+        With ``task``, claims stated under tasks that do not match it are
+        left out (claims stated without a task are neutral and kept), the
+        same line ``project(task=...)`` draws (``CONTEXT_MATCH``).
+        """
+        node = self.concepts.resolve(concept) or self.concepts.get(concept)
+        if node is None:
+            return []
+        task_lower = task.strip().lower()
+        vocabulary = getattr(self.concepts, "task_vocabulary", None)
+        out: list[Claim] = []
+        for edge in self.relations.for_concept(node.id):
+            if task_lower and edge.is_explicit:
+                affinity = edge.claim_affinity(task_lower, vocabulary)
+                if affinity is not None and affinity < CONTEXT_MATCH:
+                    continue
+            src = self.concepts.get(edge.source_id)
+            tgt = self.concepts.get(edge.target_id)
+            out.append(edge.to_claim(src.name if src else edge.source_id, tgt.name if tgt else edge.target_id))
+        order = {"current": 0, "contested": 1, "doubted": 2, "outvoted": 3, "co_occurrence": 4, "withdrawn": 5}
+        out.sort(key=lambda c: (order.get(c.status, 9), -c.belief, c.text))
+        return out
+
+    def find(self, text: str, *, limit: int = 5, min_similarity: float = 0.3) -> list[tuple[ConceptCard, float]]:
+        """Concepts whose name, alias or signature resembles ``text``,
+        best first, as ``(card, score)``."""
+        out: list[tuple[ConceptCard, float]] = []
+        for name, score in self.find_similar(text, min_similarity=min_similarity, limit=limit):
+            node = self.concepts.resolve(name) or self.concepts.get(name)
+            if node is not None:
+                out.append((node.to_card(), score))
+        return out
+
+    # ── Statement sugar (docs/world0-api.md §4.2): spellings of ingest ─
+
+    def state(self, source: str, relation: str, target: str, *, task: str = "", source_label: str = "",
+              belief: float | None = None) -> IngestResult:
+        """``ingest`` one statement: "<source> <relation> <target>"."""
+        return self.ingest(Observation(statements=[Statement(source, relation, target, belief=belief)],
+                                       task=task, source=source_label))
+
+    def withdraw(self, source: str, relation: str, target: str, *, task: str = "",
+                 source_label: str = "") -> IngestResult:
+        """``ingest`` one withdrawal: the claim no longer holds and leaves views."""
+        return self.ingest(Observation(withdrawals=[Statement(source, relation, target)],
+                                       task=task, source=source_label))
+
+    def deny(self, source: str, relation: str, target: str, *, task: str = "",
+             source_label: str = "") -> IngestResult:
+        """``ingest`` one denial: lowers the claim's belief; a denial of a
+        claim nobody made changes nothing."""
+        return self.ingest(Observation(denials=[Statement(source, relation, target)],
+                                       task=task, source=source_label))
+
+    def reflect(self, *, light: bool = False) -> ReflectResult:
+        """Cognitive consolidation — run after a task is complete.
+
+        ``light=True`` applies decay, lifecycle and pruning only, skipping
+        community detection and colour-field dynamics; it is what
+        ``auto_reflect_every`` schedules between explicit reflects.
+        """
+        result = self._reflect_pipeline.run(light=light)
+        with self._transaction():  # one commit for the whole reflect
+            self.concepts.flush()
+            self.relations.flush()
+            self._state["tick"] = self._clock.tick
+            if not light:
+                self._state["last_reflect"] = datetime.now(timezone.utc).isoformat()
+                self._state["last_reflect_tick"] = self._clock.tick
+                self._state["communities"] = self._communities.snapshot()
+            self._store.save_state(self._state)
+            self._persist_learning_state(force=True)
         return result
 
     # ── Identity operations (delegate to IdentityOps) ───────────────
@@ -282,6 +572,7 @@ class World:
             relations=self.relations,
             communities=self._communities,
             last_reflect_iso=self._state.get("last_reflect"),
+            cognitive_tick=self._clock.tick,
         )
 
     def visualize(

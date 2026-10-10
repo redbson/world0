@@ -19,6 +19,7 @@ def build_status(
     relations: RelationStoreReader,
     communities: CommunityManager,
     last_reflect_iso: str | None,
+    cognitive_tick: int = 0,
 ) -> WorldStatus:
     all_concepts = concepts.all()
     by_maturity: dict[str, int] = {}
@@ -26,8 +27,11 @@ def build_status(
     purity_total = 0.0
     purity_n = 0
     bridge_count = 0
+    long_term = 0
     for c in all_concepts:
         by_maturity[c.maturity.value] = by_maturity.get(c.maturity.value, 0) + 1
+        if c.long_term:
+            long_term += 1
         total_confidence += c.confidence
         if c.domain_profile:
             purity_total += c.color_purity()
@@ -46,6 +50,7 @@ def build_status(
         total_concepts=len(all_concepts),
         total_relations=len(relations),
         by_maturity=by_maturity,
+        long_term_concepts=long_term,
         avg_confidence=(
             total_confidence / len(all_concepts) if all_concepts else 0.0
         ),
@@ -61,4 +66,5 @@ def build_status(
         avg_network_entropy=entropy.avg_network_entropy,
         high_entropy_concepts=entropy.high_entropy_nodes,
         relation_type_entropy=entropy.relation_type_entropy,
+        cognitive_tick=cognitive_tick,
     )

@@ -1,0 +1,13 @@
+{
+ "depth": 3,
+ "reflect_every": null,
+ "chosen_on": "dev seeds 100-104",
+ "utility4_by_variant": {
+  "w0-d1-r0": 0.6603,
+  "w0-d2-r0": 0.8412,
+  "w0-d3-r0": 0.8541,
+  "w0-d1-r25": 0.6515,
+  "w0-d2-r25": 0.8345,
+  "w0-d3-r25": 0.8521
+ }
+}

@@ -17,9 +17,12 @@ from typing import TYPE_CHECKING
 from world0.concepts._consolidation import SignatureMatcher
 from world0.concepts._identity_ops import merge_concepts, split_concept
 from world0.concepts._indexes import NameIndex, TokenIndex
+from world0.dynamics.decay import FADING_THRESHOLD, settle_concept
+from world0.schemas.clock import CognitiveClock
 from world0.schemas.concept import (
     ConceptNode,
     Maturity,
+    TaskVocabulary,
     build_concept_identity_key,
     normalize_identity_part,
     tokenize_signature,
@@ -33,6 +36,8 @@ _SALIENCE_KINDS: frozenset[str] = frozenset({
 })
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from world0.core import RelationStore, StorageBackend
 
 
@@ -46,14 +51,51 @@ class ConceptManager:
     Implements the ``ConceptStore`` Protocol from ``world0.core``.
     """
 
-    def __init__(self, store: StorageBackend) -> None:
+    def __init__(
+        self, store: StorageBackend, clock: CognitiveClock | None = None
+    ) -> None:
         self._store = store
+        # Cognitive clock shared with the owning World; stamps every
+        # creation / activation with the current observation tick.
+        self._clock = clock or CognitiveClock()
         self._concepts: dict[str, ConceptNode] = {}
         self._identity_index: dict[str, str] = {}
         self._name_index = NameIndex()
         self._token_index = TokenIndex()
         self._dirty: set[str] = set()
         self._matcher = SignatureMatcher(self._token_index, self._concepts.get)
+        # Per-concept synonym signature (label keys, sense+description
+        # tokens, normalized sense), validated by a key built from the
+        # fields it derives from so it never goes stale.
+        self._signature_cache: dict[
+            str, tuple[tuple, set[str], set[str], str]
+        ] = {}
+        # Event hook wired by the owning ``World`` (see ``connect_lifecycle``).
+        self._on_activation: Callable[[ConceptNode], None] | None = None
+        self._on_weaken = None
+        # Distinct task labels carried by concept profiles (for weighting
+        # task words by distinctiveness).  Maintained incrementally by
+        # ``reinforce`` / ``remove``; rebuilt from the profiles after
+        # identity operations and on load, so it is a function of the
+        # stored profiles.
+        self._task_vocabulary = TaskVocabulary()
+        self._vocabulary_stale = False
+
+    def connect_lifecycle(
+        self,
+        *,
+        on_activation: Callable[[ConceptNode], None] | None = None,
+        on_weaken: Callable[[ConceptNode], None] | None = None,
+    ) -> None:
+        """Wire the event-time lifecycle.
+
+        ``on_activation(node)`` runs after every activation so maturity
+        promotions are applied at the event rather than whenever a reflect
+        happens to run.  Without the hook the manager behaves as a plain
+        store (maturity then changes only at reflect).
+        """
+        self._on_activation = on_activation
+        self._on_weaken = on_weaken
 
     # ── persistence ───────────────────────────────────────────────────
 
@@ -68,6 +110,25 @@ class ConceptManager:
             self._identity_index[node.ensure_identity_key()] = node.id
             self._name_index.index_node(node)
             self._token_index.index_node(node)
+        self.invalidate_task_vocabulary()
+
+    # ── task vocabulary ───────────────────────────────────────────────
+
+    @property
+    def task_vocabulary(self) -> TaskVocabulary:
+        """Word document frequencies over the task labels concepts carry."""
+        if self._vocabulary_stale:
+            vocabulary = TaskVocabulary()
+            for node in self._concepts.values():
+                for label in node.task_profile:
+                    vocabulary.add(label)
+            self._task_vocabulary = vocabulary
+            self._vocabulary_stale = False
+        return self._task_vocabulary
+
+    def invalidate_task_vocabulary(self) -> None:
+        """Profiles changed outside ``reinforce`` / ``remove``: rebuild lazily."""
+        self._vocabulary_stale = True
 
     def save_all(self) -> None:
         """Persist all concepts to store (batch)."""
@@ -186,6 +247,8 @@ class ConceptManager:
             sense=sense,
             domain=domain,
             identity_key=effective_identity_key,
+            created_tick=self._clock.tick,
+            last_activated_tick=self._clock.tick,
         )
         node.ensure_identity_key()
         self._concepts[node.id] = node
@@ -215,20 +278,61 @@ class ConceptManager:
         labels = [name, *aliases]
         best: ConceptNode | None = None
         best_score = 0.0
-        for node in self._concepts.values():
+        # Every positive synonym score needs a shared label or a shared
+        # sense/description token, so the token index yields a complete
+        # shortlist; only an untokenizable probe (e.g. CJK-only labels
+        # without a description) falls back to scanning every concept.
+        probe_tokens: set[str] = set()
+        for label in labels:
+            probe_tokens |= tokenize_signature(label)
+        probe_tokens |= tokenize_signature(sense)
+        probe_tokens |= tokenize_signature(description)
+        if probe_tokens:
+            # Exact-label hits cover the lexical-overlap path; the rarest
+            # probe tokens cover the signature-overlap paths without letting
+            # common words ("system", "data") pull in the whole world.
+            candidate_ids: set[str] = set()
+            for label in labels:
+                candidate_ids |= self._name_index.ids_for(label)
+            candidate_ids |= self._token_index.candidates_by_rarity(probe_tokens)
+            pool = [
+                self._concepts[cid]
+                for cid in candidate_ids
+                if cid in self._concepts
+            ]
+            pool.sort(key=lambda node: (node.created_tick, node.id))
+        else:
+            pool = list(self._concepts.values())
+        # Probe-side signature, computed once for the whole shortlist.
+        label_keys = {
+            normalize_identity_part(label)
+            for label in labels
+            if normalize_identity_part(label)
+        }
+        candidate_tokens = tokenize_signature(" ".join([sense, description]))
+        candidate_sense = normalize_identity_part(sense)
+        domain_norm = normalize_identity_part(domain)
+        kind_norm = normalize_identity_part(kind)
+        if kind_norm in _SALIENCE_KINDS:
+            kind_norm = ""
+
+        for node in pool:
+            node_label_keys, node_tokens, node_sense = self._node_signature(node)
             if not self._semantic_boundary_compatible(
                 node,
-                description=description,
-                kind=kind,
-                sense=sense,
-                domain=domain,
+                candidate_tokens=candidate_tokens,
+                node_tokens=node_tokens,
+                kind_norm=kind_norm,
+                domain_norm=domain_norm,
             ):
                 continue
             score = self._synonym_score(
-                node,
-                labels=labels,
-                description=description,
-                sense=sense,
+                label_keys=label_keys,
+                candidate_tokens=candidate_tokens,
+                candidate_sense=candidate_sense,
+                node_label_keys=node_label_keys,
+                node_tokens=node_tokens,
+                node_sense=node_sense,
             )
             if score > best_score:
                 best = node
@@ -237,28 +341,36 @@ class ConceptManager:
             return best
         return None
 
-    def _synonym_score(
-        self,
-        node: ConceptNode,
-        *,
-        labels: list[str],
-        description: str,
-        sense: str,
-    ) -> float:
+    def _node_signature(
+        self, node: ConceptNode
+    ) -> tuple[set[str], set[str], str]:
+        """(label keys, sense+description tokens, normalized sense), cached."""
+        key = (node.name, tuple(node.aliases), node.sense, node.description)
+        cached = self._signature_cache.get(node.id)
+        if cached is not None and cached[0] == key:
+            return cached[1], cached[2], cached[3]
         label_keys = {
-            normalize_identity_part(label)
-            for label in labels
-            if normalize_identity_part(label)
-        }
-        node_label_keys = {
             normalize_identity_part(label)
             for label in [node.name, *node.aliases]
             if normalize_identity_part(label)
         }
+        tokens = tokenize_signature(" ".join([node.sense, node.description]))
+        sense_norm = normalize_identity_part(node.sense)
+        self._signature_cache[node.id] = (key, label_keys, tokens, sense_norm)
+        return label_keys, tokens, sense_norm
+
+    @staticmethod
+    def _synonym_score(
+        *,
+        label_keys: set[str],
+        candidate_tokens: set[str],
+        candidate_sense: str,
+        node_label_keys: set[str],
+        node_tokens: set[str],
+        node_sense: str,
+    ) -> float:
         lexical_overlap = bool(label_keys & node_label_keys)
 
-        candidate_tokens = tokenize_signature(" ".join([sense, description]))
-        node_tokens = tokenize_signature(" ".join([node.sense, node.description]))
         if not candidate_tokens or not node_tokens:
             return 1.0 if lexical_overlap else 0.0
 
@@ -267,8 +379,6 @@ class ConceptManager:
         jaccard = len(shared) / len(union)
         containment = len(shared) / min(len(candidate_tokens), len(node_tokens))
 
-        candidate_sense = normalize_identity_part(sense)
-        node_sense = normalize_identity_part(node.sense)
         exact_specific_sense = (
             bool(candidate_sense)
             and candidate_sense == node_sense
@@ -286,27 +396,21 @@ class ConceptManager:
     def _semantic_boundary_compatible(
         node: ConceptNode,
         *,
-        description: str,
-        kind: str,
-        sense: str,
-        domain: str,
+        candidate_tokens: set[str],
+        node_tokens: set[str],
+        kind_norm: str,
+        domain_norm: str,
     ) -> bool:
-        domain_norm = normalize_identity_part(domain)
         node_domain = normalize_identity_part(node.domain)
         if domain_norm and node_domain and domain_norm != node_domain:
             return False
 
-        kind_norm = normalize_identity_part(kind)
         node_kind = normalize_identity_part(node.kind)
-        if kind_norm in _SALIENCE_KINDS:
-            kind_norm = ""
         if node_kind in _SALIENCE_KINDS:
             node_kind = ""
         if kind_norm and node_kind and kind_norm != node_kind:
             return False
 
-        candidate_tokens = tokenize_signature(" ".join([sense, description]))
-        node_tokens = tokenize_signature(" ".join([node.sense, node.description]))
         return bool(candidate_tokens and node_tokens)
 
     def _record_synonym(
@@ -382,8 +486,20 @@ class ConceptManager:
         node = self._concepts.get(concept_id)
         if not node:
             return None
-        node.activate(source=source, task=task)
+        # Settle the decay owed since the last use first: activation moves
+        # the decay reference to now (docs/paper, Theorem 3.2).
+        settle_concept(node, self._clock.tick)
+        before = set(node.task_profile)
+        node.activate(source=source, task=task, tick=self._clock.tick)
+        if not self._vocabulary_stale:
+            after = node.task_profile
+            for label in after.keys() - before:
+                self._task_vocabulary.add(label)
+            for label in before - after.keys():
+                self._task_vocabulary.discard(label)
         self._dirty.add(node.id)
+        if self._on_activation is not None:
+            self._on_activation(node)
         return node
 
     def weaken(
@@ -393,8 +509,20 @@ class ConceptManager:
         node = self._concepts.get(concept_id)
         if not node:
             return None
+        # Like an activation, a disconfirmation moves the belief by an
+        # amount that is only meaningful against the *settled* confidence,
+        # and lowers the evidence floor the next settlement relaxes toward:
+        # settle the decay owed first (else the penalty itself would be
+        # decayed for the whole gap, and by how much would depend on when a
+        # reflect ran), then judge the FADING boundary at the event.
+        settle_concept(node, self._clock.tick)
         node.weaken(source=source, task=task)
+        if node.confidence < FADING_THRESHOLD and node.maturity != Maturity.FADING:
+            node.maturity = Maturity.FADING
         self._dirty.add(node.id)
+        on_weaken = getattr(self, "_on_weaken", None)
+        if on_weaken is not None:
+            on_weaken(node)
         return node
 
     def update_description(self, concept_id: str, description: str) -> None:
@@ -463,20 +591,30 @@ class ConceptManager:
         node = self._concepts.get(concept_id)
         if not node:
             return None
+        settle_concept(node, self._clock.tick)
         node.confidence = min(1.0, max(0.01, node.confidence + delta))
+        if node.confidence < FADING_THRESHOLD and node.maturity != Maturity.FADING:
+            node.maturity = Maturity.FADING
         self._dirty.add(concept_id)
+        # A rise in confidence can satisfy a dense gate: judge it at the event.
+        if delta > 0 and self._on_activation is not None:
+            self._on_activation(node)
         return node
 
     def remove(self, concept_id: str) -> bool:
         node = self._concepts.pop(concept_id, None)
         if not node:
             return False
+        if not self._vocabulary_stale:
+            for label in node.task_profile:
+                self._task_vocabulary.discard(label)
         # Only clear index entries that still point at this concept.
         # `merge()` may have already re-mapped some of these names to
         # the keeper; those must survive the removal.
         for n in node.all_names():
             self._name_index.remove_if_owned(n, concept_id)
         self._token_index.unindex(concept_id)
+        self._signature_cache.pop(concept_id, None)
         if node.identity_key:
             self._identity_index.pop(node.identity_key, None)
         self._store.delete_concept(concept_id)

@@ -1,0 +1,203 @@
+<title>World 0 研究简报</title>
+<meta name="description" content="World 0 每日研究与开发的记录：论文、决策、探针数字、验证与下一步。">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&family=Noto+Sans+SC:wght@400;500;700&display=swap">
+<style>
+/* Layout: a lab notebook. One reading column (68ch) for the brief and the
+   rounds; the paper table alone may run wider inside its own scroller. */
+:root {
+  --bg: #f3f5f6;         /* slate-tinted paper */
+  --surface: #ffffff;
+  --fg: #16212a;
+  --muted: #5d6b76;
+  --line: #d6dde2;
+  --accent: #0f766e;      /* deep teal: the one bold colour */
+  --accent-soft: #d8efec;
+  --tag-same: #2f7a3a;    --tag-same-bg: #e2f2e4;
+  --tag-opp: #a8461f;     --tag-opp-bg: #f8e6dd;
+  --tag-borrow: #1f5f99;  --tag-borrow-bg: #dfeaf7;
+  --tag-support: #4a6f1c; --tag-support-bg: #eaf1dc;
+  --tag-out: #6b7280;     --tag-out-bg: #e9ecef;
+  --font-display: "IBM Plex Sans", "Noto Sans SC", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+  --font-body: "Noto Sans SC", "IBM Plex Sans", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #111719; --surface: #182024; --fg: #e6ebee; --muted: #9aa8b1; --line: #2b363c;
+    --accent: #4fc3b6; --accent-soft: #163a37;
+    --tag-same: #8fd79a; --tag-same-bg: #1d3a22; --tag-opp: #f0a37f; --tag-opp-bg: #46281a;
+    --tag-borrow: #8fbdf0; --tag-borrow-bg: #1b3350; --tag-support: #bfd98a; --tag-support-bg: #2f3d18;
+    --tag-out: #a3adb6; --tag-out-bg: #2a3238;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #111719; --surface: #182024; --fg: #e6ebee; --muted: #9aa8b1; --line: #2b363c;
+  --accent: #4fc3b6; --accent-soft: #163a37;
+  --tag-same: #8fd79a; --tag-same-bg: #1d3a22; --tag-opp: #f0a37f; --tag-opp-bg: #46281a;
+  --tag-borrow: #8fbdf0; --tag-borrow-bg: #1b3350; --tag-support: #bfd98a; --tag-support-bg: #2f3d18;
+  --tag-out: #a3adb6; --tag-out-bg: #2a3238;
+  color-scheme: dark;
+}
+body { background: var(--bg); color: var(--fg); font-family: var(--font-body); font-size: 15px; line-height: 1.65;
+       padding-inline: 16px; padding-block: 0 48px; }
+.wrap { max-width: 72rem; margin: 0 auto; }
+a { color: var(--accent); text-decoration-thickness: 1px; text-underline-offset: 2px; }
+a:focus-visible, button:focus-visible, input:focus-visible, summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+code, .mono { font-family: var(--font-mono); font-size: 0.92em; }
+code { background: var(--accent-soft); padding: 0 .3em; border-radius: 3px; }
+h1, h2, h3, h4 { font-family: var(--font-display); text-wrap: balance; line-height: 1.25; margin: 0; }
+h1 { font-size: 1.9rem; font-weight: 600; letter-spacing: -0.01em; }
+h2 { font-size: 1.25rem; font-weight: 600; margin-block: 2.2rem .9rem; display: flex; align-items: baseline; gap: .6rem; }
+h2 .count { font: 500 .8rem var(--font-mono); color: var(--muted); }
+h3 { font-size: 1.02rem; font-weight: 600; margin-block: 1.1rem .4rem; }
+h4 { font-size: .95rem; font-weight: 600; margin-block: .9rem .3rem; }
+.eyebrow { font: 500 .72rem var(--font-mono); letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+header { padding-block: 2.4rem 1.2rem; border-bottom: 1px solid var(--line); }
+header .sub { color: var(--muted); margin-top: .5rem; max-width: 68ch; }
+.stats { display: flex; flex-wrap: wrap; gap: 1.6rem 2.4rem; margin-top: 1.4rem; font-variant-numeric: tabular-nums; }
+.stat .n { font: 500 1.6rem var(--font-mono); color: var(--fg); display: block; line-height: 1.1; }
+.stat .l { color: var(--muted); font-size: .85rem; }
+.brief { display: grid; grid-template-columns: minmax(0, 1fr); gap: 1rem; }
+@media (min-width: 880px) { .brief { grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr); } }
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 1.1rem 1.25rem; min-width: 0; }
+.card.lead { border-left: 3px solid var(--accent); }
+.card p, .card li { max-width: 68ch; }
+.numbers { display: flex; flex-direction: column; gap: .5rem; margin: 0; padding: 0; list-style: none; }
+.numbers li { font-size: .92rem; padding-left: 1rem; position: relative; }
+.numbers li::before { content: ""; position: absolute; left: 0; top: .62em; width: .4rem; height: .4rem; border-radius: 50%; background: var(--accent); }
+details.round { border-top: 1px solid var(--line); padding-block: .6rem; }
+details.round:last-of-type { border-bottom: 1px solid var(--line); }
+details.round > summary { cursor: pointer; display: grid; grid-template-columns: auto minmax(0, 1fr); gap: .3rem 1rem; align-items: baseline; list-style: none; padding-block: .4rem; }
+details.round > summary::-webkit-details-marker { display: none; }
+details.round > summary .date { font: 500 .95rem var(--font-mono); color: var(--accent); white-space: nowrap; }
+details.round > summary .headline { color: var(--fg); min-width: 0; overflow-wrap: anywhere; }
+details.round > summary .headline .dim { color: var(--muted); }
+details.round[open] > summary .headline { font-weight: 500; }
+.sections { display: grid; gap: .2rem 1.5rem; grid-template-columns: minmax(0, 1fr); padding: .4rem 0 1rem; }
+@media (min-width: 880px) { .sections { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); } .sections .wide { grid-column: 1 / -1; } }
+.section { min-width: 0; }
+.section p, .section li { max-width: 68ch; }
+ul, ol { padding-left: 1.3rem; margin-block: .3rem .6rem; }
+li { margin-block: .25rem; }
+p { margin-block: .4rem; }
+.tablewrap { overflow-x: auto; margin-block: .6rem; }
+table { border-collapse: collapse; width: 100%; font-size: .9rem; font-variant-numeric: tabular-nums; }
+th, td { text-align: left; padding: .45rem .6rem; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { font-weight: 600; color: var(--muted); font-size: .8rem; letter-spacing: .02em; white-space: nowrap; }
+.tag { display: inline-block; font: 500 .72rem var(--font-mono); padding: .1rem .45rem; border-radius: 3px; white-space: nowrap; }
+.tag[data-tag="相同"] { color: var(--tag-same); background: var(--tag-same-bg); }
+.tag[data-tag="相反"] { color: var(--tag-opp); background: var(--tag-opp-bg); }
+.tag[data-tag="可借用"] { color: var(--tag-borrow); background: var(--tag-borrow-bg); }
+.tag[data-tag="支持"] { color: var(--tag-support); background: var(--tag-support-bg); }
+.tag[data-tag="边界外"], .tag[data-tag="仅标题"], .tag[data-tag="其他"] { color: var(--tag-out); background: var(--tag-out-bg); }
+.filters { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; margin-block: .6rem 1rem; }
+.filters button { font: 500 .78rem var(--font-mono); border: 1px solid var(--line); background: var(--surface); color: var(--fg); border-radius: 999px; padding: .25rem .7rem; cursor: pointer; }
+.filters button[aria-pressed="true"] { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }
+.filters input { font: inherit; font-size: .9rem; padding: .35rem .6rem; border: 1px solid var(--line); border-radius: 4px; background: var(--surface); color: var(--fg); min-width: 0; flex: 1 1 14rem; }
+#papers td.t { min-width: 16rem; }
+#papers td.d { white-space: nowrap; color: var(--muted); font-family: var(--font-mono); font-size: .8rem; }
+#papers td.n { color: var(--muted); font-size: .86rem; }
+.empty { color: var(--muted); font-style: italic; }
+footer { margin-top: 3rem; color: var(--muted); font-size: .85rem; border-top: 1px solid var(--line); padding-top: 1rem; }
+footer p { max-width: 68ch; }
+@media (prefers-reduced-motion: no-preference) { details.round > summary { transition: color .15s; } }
+</style>
+<div class="wrap">
+<header>
+  <div class="eyebrow">World 0 · 每日研究与开发</div>
+  <h1>World 0 研究简报</h1>
+  <p class="sub">每天早上一轮：查最近一周的论文，选一项当天可完成的开发，先探针后改码，测试与命题验证通过后提交。
+  这里是每一轮的记录与最新一轮的简报，由 <code>docs/research/build_brief.py</code> 从 <code>notes/*.md</code> 生成。</p>
+  <div class="stats" id="stats"></div>
+</header>
+
+<h2>最新简报 <span class="count" id="latest-date"></span></h2>
+<div class="brief" id="brief"></div>
+
+<h2>全部轮次 <span class="count" id="rounds-count"></span></h2>
+<div id="rounds"></div>
+
+<h2>论文 <span class="count" id="papers-count"></span></h2>
+<div class="filters" id="filters">
+  <input id="paper-search" type="search" placeholder="搜索标题、arXiv id 或说明…" aria-label="搜索论文">
+</div>
+<div class="tablewrap"><table id="papers"><thead><tr><th>日期</th><th>论文</th><th>与 World 0</th><th>说明</th></tr></thead><tbody></tbody></table></div>
+
+<footer>
+  <p>协议：<code>docs/research/README.md</code>。笔记每日一份；本页在每轮结束时重建并随提交入库。生成于 <span class="mono" id="built"></span>。</p>
+</footer>
+</div>
+<script id="data" type="application/json">{"built": "2026-10-08 16:50 UTC", "tests": "1598 passed", "rounds": [{"date": "2026-10-08", "title": "2026-10-08（首轮，手动运行；定时任务从 10-09 起每天 07:56 运行）", "sections": {"papers": "- **Retrieval-Driven Memory Reconsolidation for Long-Term LLM Agents** — arXiv:2609.16053（2026-09）。检索时重写 / 再巩固被取出的记忆。\n  与 World 0：**相反**——World 0 的投影是纯函数（读取不改状态，推论 3.2′）。可借用的形式是\"复述\"（读取只刷新新近度）；见下面探针，今日否定。\n- **Selective Forgetting: A Graph-Based Memory Framework for Long-Term LLM Agents** — arXiv:2608.28978（2026-08）。按新近度、频次、结构重要性剪枝，\n  声称检索质量几乎不变。与 World 0：**相同**——衰减按成熟度 / 证据，CORE 门数存活连接（结构重要性）；无新规则可借。\n- **LycheeMemory V2 … Semantic Segment-Level Consolidation** — arXiv:2608.12990（2026-08）。片段级巩固。与 World 0：记忆层的做法，边界外。\n- **TRUSTMEM: Learning Trustworthy Memory Consolidation** — arXiv:2606.25161（2026-06）。学习式巩固、可信度。与 World 0：信念 / 证据是显式计数而非学习，相反路线。\n- **Control-Plane Placement Shapes Forgetting: … Thirteen System Configurations** — arXiv:2606.15903（2026-06）。架构位置决定遗忘。仅标题。\n- **FSFM: A Biologically-Inspired Framework for Selective Forgetting of Agent Memory** — arXiv:2604.20300（2026-04）。遗忘分效率 / 质量 / 安全三类。与 World 0：\n  \"质量\"类遗忘（更新过期偏好）对应撤回 / 否证；\"安全\"类（主动删除）World 0 没有、也不该在核心里有。\n- **From Recall to Forgetting: Benchmarking Long-Term Memory for Personalized Agents** — arXiv:2604.20006（2026-04）。评测\"正确地忘掉过期信息\"。\n  与 World 0：**可借用**——LongRun 的 stale 查询只覆盖显式修订；路线图 0.4 的\"大量过时信息\"场景可参照它设计。\n- **HeLa-Mem: Hebbian Learning and Associative Memory for LLM Agents** — arXiv:2604.16839（2026-04，ACL 2026）。共激活强化连接；反思代理把稠密枢纽凝成语义摘要；LoCoMo 四类领先、token 更少。\n  与 World 0：**相同**（Hebbian 共现学习、Jaccard 门）；\"枢纽凝成摘要\"对应社群（reflect），World 0 的投影尚未利用社群——候选但偏向摘要 / 存储，暂不做。\n- **SYNAPSE: Episodic-Semantic Memory via Spreading Activation** — arXiv:2601.02744（2026-01，Findings of ACL 2026）。能量沿时间 / 因果边扩散，侧抑制 + 时间衰减，LoCoMo 多跳领先。\n  与 World 0：**相同**（扩散激活 + 衰减）；侧抑制在 World 0 里由投影的 MMR 冗余承担，激活层没有。\n- **RoMem** — arXiv:2604.11544（2026-04）。被替代的事实不删除、在复向量空间里\"转相位\"，检索排序自然压下过期事实。与 World 0：**相同目标、不同机制**（World 0 用撤回 + 支持度压过 + 否证）。\n- **TOKI: A Bitemporal Operator Algebra for Contradiction Resolution in LLM-Agent Persistent Memory**（2026；id 未查到）。写入时按有效时间 / 系统时间解决矛盾。\n  与 World 0：World 0 只有系统时间（`discovered_tick` / `retracted_tick`），没有有效时间；\"只追加事件日志\"是路线图 0.4 项。\n- **（arXiv:2606.01435）** 确定性的版本感知聚合在 MemoryAgentBench FactConsolidation 上胜过让 LLM 解决记忆冲突。与 World 0：**支持**主张身份 + 撤回的确定性设计。\n- **Global Workspace Agents / \"Theater of Mind\"** — arXiv:2604.08206（2026-04）。GWT 认知循环（生成多个候选思维、批评、元选择；短期记忆超阈值即压缩归档）。与 World 0：焦点（§8）是同一理论的最小形式；World 0 不做思维生成，边界外。\n- 评测综述：Memory for Autonomous LLM Agents（arXiv:2603.07670）、From Storage to Experience（arXiv:2605.06716）、Chain-of-Memory（arXiv:2601.14287，LongMemEval-S / LoCoMo 口径）。\n  LoCoMo / LongMemEval 是领域主流评测；LongRun 的合成世界与它们正交（金标准由生成器定义、系统读同样的抽取结果），**把 World 0 接到 LoCoMo 上**是一个可考虑的中期项（需要真实抽取 + 真实读者，成本高）。\n\n搜索查询（5 条，extended / standard）：agent memory consolidation forgetting；spreading activation concept graph；context engineering long-horizon benchmark；temporal KG belief revision；cognitive architecture GWT metacognition。**最近 7 天**（10-01 以后）没有检索到相关新论文。", "decision": "选：**`Claim.since_tick` / `Claim.until_tick`、`ConceptCard.first_seen_tick`**（接口可选字段，不升线格式版本）。理由：TOKI / RoMem 这一组工作都在强调\n主张的时间维度；World 0 已经记录 `discovered_tick` / `retracted_tick` 却没有暴露给读它的 Agent（\"不再成立\"的主张读不出它成立到何时）；\n当天可完成、有测试、不碰动力学。\n未选：(1) **复述**（读取刷新新近度，对应 Retrieval-Driven Reconsolidation）——探针否定，见下；(2) **压制共现边的激活**——探针显示是精确率与\n召回 / 闭包的交换，不是改进，见下；(3) HeLa-Mem 式\"枢纽凝成摘要\"——偏向摘要存储，边界问题，需要先有设计讨论；(4) 路线图 0.4 的\n\"过期信息\"评测场景——一天做不完，拆分留到后续轮次（参照 From Recall to Forgetting 的口径）。", "probe": "**探针 1：复述能救活 bigworld 的已死端点吗？**（`scratchpad/probe_rehearsal.py`，bigworld seed 0，每 40 步一次查询）\n记录每次视图里出现过的概念（概念 + 主张端点，均值 23.6 个 / 视图，115 个视图），对 focus 查询里未到达且已死的 101 个金标准端点\n查\"上次出现在视图里是多久以前\"：**65 个从未出现过**；36 个出现过，间隔 < 500 步的 6 个、500–999 的 20 个、≥ 2 000 的 10 个。\n复述只能让\"闲置 < 720 步内被再次展示\"的概念免于剪枝，即最多救回约 10–15 个（占 121 个未到达端点的 ≈ 1/10），\n对 bigworld 综合分的影响 ≤ 0.01。结论：bigworld 的遗忘缺口不是\"看过的东西被忘了\"，而是\"从没被看过的一次性陈述被评测当作仍然为真\"；\n复述不做（它还会破坏\"投影是纯函数\"，要作为独立事件引入才能保住定理 3.7，代价不小）。\n\n**探针 2：共现边把激活带得太远，是 focus 精确率 0.60 的原因吗？**（`scratchpad/probe_generic.py`，main seeds 0–2，1 200 token）\n\n| 变体 | 综合 | focus 召回 | chain | focus 精确率 | token |\n|---|---|---|---|---|---|\n| 默认 | 0.988 | 0.988 | 0.964 | 0.604 | 604 |\n| 共现边权重 × 0.5 | 0.988 | 0.988 | 0.964 | 0.604 | 604 |\n| 共现边权重 0 | 0.978 | 0.979 | **0.932** | **0.640** | 556 |\n\n压制共现边换来精确率 +0.036、token −8%，代价是闭包 −0.032、召回 −0.009：共现边提供的是显式路径缺失（死边、未陈述）时的可达性。\n权重减半完全不变——共现边的贡献本来就在地板带里，只有\"有没有\"起作用。这是一个交换而不是改进，不改参数。", "development": "`world0.api.Claim` 增加 `since_tick`（`RelationEdge.discovered_tick`）与 `until_tick`（`retracted_tick`，成立中为 None）；`ConceptCard.first_seen_tick`\n（`created_tick`）。`to_claim()` / `to_card()` 填充；`docs/world0-api.md` §4.3 / §4.4 注明这是系统时间（何时被告知）而非有效时间。\n不改动力学、不改渲染文本，线格式版本不变（只增可选字段）。另：`docs/research/README.md`（本协议）与例行任务本身是今天的基础设施产出。", "verification": "pytest 1 598 passed, 10 skipped；`verify.py` 全部命题验证通过；无动力学改动，LongRun 不需重跑（探针 2 的对照表来自 seeds 0–2 的\n现场运行，不是入库数字）。", "commits": "- fb34c5d：协议、例行任务、`Claim` 时间字段、两个否定探针、分析 §7.35。\n- 其后一个提交：`build_brief.py` 与 `brief.html`（简报页面，已发布为可打开的页面），协议 §5 / §6b。", "next": "- 路线图 0.4 \"过期信息\"评测场景：参照 From Recall to Forgetting（arXiv:2604.20006）的口径，设计\"事实静默过期\"的流（世界变了但没人说\n  \"不再成立\"），定义金标准规则（同一 (源, 关系) 的最新陈述为准？），比较各系统的过期主张展示率；先写设计、再实现生成器。\n- 中期：把 World 0 接到 LoCoMo / LongMemEval（需要真实抽取与真实读者，成本高；先估算费用与改造量）。\n- 性能余量：色场扩散每事件弄脏约 17 条记录，序列化是剩余成本的主体；候选是把 < 1e-3 的 domain_profile 变化延迟到 reflect 刷盘（需评估重启精确性）。\n- 每日会话的网络限制：只能搜索、不能抓取 arXiv 页面；若有一天可以，补读今天列出的论文正文（尤其 2604.20006、2609.16053、2604.16839）。"}, "html": {"papers": "<ul><li><strong>Retrieval-Driven Memory Reconsolidation for Long-Term LLM Agents<\/strong> — <a class=\"id\" href=\"https://arxiv.org/abs/2609.16053\" target=\"_blank\" rel=\"noopener\">arXiv:2609.16053<\/a>（2026-09）。检索时重写 / 再巩固被取出的记忆。 与 World 0：<strong>相反<\/strong>——World 0 的投影是纯函数（读取不改状态，推论 3.2′）。可借用的形式是\"复述\"（读取只刷新新近度）；见下面探针，今日否定。<\/li><li><strong>Selective Forgetting: A Graph-Based Memory Framework for Long-Term LLM Agents<\/strong> — <a class=\"id\" href=\"https://arxiv.org/abs/2608.28978\" target=\"_blank\" rel=\"noopener\">arXiv:2608.28978<\/a>（2026-08）。按新近度、频次、结构重要性剪枝， 声称检索质量几乎不变。与 World 0：<strong>相同<\/strong>——衰减按成熟度 / 证据，CORE 门数存活连接（结构重要性）；无新规则可借。<\/li><li><strong>LycheeMemory V2 … Semantic Segment-Level Consolidation<\/strong> — <a class=\"id\" href=\"https://arxiv.org/abs/2608.12990\" target=\"_blank\" rel=\"noopener\">arXiv:2608.12990<\/a>（2026-08）。片段级巩固。与 World 0：记忆层的做法，边界外。<\/li><li><strong>TRUSTMEM: Learning Trustworthy Memory Consolidation<\/strong> — <a class=\"id\" href=\"https://arxiv.org/abs/2606.25161\" target=\"_blank\" rel=\"noopener\">arXiv:2606.25161<\/a>（2026-06）。学习式巩固、可信度。与 World 0：信念 / 证据是显式计数而非学习，相反路线。<\/li><li><strong>Control-Plane Placement Shapes Forgetting: … Thirteen System Configurations<\/strong> — <a class=\"id\" href=\"https://arxiv.org/abs/2606.15903\" target=\"_blank\" rel=\"noopener\">arXiv:2606.15903<\/a>（2026-06）。架构位置决定遗忘。仅标题。<\/li><li><strong>FSFM: A Biologically-Inspired Framework for Selective Forgetting of Agent Memory<\/strong> — <a class=\"id\" href=\"https://arxiv.org/abs/2604.20300\" target=\"_blank\" rel=\"noopener\">arXiv:2604.20300<\/a>（2026-04）。遗忘分效率 / 质量 / 安全三类。与 World 0： \"质量\"类遗忘（更新过期偏好）对应撤回 / 否证；\"安全\"类（主动删除）World 0 没有、也不该在核心里有。<\/li><li><strong>From Recall to Forgetting: Benchmarking Long-Term Memory for Personalized Agents<\/strong> — <a class=\"id\" href=\"https://arxiv.org/abs/2604.20006\" target=\"_blank\" rel=\"noopener\">arXiv:2604.20006<\/a>（2026-04）。评测\"正确地忘掉过期信息\"。 与 World 0：<strong>可借用<\/strong>——LongRun 的 stale 查询只覆盖显式修订；路线图 0.4 的\"大量过时信息\"场景可参照它设计。<\/li><li><strong>HeLa-Mem: Hebbian Learning and Associative Memory for LLM Agents<\/strong> — <a class=\"id\" href=\"https://arxiv.org/abs/2604.16839\" target=\"_blank\" rel=\"noopener\">arXiv:2604.16839<\/a>（2026-04，ACL 2026）。共激活强化连接；反思代理把稠密枢纽凝成语义摘要；LoCoMo 四类领先、token 更少。 与 World 0：<strong>相同<\/strong>（Hebbian 共现学习、Jaccard 门）；\"枢纽凝成摘要\"对应社群（reflect），World 0 的投影尚未利用社群——候选但偏向摘要 / 存储，暂不做。<\/li><li><strong>SYNAPSE: Episodic-Semantic Memory via Spreading Activation<\/strong> — <a class=\"id\" href=\"https://arxiv.org/abs/2601.02744\" target=\"_blank\" rel=\"noopener\">arXiv:2601.02744<\/a>（2026-01，Findings of ACL 2026）。能量沿时间 / 因果边扩散，侧抑制 + 时间衰减，LoCoMo 多跳领先。 与 World 0：<strong>相同<\/strong>（扩散激活 + 衰减）；侧抑制在 World 0 里由投影的 MMR 冗余承担，激活层没有。<\/li><li><strong>RoMem<\/strong> — <a class=\"id\" href=\"https://arxiv.org/abs/2604.11544\" target=\"_blank\" rel=\"noopener\">arXiv:2604.11544<\/a>（2026-04）。被替代的事实不删除、在复向量空间里\"转相位\"，检索排序自然压下过期事实。与 World 0：<strong>相同目标、不同机制<\/strong>（World 0 用撤回 + 支持度压过 + 否证）。<\/li><li><strong>TOKI: A Bitemporal Operator Algebra for Contradiction Resolution in LLM-Agent Persistent Memory<\/strong>（2026；id 未查到）。写入时按有效时间 / 系统时间解决矛盾。 与 World 0：World 0 只有系统时间（<code>discovered_tick<\/code> / <code>retracted_tick<\/code>），没有有效时间；\"只追加事件日志\"是路线图 0.4 项。<\/li><li><strong>（<a class=\"id\" href=\"https://arxiv.org/abs/2606.01435\" target=\"_blank\" rel=\"noopener\">arXiv:2606.01435<\/a>）<\/strong> 确定性的版本感知聚合在 MemoryAgentBench FactConsolidation 上胜过让 LLM 解决记忆冲突。与 World 0：<strong>支持<\/strong>主张身份 + 撤回的确定性设计。<\/li><li><strong>Global Workspace Agents / \"Theater of Mind\"<\/strong> — <a class=\"id\" href=\"https://arxiv.org/abs/2604.08206\" target=\"_blank\" rel=\"noopener\">arXiv:2604.08206<\/a>（2026-04）。GWT 认知循环（生成多个候选思维、批评、元选择；短期记忆超阈值即压缩归档）。与 World 0：焦点（§8）是同一理论的最小形式；World 0 不做思维生成，边界外。<\/li><li>评测综述：Memory for Autonomous LLM Agents（<a class=\"id\" href=\"https://arxiv.org/abs/2603.07670\" target=\"_blank\" rel=\"noopener\">arXiv:2603.07670<\/a>）、From Storage to Experience（<a class=\"id\" href=\"https://arxiv.org/abs/2605.06716\" target=\"_blank\" rel=\"noopener\">arXiv:2605.06716<\/a>）、Chain-of-Memory（<a class=\"id\" href=\"https://arxiv.org/abs/2601.14287\" target=\"_blank\" rel=\"noopener\">arXiv:2601.14287<\/a>，LongMemEval-S / LoCoMo 口径）。 LoCoMo / LongMemEval 是领域主流评测；LongRun 的合成世界与它们正交（金标准由生成器定义、系统读同样的抽取结果），<strong>把 World 0 接到 LoCoMo 上<\/strong>是一个可考虑的中期项（需要真实抽取 + 真实读者，成本高）。<\/li><\/ul>\n<p>搜索查询（5 条，extended / standard）：agent memory consolidation forgetting；spreading activation concept graph；context engineering long-horizon benchmark；temporal KG belief revision；cognitive architecture GWT metacognition。<strong>最近 7 天<\/strong>（10-01 以后）没有检索到相关新论文。<\/p>", "decision": "<p>选：<strong><code>Claim.since_tick<\/code> / <code>Claim.until_tick<\/code>、<code>ConceptCard.first_seen_tick<\/code><\/strong>（接口可选字段，不升线格式版本）。理由：TOKI / RoMem 这一组工作都在强调 主张的时间维度；World 0 已经记录 <code>discovered_tick<\/code> / <code>retracted_tick<\/code> 却没有暴露给读它的 Agent（\"不再成立\"的主张读不出它成立到何时）； 当天可完成、有测试、不碰动力学。 未选：(1) <strong>复述<\/strong>（读取刷新新近度，对应 Retrieval-Driven Reconsolidation）——探针否定，见下；(2) <strong>压制共现边的激活<\/strong>——探针显示是精确率与 召回 / 闭包的交换，不是改进，见下；(3) HeLa-Mem 式\"枢纽凝成摘要\"——偏向摘要存储，边界问题，需要先有设计讨论；(4) 路线图 0.4 的 \"过期信息\"评测场景——一天做不完，拆分留到后续轮次（参照 From Recall to Forgetting 的口径）。<\/p>", "probe": "<p><strong>探针 1：复述能救活 bigworld 的已死端点吗？<\/strong>（<code>scratchpad/probe_rehearsal.py<\/code>，bigworld seed 0，每 40 步一次查询） 记录每次视图里出现过的概念（概念 + 主张端点，均值 23.6 个 / 视图，115 个视图），对 focus 查询里未到达且已死的 101 个金标准端点 查\"上次出现在视图里是多久以前\"：<strong>65 个从未出现过<\/strong>；36 个出现过，间隔 &lt; 500 步的 6 个、500–999 的 20 个、≥ 2 000 的 10 个。 复述只能让\"闲置 &lt; 720 步内被再次展示\"的概念免于剪枝，即最多救回约 10–15 个（占 121 个未到达端点的 ≈ 1/10）， 对 bigworld 综合分的影响 ≤ 0.01。结论：bigworld 的遗忘缺口不是\"看过的东西被忘了\"，而是\"从没被看过的一次性陈述被评测当作仍然为真\"； 复述不做（它还会破坏\"投影是纯函数\"，要作为独立事件引入才能保住定理 3.7，代价不小）。<\/p>\n<p><strong>探针 2：共现边把激活带得太远，是 focus 精确率 0.60 的原因吗？<\/strong>（<code>scratchpad/probe_generic.py<\/code>，main seeds 0–2，1 200 token）<\/p>\n<div class=\"tablewrap\"><table><thead><tr><th>变体<\/th><th>综合<\/th><th>focus 召回<\/th><th>chain<\/th><th>focus 精确率<\/th><th>token<\/th><\/tr><\/thead><tbody><tr><td>默认<\/td><td>0.988<\/td><td>0.988<\/td><td>0.964<\/td><td>0.604<\/td><td>604<\/td><\/tr><tr><td>共现边权重 × 0.5<\/td><td>0.988<\/td><td>0.988<\/td><td>0.964<\/td><td>0.604<\/td><td>604<\/td><\/tr><tr><td>共现边权重 0<\/td><td>0.978<\/td><td>0.979<\/td><td><strong>0.932<\/strong><\/td><td><strong>0.640<\/strong><\/td><td>556<\/td><\/tr><\/tbody><\/table><\/div>\n<p>压制共现边换来精确率 +0.036、token −8%，代价是闭包 −0.032、召回 −0.009：共现边提供的是显式路径缺失（死边、未陈述）时的可达性。 权重减半完全不变——共现边的贡献本来就在地板带里，只有\"有没有\"起作用。这是一个交换而不是改进，不改参数。<\/p>", "development": "<p><code>world0.api.Claim<\/code> 增加 <code>since_tick<\/code>（<code>RelationEdge.discovered_tick<\/code>）与 <code>until_tick<\/code>（<code>retracted_tick<\/code>，成立中为 None）；<code>ConceptCard.first_seen_tick<\/code> （<code>created_tick<\/code>）。<code>to_claim()<\/code> / <code>to_card()<\/code> 填充；<code>docs/world0-api.md<\/code> §4.3 / §4.4 注明这是系统时间（何时被告知）而非有效时间。 不改动力学、不改渲染文本，线格式版本不变（只增可选字段）。另：<code>docs/research/README.md<\/code>（本协议）与例行任务本身是今天的基础设施产出。<\/p>", "verification": "<p>pytest 1 598 passed, 10 skipped；<code>verify.py<\/code> 全部命题验证通过；无动力学改动，LongRun 不需重跑（探针 2 的对照表来自 seeds 0–2 的 现场运行，不是入库数字）。<\/p>", "commits": "<ul><li>fb34c5d：协议、例行任务、<code>Claim<\/code> 时间字段、两个否定探针、分析 §7.35。<\/li><li>其后一个提交：<code>build_brief.py<\/code> 与 <code>brief.html<\/code>（简报页面，已发布为可打开的页面），协议 §5 / §6b。<\/li><\/ul>", "next": "<ul><li>路线图 0.4 \"过期信息\"评测场景：参照 From Recall to Forgetting（<a class=\"id\" href=\"https://arxiv.org/abs/2604.20006\" target=\"_blank\" rel=\"noopener\">arXiv:2604.20006<\/a>）的口径，设计\"事实静默过期\"的流（世界变了但没人说 \"不再成立\"），定义金标准规则（同一 (源, 关系) 的最新陈述为准？），比较各系统的过期主张展示率；先写设计、再实现生成器。<\/li><li>中期：把 World 0 接到 LoCoMo / LongMemEval（需要真实抽取与真实读者，成本高；先估算费用与改造量）。<\/li><li>性能余量：色场扩散每事件弄脏约 17 条记录，序列化是剩余成本的主体；候选是把 &lt; 1e-3 的 domain_profile 变化延迟到 reflect 刷盘（需评估重启精确性）。<\/li><li>每日会话的网络限制：只能搜索、不能抓取 arXiv 页面；若有一天可以，补读今天列出的论文正文（尤其 2604.20006、2609.16053、2604.16839）。<\/li><\/ul>"}, "papers": [{"date": "2026-10-08", "title": "Retrieval-Driven Memory Reconsolidation for Long-Term LLM Agents", "arxiv": "2609.16053", "tag": "相反", "note": "arXiv:2609.16053（2026-09）。检索时重写 / 再巩固被取出的记忆。 与 World 0：相反——World 0 的投影是纯函数（读取不改状态，推论 3.2′）。可借用的形式是\"复述\"（读取只刷新新近度）；见下面探针，今日否定。", "note_html": "<a class=\"id\" href=\"https://arxiv.org/abs/2609.16053\" target=\"_blank\" rel=\"noopener\">arXiv:2609.16053<\/a>（2026-09）。检索时重写 / 再巩固被取出的记忆。 与 World 0：<strong>相反<\/strong>——World 0 的投影是纯函数（读取不改状态，推论 3.2′）。可借用的形式是\"复述\"（读取只刷新新近度）；见下面探针，今日否定。"}, {"date": "2026-10-08", "title": "Selective Forgetting: A Graph-Based Memory Framework for Long-Term LLM Agents", "arxiv": "2608.28978", "tag": "相同", "note": "arXiv:2608.28978（2026-08）。按新近度、频次、结构重要性剪枝， 声称检索质量几乎不变。与 World 0：相同——衰减按成熟度 / 证据，CORE 门数存活连接（结构重要性）；无新规则可借。", "note_html": "<a class=\"id\" href=\"https://arxiv.org/abs/2608.28978\" target=\"_blank\" rel=\"noopener\">arXiv:2608.28978<\/a>（2026-08）。按新近度、频次、结构重要性剪枝， 声称检索质量几乎不变。与 World 0：<strong>相同<\/strong>——衰减按成熟度 / 证据，CORE 门数存活连接（结构重要性）；无新规则可借。"}, {"date": "2026-10-08", "title": "LycheeMemory V2 … Semantic Segment-Level Consolidation", "arxiv": "2608.12990", "tag": "边界外", "note": "arXiv:2608.12990（2026-08）。片段级巩固。与 World 0：记忆层的做法，边界外。", "note_html": "<a class=\"id\" href=\"https://arxiv.org/abs/2608.12990\" target=\"_blank\" rel=\"noopener\">arXiv:2608.12990<\/a>（2026-08）。片段级巩固。与 World 0：记忆层的做法，边界外。"}, {"date": "2026-10-08", "title": "TRUSTMEM: Learning Trustworthy Memory Consolidation", "arxiv": "2606.25161", "tag": "相反", "note": "arXiv:2606.25161（2026-06）。学习式巩固、可信度。与 World 0：信念 / 证据是显式计数而非学习，相反路线。", "note_html": "<a class=\"id\" href=\"https://arxiv.org/abs/2606.25161\" target=\"_blank\" rel=\"noopener\">arXiv:2606.25161<\/a>（2026-06）。学习式巩固、可信度。与 World 0：信念 / 证据是显式计数而非学习，相反路线。"}, {"date": "2026-10-08", "title": "Control-Plane Placement Shapes Forgetting: … Thirteen System Configurations", "arxiv": "2606.15903", "tag": "仅标题", "note": "arXiv:2606.15903（2026-06）。架构位置决定遗忘。仅标题。", "note_html": "<a class=\"id\" href=\"https://arxiv.org/abs/2606.15903\" target=\"_blank\" rel=\"noopener\">arXiv:2606.15903<\/a>（2026-06）。架构位置决定遗忘。仅标题。"}, {"date": "2026-10-08", "title": "FSFM: A Biologically-Inspired Framework for Selective Forgetting of Agent Memory", "arxiv": "2604.20300", "tag": "其他", "note": "arXiv:2604.20300（2026-04）。遗忘分效率 / 质量 / 安全三类。与 World 0： \"质量\"类遗忘（更新过期偏好）对应撤回 / 否证；\"安全\"类（主动删除）World 0 没有、也不该在核心里有。", "note_html": "<a class=\"id\" href=\"https://arxiv.org/abs/2604.20300\" target=\"_blank\" rel=\"noopener\">arXiv:2604.20300<\/a>（2026-04）。遗忘分效率 / 质量 / 安全三类。与 World 0： \"质量\"类遗忘（更新过期偏好）对应撤回 / 否证；\"安全\"类（主动删除）World 0 没有、也不该在核心里有。"}, {"date": "2026-10-08", "title": "From Recall to Forgetting: Benchmarking Long-Term Memory for Personalized Agents", "arxiv": "2604.20006", "tag": "可借用", "note": "arXiv:2604.20006（2026-04）。评测\"正确地忘掉过期信息\"。 与 World 0：可借用——LongRun 的 stale 查询只覆盖显式修订；路线图 0.4 的\"大量过时信息\"场景可参照它设计。", "note_html": "<a class=\"id\" href=\"https://arxiv.org/abs/2604.20006\" target=\"_blank\" rel=\"noopener\">arXiv:2604.20006<\/a>（2026-04）。评测\"正确地忘掉过期信息\"。 与 World 0：<strong>可借用<\/strong>——LongRun 的 stale 查询只覆盖显式修订；路线图 0.4 的\"大量过时信息\"场景可参照它设计。"}, {"date": "2026-10-08", "title": "HeLa-Mem: Hebbian Learning and Associative Memory for LLM Agents", "arxiv": "2604.16839", "tag": "相同", "note": "arXiv:2604.16839（2026-04，ACL 2026）。共激活强化连接；反思代理把稠密枢纽凝成语义摘要；LoCoMo 四类领先、token 更少。 与 World 0：相同（Hebbian 共现学习、Jaccard 门）；\"枢纽凝成摘要\"对应社群（reflect），World 0 的投影尚未利用社群——候选但偏向摘要 / 存储，暂不做。", "note_html": "<a class=\"id\" href=\"https://arxiv.org/abs/2604.16839\" target=\"_blank\" rel=\"noopener\">arXiv:2604.16839<\/a>（2026-04，ACL 2026）。共激活强化连接；反思代理把稠密枢纽凝成语义摘要；LoCoMo 四类领先、token 更少。 与 World 0：<strong>相同<\/strong>（Hebbian 共现学习、Jaccard 门）；\"枢纽凝成摘要\"对应社群（reflect），World 0 的投影尚未利用社群——候选但偏向摘要 / 存储，暂不做。"}, {"date": "2026-10-08", "title": "SYNAPSE: Episodic-Semantic Memory via Spreading Activation", "arxiv": "2601.02744", "tag": "相同", "note": "arXiv:2601.02744（2026-01，Findings of ACL 2026）。能量沿时间 / 因果边扩散，侧抑制 + 时间衰减，LoCoMo 多跳领先。 与 World 0：相同（扩散激活 + 衰减）；侧抑制在 World 0 里由投影的 MMR 冗余承担，激活层没有。", "note_html": "<a class=\"id\" href=\"https://arxiv.org/abs/2601.02744\" target=\"_blank\" rel=\"noopener\">arXiv:2601.02744<\/a>（2026-01，Findings of ACL 2026）。能量沿时间 / 因果边扩散，侧抑制 + 时间衰减，LoCoMo 多跳领先。 与 World 0：<strong>相同<\/strong>（扩散激活 + 衰减）；侧抑制在 World 0 里由投影的 MMR 冗余承担，激活层没有。"}, {"date": "2026-10-08", "title": "RoMem", "arxiv": "2604.11544", "tag": "相同", "note": "arXiv:2604.11544（2026-04）。被替代的事实不删除、在复向量空间里\"转相位\"，检索排序自然压下过期事实。与 World 0：相同目标、不同机制（World 0 用撤回 + 支持度压过 + 否证）。", "note_html": "<a class=\"id\" href=\"https://arxiv.org/abs/2604.11544\" target=\"_blank\" rel=\"noopener\">arXiv:2604.11544<\/a>（2026-04）。被替代的事实不删除、在复向量空间里\"转相位\"，检索排序自然压下过期事实。与 World 0：<strong>相同目标、不同机制<\/strong>（World 0 用撤回 + 支持度压过 + 否证）。"}, {"date": "2026-10-08", "title": "TOKI: A Bitemporal Operator Algebra for Contradiction Resolution in LLM-Agent Persistent Memory", "arxiv": "", "tag": "其他", "note": "（2026；id 未查到）。写入时按有效时间 / 系统时间解决矛盾。 与 World 0：World 0 只有系统时间（`discovered_tick` / `retracted_tick`），没有有效时间；\"只追加事件日志\"是路线图 0.4 项。", "note_html": "（2026；id 未查到）。写入时按有效时间 / 系统时间解决矛盾。 与 World 0：World 0 只有系统时间（<code>discovered_tick<\/code> / <code>retracted_tick<\/code>），没有有效时间；\"只追加事件日志\"是路线图 0.4 项。"}, {"date": "2026-10-08", "title": "确定性的版本感知聚合在 MemoryAgentBench FactConsolidation 上胜过让 LLM 解决记忆冲突", "arxiv": "2606.01435", "tag": "支持", "note": "确定性的版本感知聚合在 MemoryAgentBench FactConsolidation 上胜过让 LLM 解决记忆冲突。与 World 0：支持主张身份 + 撤回的确定性设计。", "note_html": "确定性的版本感知聚合在 MemoryAgentBench FactConsolidation 上胜过让 LLM 解决记忆冲突。与 World 0：<strong>支持<\/strong>主张身份 + 撤回的确定性设计。"}, {"date": "2026-10-08", "title": "Global Workspace Agents / \"Theater of Mind\"", "arxiv": "2604.08206", "tag": "边界外", "note": "arXiv:2604.08206（2026-04）。GWT 认知循环（生成多个候选思维、批评、元选择；短期记忆超阈值即压缩归档）。与 World 0：焦点（§8）是同一理论的最小形式；World 0 不做思维生成，边界外。", "note_html": "<a class=\"id\" href=\"https://arxiv.org/abs/2604.08206\" target=\"_blank\" rel=\"noopener\">arXiv:2604.08206<\/a>（2026-04）。GWT 认知循环（生成多个候选思维、批评、元选择；短期记忆超阈值即压缩归档）。与 World 0：焦点（§8）是同一理论的最小形式；World 0 不做思维生成，边界外。"}], "decision_line": "Claim.since_tick / Claim.until_tick、ConceptCard.first_seen_tick（接口可选字段，不升线格式版本）。", "verification_line": "pytest 1 598 passed, 10 skipped；", "numbers": ["65 个从未出现过", "bigworld 的遗忘缺口不是\"看过的东西被忘了\"，而是\"从没被看过的一次性陈述被评测当作仍然为真\"； 复述不做（它还会破坏\"投影是纯函数\"，要作为独立事件引入才能保住定理 3.7，代价不小）。"]}]}</script>
+<script>
+(function () {
+  var data = JSON.parse(document.getElementById('data').textContent);
+  var rounds = data.rounds.slice().sort(function (a, b) { return a.date < b.date ? 1 : -1; });
+  var papers = [];
+  rounds.forEach(function (r) { r.papers.forEach(function (p) { papers.push(p); }); });
+  var byId = {};
+  papers.forEach(function (p) { var k = p.arxiv || p.title; if (!byId[k]) byId[k] = p; });
+  var uniq = Object.keys(byId).length;
+  var devs = rounds.filter(function (r) { return r.sections.development.trim(); }).length;
+  document.getElementById('built').textContent = data.built;
+  document.getElementById('stats').innerHTML =
+    stat(rounds.length, '轮次') + stat(uniq, '论文（去重）') + stat(devs, '开发项') + stat(data.tests || '—', '最近一轮测试');
+  function stat(n, l) { return '<div class="stat"><span class="n">' + esc(String(n)) + '</span><span class="l">' + esc(l) + '</span></div>'; }
+  function esc(s) { return s.replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
+
+  var latest = rounds[0];
+  if (latest) {
+    document.getElementById('latest-date').textContent = latest.date;
+    var nums = latest.numbers.length ? '<ul class="numbers">' + latest.numbers.map(function (n) { return '<li>' + esc(n) + '</li>'; }).join('') + '</ul>'
+                                     : '<p class="empty">这一轮没有带数字的探针结论。</p>';
+    document.getElementById('brief').innerHTML =
+      '<div class="card lead"><div class="eyebrow">决策</div>' + (latest.html.decision || '<p class="empty">无</p>') +
+      '<div class="eyebrow" style="margin-top:1rem">开发</div>' + (latest.html.development || '<p class="empty">无</p>') + '</div>' +
+      '<div class="card"><div class="eyebrow">探针数字</div>' + nums +
+      '<div class="eyebrow" style="margin-top:1rem">验证</div>' + (latest.html.verification || '<p class="empty">无</p>') +
+      '<div class="eyebrow" style="margin-top:1rem">下一步</div>' + (latest.html.next || '<p class="empty">无</p>') + '</div>';
+  } else {
+    document.getElementById('brief').innerHTML = '<div class="card"><p class="empty">还没有笔记。第一轮运行后这里会出现当天的简报。</p></div>';
+  }
+
+  document.getElementById('rounds-count').textContent = rounds.length + ' 轮';
+  document.getElementById('rounds').innerHTML = rounds.map(function (r, i) {
+    var np = r.papers.length;
+    var head = esc(r.decision_line || '（无决策记录）') + (np ? ' <span class="dim">· ' + np + ' 篇论文</span>' : '');
+    function sec(label, key, wide) {
+      var h = r.html[key];
+      if (!h) return '';
+      return '<div class="section' + (wide ? ' wide' : '') + '"><h4>' + label + '</h4>' + h + '</div>';
+    }
+    return '<details class="round"' + (i === 0 ? ' open' : '') + '><summary><span class="date">' + esc(r.date) + '</span><span class="headline">' + head + '</span></summary>' +
+      '<div class="sections">' + sec('决策', 'decision') + sec('验证', 'verification') + sec('探针', 'probe', true) + sec('开发', 'development', true) +
+      sec('论文', 'papers', true) + sec('提交', 'commits') + sec('未完成 / 下一步', 'next') + '</div></details>';
+  }).join('');
+
+  // papers table with tag filters and search
+  var tags = ['相同', '相反', '可借用', '支持', '边界外', '仅标题', '其他'];
+  var present = tags.filter(function (t) { return papers.some(function (p) { return p.tag === t; }); });
+  var filters = document.getElementById('filters');
+  var active = null;
+  present.forEach(function (t) {
+    var b = document.createElement('button'); b.type = 'button'; b.textContent = t; b.setAttribute('aria-pressed', 'false'); b.id = 'f-' + t;
+    b.addEventListener('click', function () { active = active === t ? null : t; render(); });
+    filters.insertBefore(b, document.getElementById('paper-search'));
+  });
+  var search = document.getElementById('paper-search');
+  search.addEventListener('input', render);
+  function render() {
+    var q = search.value.trim().toLowerCase();
+    filters.querySelectorAll('button').forEach(function (b) { b.setAttribute('aria-pressed', String(b.textContent === active)); });
+    var rows = papers.filter(function (p) { return (!active || p.tag === active) && (!q || (p.title + ' ' + p.arxiv + ' ' + p.note).toLowerCase().indexOf(q) >= 0); });
+    document.getElementById('papers-count').textContent = rows.length + ' / ' + papers.length;
+    document.querySelector('#papers tbody').innerHTML = rows.length ? rows.map(function (p) {
+      var id = p.arxiv ? '<br><a class="id mono" href="https://arxiv.org/abs/' + esc(p.arxiv) + '" target="_blank" rel="noopener">arXiv:' + esc(p.arxiv) + '</a>' : '';
+      return '<tr><td class="d">' + esc(p.date) + '</td><td class="t"><strong>' + esc(p.title) + '</strong>' + id + '</td>' +
+        '<td><span class="tag" data-tag="' + esc(p.tag) + '">' + esc(p.tag) + '</span></td><td class="n">' + p.note_html + '</td></tr>';
+    }).join('') : '<tr><td colspan="4" class="empty">没有匹配的论文。</td></tr>';
+  }
+  render();
+})();
+</script>

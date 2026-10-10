@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "world0"
-version = "0.2.0"
+version = "0.3.0"
 description = "A cognitive concept-world system for LLM Agents"
 requires-python = ">=3.10"
 dependencies = [
@@ -42,6 +42,7 @@ dev = [
 ]
 
 [project.scripts]
+world0 = "world0.cli:main"
 pkm = "world0.agents.cli:main"
 pkm-gui = "world0.agents.gui:main"
 pkm-web = "world0.agents.web_main:main"

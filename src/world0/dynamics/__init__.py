@@ -13,7 +13,11 @@ Each engine satisfies a Protocol from ``world0.core``:
 
 Engines depend only on ``ConceptStore`` / ``RelationStore`` Protocols
 and on ``coefficients.py`` for shared cognitive constants — they do
-**not** import each other.  Any subset can be swapped for an alternative
+**not** import each other's *engines*.  The pure settlement and liveness
+functions of ``decay`` (``settle_concept``, ``settle_relation``,
+``concept_expired``, ``relation_dead``) are a shared kernel that activation
+and lifecycle call, so that everything that reads or changes decayed state
+agrees on it.  Any subset of engines can be swapped for an alternative
 implementation as long as the Protocol contract is satisfied.
 """
 

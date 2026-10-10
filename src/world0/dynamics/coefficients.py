@@ -30,11 +30,21 @@ RELATION_TYPE_FACTOR: dict[RelationType, float] = {
     RelationType.NEGATIVE: 0.60,
 }
 
+# ── Propagation minimum ratio ────────────────────────────────────────
+# Signals weaker than this fraction of the strongest *seed* score are
+# lifted by the activation engine into a band just below it, preventing
+# the multiplicative chain from zeroing out signal too early.  This widens
+# the cognitive horizon from ~1 hop to 3-4 hops.  The projection reads the
+# same constant: a candidate below ``PROPAGATION_MIN_RATIO × peak`` was
+# kept for horizon completeness, not on the strength of its evidence.
+PROPAGATION_MIN_RATIO: float = 0.03
 
-# ── Temporal relevance half-lives (hours) ────────────────────────────
+
+# ── Temporal relevance half-lives (ticks of cognitive time) ──────────
 # "Soft" half-lives for freshness weighting during read-only operations
-# (activation propagation, coupling for community detection).  These
-# are *separate* from the hard decay half-lives in DecayEngine — those
-# actually mutate confidence, while these only modulate scoring.
-CONCEPT_TEMPORAL_HL: float = 168.0   # 1 week for concept freshness
-RELATION_TEMPORAL_HL: float = 72.0   # 3 days for relation freshness
+# (activation propagation, coupling for community detection), measured
+# in observations (see ``schemas/clock.py``).  These are *separate* from
+# the hard decay half-lives in DecayEngine — those actually mutate
+# confidence, while these only modulate scoring.
+CONCEPT_TEMPORAL_HL: float = 168.0   # observations for concept freshness
+RELATION_TEMPORAL_HL: float = 72.0   # observations for relation freshness

@@ -105,7 +105,7 @@ def test_ingest_concept_candidates_disambiguate_same_label() -> None:
     assert len(nodes) == 2
     assert {n.sense for n in nodes} == {"fruit", "technology company"}
     assert nodes[0].id != nodes[1].id
-    assert result.new_relations == ["Apple → conflict → Apple"]
+    assert result.new_relations == ["Apple → contrast → Apple"]
     edge = rs.all()[0]
     assert edge.source_id != edge.target_id
     representations = {node.representation() for node in nodes}
@@ -198,10 +198,10 @@ def test_ingest_skips_self_loop_relation() -> None:
     assert len(rs) == 1
 
 
-def test_ingest_reports_endpoint_disconfirmation_without_existing_edge() -> None:
-    # A contradicted relation whose endpoints have no edge between them
-    # weakens both endpoint concepts.  That applied disconfirmation must be
-    # reported in the result (not silently swallowed).
+def test_ingest_denial_without_existing_edge_weakens_nothing() -> None:
+    # A contradicted relation whose endpoints have no edge between them is a
+    # denial of a claim nobody made: it is not evidence against either
+    # concept (analysis doc §7.28), so nothing is weakened or reported.
     pipeline, cs, _, _, _ = _make_ingest_pipeline()
     result = pipeline.run(
         Observation(
@@ -210,10 +210,10 @@ def test_ingest_reports_endpoint_disconfirmation_without_existing_edge() -> None
             task="profiling",
         )
     )
-    assert sorted(result.weakened_concepts) == ["MongoDB", "bottleneck"]
+    assert result.weakened_concepts == []
     assert result.weakened_relations == []
     for node in cs.all():
-        assert node.disconfirmation_count >= 1
+        assert node.disconfirmation_count == 0
 
 
 def test_ingest_contradiction_weakens_existing_edge_not_concepts() -> None:

@@ -21,6 +21,7 @@ whether to read it.
 from __future__ import annotations
 
 import re
+from functools import lru_cache
 from collections import defaultdict
 from statistics import median
 from typing import TYPE_CHECKING
@@ -60,8 +61,12 @@ GENERIC_DOMAIN_LABELS = {
 }
 
 
+@lru_cache(maxsize=8192)
 def normalize_domain_label(label: str) -> str:
-    """Convert free-form task/domain text into a stable domain label."""
+    """Convert free-form task/domain text into a stable domain label.
+
+    A pure function of the text, cached: diffusion normalises the same few
+    labels tens of thousands of times per observation stream."""
     normalized = re.sub(r"\s+", " ", label.strip().lower())
     if not normalized:
         return ""
@@ -311,6 +316,8 @@ class ColorDiffusionEngine:
                     continue
 
                 for rel in self._relations.for_concept(concept_id):
+                    if rel.is_retracted:
+                        continue
                     neighbor_id = rel.other_end(concept_id)
                     neighbor = self._concepts.get(neighbor_id) if neighbor_id else None
                     if not neighbor:

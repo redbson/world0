@@ -21,17 +21,36 @@ World 0 is not a knowledge graph, not a memory system, not an ontology. It is a 
 
 World 0 不是知识图谱，不是记忆系统，不是本体论。它是一个认知结构，将积累的观察转化为聚焦的、与任务相关的投影。
 
+## What's new in 0.3.0 / 0.3.0 新增
+
+0.3.0 is the first release in which the whole state of the world is a function of the observation stream alone: nothing depends on when `reflect()` runs. Highlights (full list in [`CHANGELOG.md`](CHANGELOG.md)):
+
+0.3.0 是第一个"世界的全部状态只是观察流的函数"的版本：没有任何东西取决于 `reflect()` 何时运行。要点（完整列表见 [`CHANGELOG.md`](CHANGELOG.md)）：
+
+- **Compact render is the default** — `Projection.render()` is the prompt-ready form; `render(style="full")` keeps the sectioned view. / 紧凑渲染成为默认，`render(style="full")` 保留分节视图。
+- **Hard retraction and read-time settlement** — a claim that no longer holds leaves the view and is listed under "No longer holds"; reads see settled values. / 硬撤回与读取时结算。
+- **Task-conditioned projections** — task words are weighted by distinctiveness, claims are split by the task that stated them, and a view is never filled with another task's concepts. / 任务词按区分度加权、主张按陈述任务拆分、不用别的任务的概念填满预算。
+- **Relation semantics** — a stated conflict makes its partner visible; new `contrast` relation; `part_of` is inclusion read from the part; bare axis words map to the weakest relation on their axis. / 冲突使对方可见；新增 `contrast`；`part_of` 即包含；轴名别名不夸大。
+- **Hebbian revalidation at the event** — chance co-occurrence edges die when their endpoints are mentioned, not at the next reflect. / Hebbian 再验证在事件上发生。
+- **Evidence** — a formal model with a numerical verifier ([`docs/paper/`](docs/paper/world0-formal.md)) and the reproducible LongRun benchmark with a real-LLM-reader stage ([`docs/eval/`](docs/eval/01-report.md)). / 形式化论文与数值验证；可复现的 LongRun 评测与真实读者阶段。
+
+Migration notes are in the `[0.3.0]` section of the changelog. / 迁移说明见 changelog 的 `[0.3.0]` 节。
+
 ## Roadmap / 路线
 
-The current agent development priorities are tracked in [`TODO.md`](TODO.md).
+The 0.3.0 scope, release checklist and what is deferred to 0.4 are in [`docs/ROADMAP.md`](docs/ROADMAP.md); agent-feature priorities are tracked in [`TODO.md`](TODO.md).
 
-当前 Agent 的功能开发优先级记录在 [`TODO.md`](TODO.md)。
+0.3.0 的范围、发布清单与推迟到 0.4 的工作见 [`docs/ROADMAP.md`](docs/ROADMAP.md)；Agent 功能的开发优先级记录在 [`TODO.md`](TODO.md)。
 
 ## Documentation / 文档
 
 - [`docs/world0-usage.md`](docs/world0-usage.md) — operational usage guide for World 0 / World 0 操作与使用文档
+- [`docs/world0-api.md`](docs/world0-api.md) — the unified long-term API: one verb set and one set of data shapes across Python, CLI, HTTP and MCP, stability tiers, evolution plan / 统一的长期 API 设计：四个入口同一套动词与数据形状、稳定性分级、演化路线
 - [`docs/world0-color-field-dynamics.md`](docs/world0-color-field-dynamics.md) — dynamics-first design for community-born color fields / 基于动力学的群落生色与褪色设计
 - [`docs/extraction-model-prompt-eval.md`](docs/extraction-model-prompt-eval.md) — model × prompt extraction-quality evaluation (why gpt-5.4-nano is the default) / 模型×prompt 提取质量评测（为何默认 gpt-5.4-nano）
+- [`docs/world0-cognitive-dynamics-analysis.md`](docs/world0-cognitive-dynamics-analysis.md) — mathematical review of the decay / activation / projection dynamics, probe evidence, calibration and roadmap / 认知动力学的数学分析、探针证据、参数标定与路线
+- [`docs/paper/world0-formal.md`](docs/paper/world0-formal.md) — formal model of the current design with propositions, proofs and a numerical verifier / 当前设计的形式化：命题、证明与数值验证
+- [`docs/eval/01-report.md`](docs/eval/01-report.md) — LongRun: World 0 vs. traditional memory vs. raw context in a long-running Agent (reproducible benchmark, real-LLM-reader stage, honest limits) / LongRun：长期运行 Agent 中 World 0 与传统记忆、直接上下文的对比（可复现评测、真实读者阶段、局限）
 - [`DesignPhilosophy.md`](DesignPhilosophy.md) — design rationale and framing / 设计哲学与边界
 - [`TODO.md`](TODO.md) — current implementation priorities / 当前实现优先级
 
@@ -144,6 +163,9 @@ It is not just “store some notes and query later”.
 from world0 import World, Observation
 
 w = World(store_path=".world0")
+# or a single-file SQLite store (chosen automatically by the suffix):
+# 或使用单文件 SQLite 存储（按后缀自动选择）：
+# w = World(store_path="world0.sqlite")
 
 # Agent submits observations from its work
 # Agent 提交工作中的观察
@@ -197,24 +219,25 @@ projection = w.project(
 print(projection.render())
 ```
 
-The `render()` output is markdown, ready to inject into an Agent's system prompt:
+`render()` returns the compact prompt form: current claims in plain language with their belief, the other concepts in view, then what to discount — withdrawn claims, claims made under other tasks, contested knowledge, claims disconfirmed below even odds, thin evidence. `render(style="full")` is the diagnostic view (maturity, confidence, evidence, strengths, reinforcement counts, attention traces).
 
-`render()` 输出为 markdown 格式，可直接注入 Agent 的 system prompt：
+`render()` 返回紧凑的提示词形式：当前主张（自然语言 + 信念）、视野中的其他概念，以及需要打折扣的内容——已撤回的主张、在其他任务下提出的主张、有争议、被否证到低于五成或证据单薄的知识。`render(style="full")` 是诊断视图（成熟度、置信度、证据、强度、强化次数、注意力追踪）。
 
 ```markdown
 ## Cognitive Context
-
-### Core Understanding
-- **FastAPI** (developing, confidence: 0.73): Modern async web framework for Python. Linked to: Python, REST API.
-- **PostgreSQL** (developing, confidence: 0.68). Linked to: REST API, SQLAlchemy.
-
-### Key Relations
-- FastAPI → depends_on → Python (strength: 0.62, reinforced 8x)
-- REST API → depends_on → PostgreSQL (strength: 0.55, reinforced 6x)
-
-### Task Context
-Concepts activated for: optimize query performance
+Context for: ml training
+- training loop depends on PyTorch (belief 0.73)
+- PyTorch depends on GPU (belief 0.73)
+Also relevant: ONNX.
+Seen under other tasks:
+- PyTorch enables ONNX (deployment)
+Hold loosely:
+- thin evidence: ONNX
 ```
+
+In the LongRun evaluation real LLM readers answered 0.90 of the questions from the compact form and 0.57 from the full one at the same token budget (`docs/eval/01-report.md`).
+
+LongRun 评测中，同样的 token 预算下，真实 LLM 读者用紧凑形式答对 0.90，用完整形式 0.57（`docs/eval/01-report.md`）。
 
 ## Core Concepts / 核心概念
 
@@ -295,6 +318,35 @@ Projection uses spreading activation with task-affinity boosting and MMR (Maxima
 
 投影使用扩散激活与任务亲和度加权，并通过 MMR（最大边际相关性）选择策略保证多样性。
 
+### `project(seeds, perspective=)` — Perspectives / 视角
+
+The same concept-world read under different roles. A `Perspective` weights
+relations by **semantic name** (`dependence`, `inclusion`, `enables`, … or
+aliases like `depends_on`) or by axis (`positive` / `negative` / `parallel`),
+and can follow or oppose the direction of directed relations. Named profiles
+live in `world0.perspectives`.
+同一个概念世界在不同角色下的读法。`Perspective` 按**语义关系名**（或轴）给关系加权，
+并可顺着或逆着有向关系传播；内置画像在 `world0.perspectives`。
+
+```python
+from world0 import Perspective
+
+w.project(["latency"], perspective="dependency_map")   # what latency relies on / 依赖什么
+w.project(["latency"], perspective="impact_map")       # what relies on latency / 谁依赖它
+w.project(["latency"], perspective="taxonomy")         # where it sits / 归属结构
+w.project(["latency"], perspective="analogy")          # what it resembles / 类比
+w.project(["latency"], perspective="contrast")         # what it conflicts with / 冲突
+
+# or assemble one — unknown relation labels are rejected at construction
+# 或自行组合——未知的关系标签在构造时即被拒绝
+p = Perspective(
+    task="incident triage",
+    relation_type_weights={"dependence": 1.4, "parallel": 0.4},
+    direction_weights={"forward": 1.0, "backward": 0.4},
+)
+w.project(["latency"], perspective=p)
+```
+
 ### `reflect()` — Consolidate / 巩固
 
 ```python
@@ -303,9 +355,9 @@ print(f"Promoted: {len(result.promoted_concepts)}")
 print(f"Pruned:   {len(result.pruned_concepts)}")
 ```
 
-Call after a task is complete. Decays unused concepts, promotes frequently activated ones through maturity stages, and prunes noise.
+Call after a task is complete. Decays unused concepts, promotes frequently activated ones through maturity stages, and prunes noise (a faded concept is deleted only after 720 further idle observations, so a re-mention within that grace revives the same node; past it the concept is dead and a mention starts a fresh one, whether or not `reflect()` ran in between). `reflect(light=True)` skips the community / colour-field passes; `World(store_path, auto_reflect_every=50)` runs that light consolidation automatically every 50 observations so the world keeps evolving without explicit calls.
 
-在任务完成后调用。衰减未使用的概念，将频繁激活的概念通过成熟度阶段晋升，修剪噪声。
+在任务完成后调用。衰减未使用的概念，修剪噪声（褪色的概念在再闲置 720 次观察后才被删除；宽限期内的再次提及复苏同一个节点，超过之后概念已死，再提及就新建——无论其间是否调用过 `reflect()`）。成熟度晋升发生在激活 / 连接事件本身，`reflect()` 只对经由其他途径变更的记录做追赶。`reflect(light=True)` 跳过群落/色场步骤；`World(store_path, auto_reflect_every=50)` 每 50 次观察自动执行一次轻量巩固，世界无需显式调用也会持续演化。
 
 ## Concept Lifecycle / 概念生命周期
 
@@ -323,38 +375,45 @@ embryonic → developing → established → core
 
 | Transition / 转换 | Requirements / 条件 |
 |------------|-------------|
-| embryonic → developing / 萌芽 → 发展中 | activation_count >= 3, confidence >= 0.3 |
-| developing → established / 发展中 → 已建立 | activation_count >= 10, confidence >= 0.6 |
-| established → core / 已建立 → 核心 | activation_count >= 30, connections >= 5 |
+| embryonic → developing / 萌芽 → 发展中 | activation_count >= 3, confidence >= 0.3 — or spaced recurrence ρ >= 3 (uses >= 24 observations apart) and evidence e(n, d) >= 0.15 / 或间隔复现 ρ >= 3 且证据 >= 0.15 |
+| developing → established / 发展中 → 已建立 | activation_count >= 10, ρ >= 3, confidence >= 0.6 — or ρ >= 10, evidence e(n, d) >= 0.5 ("well evidenced") and confirmations at least ~4× disconfirmations (12 uses at any cadence up to 720 observations) / 或 ρ >= 10、证据 >= 0.5 且确认约为否证的 4 倍以上（节律不超过 720 时第 12 次使用即达成） |
+| established → core / 已建立 → 核心 | activation_count >= 30 and live connections >= max(2, 5 − ⌊(n − 30)/20⌋) — an edge counts while its settled weight is >= 0.02 and its other end is not dead / 存活连接：结算后权重 >= 0.02 且另一端未死 |
 | any → fading / 任意 → 衰退 | confidence decays below 0.05 / 置信度衰减至 0.05 以下 |
-| fading → developing / 衰退 → 发展中 | re-activated by an observation / 被观察重新激活 |
+| fading → developing / 衰退 → 发展中 | re-activated by an observation after recurring in >= 3 distinct windows; otherwise it re-enters as embryonic / 复现过 3 个以上窗口的概念被重新激活时复苏，否则回到萌芽 |
+| **long-term memory** / **长期记忆**（orthogonal to maturity / 与成熟度正交） | recurred in >= 5 spaced windows, evidence >= 0.5 and uncontested (balance >= 0.8), judged at the activation; it then forgets on the slow curve (half-life 35 040 observations, evidence floor on the same era) until a disconfirmation takes the balance below 0.8 or it finally fades; `World(long_term_memory=False)` turns consolidation off / 在 >= 5 个间隔窗口复现、证据 >= 0.5 且无争议（平衡 >= 0.8），在激活时判定；此后按慢曲线遗忘（半衰期 35 040 次观察，证据地板同一尺度），直到被否证到平衡 < 0.8 或最终褪色；`World(long_term_memory=False)` 关闭巩固 |
 
-Decay rates are maturity-dependent: embryonic concepts fade in ~1 day, core concepts persist for ~3 months.
+Time in World 0 is **cognitive time**: the world clock advances once per ingested observation (`world.clock.tick`, exposed as `status().cognitive_tick`), and the calendar only adds a slow drift while the world is idle. Decay rates are maturity-dependent and measured in observations: an embryonic concept halves after 24 observations that do not mention it, a core concept after 2160. Half-lives stretch with accumulated evidence and confidence relaxes toward an evidence floor rather than toward zero, so a concept re-observed regularly can mature while a one-off mention still fades. A concept that has recurred in spaced windows and is well evidenced enters **long-term memory** and forgets on a much slower curve: dropped after twelve spaced uses it stays in reach for ~145 000 observations instead of ~11 000 (paper §3.6). Forgetting depends only on cognitive time, not on how often `reflect()` runs: decay is idempotent, and the decay a concept owes is settled right before each use (proof in [`docs/paper/world0-formal.md`](docs/paper/world0-formal.md), Theorem 3.2). See [`docs/world0-cognitive-dynamics-analysis.md`](docs/world0-cognitive-dynamics-analysis.md).
 
-衰减速率取决于成熟度：萌芽概念约 1 天衰退，核心概念可持续约 3 个月。
+World 0 的时间是**认知时间**：每摄入一条观察，世界时钟前进一格（`world.clock.tick`，`status().cognitive_tick` 可见），日历只在世界闲置时贡献缓慢的漂移。衰减速率取决于成熟度，以观察次数计：萌芽概念在 24 次未提及它的观察后减半，核心概念为 2160 次。半衰期随累积证据拉长，置信度向"证据地板"而非 0 回归，因此定期复现的概念可以成熟，一次性提及仍会消失。在间隔窗口里反复出现且证据充分的概念进入**长期记忆**，按慢得多的曲线遗忘：十二次间隔使用后放下，它可及约 145 000 次观察而不是约 11 000 次（论文 §3.6）。遗忘只取决于认知时间，与 `reflect()` 的调用频率无关：衰减幂等，且概念欠下的衰减在每次使用前结算（证明见 [`docs/paper/world0-formal.md`](docs/paper/world0-formal.md) 定理 3.2）。详见 [`docs/world0-cognitive-dynamics-analysis.md`](docs/world0-cognitive-dynamics-analysis.md)。
 
 ## Relation Types / 关系类型
 
-Relations are typed and influence activation propagation strength:
+A relation is a **claim** identified by (source, target, axis, label). Every label lives on one of three cognitive axes, which decide how activation moves across the edge; the label itself (the *semantic relation*) is kept and rendered, and sets the claim's initial belief and propagation gain.
 
-关系是有类型的，且影响激活传播强度：
+关系是一条**主张**，身份为（源, 目标, 轴, 标签）。每个标签落在三条认知轴之一上，轴决定激活如何穿过这条边；标签本身（*语义关系*）被保留并渲染，并决定主张的初始信念与传播增益。
 
-| Type / 类型 | Propagation Factor / 传播系数 | Description / 说明 |
-|------|-------------------|-------------|
-| `depends_on` | 1.0 | Strong structural dependency / 强结构依赖 |
-| `contains` | 0.95 | Part-whole containment / 整体-部分包含 |
-| `part_of` | 0.95 | Inverse of contains / contains 的逆关系 |
-| `activates` | 0.90 | Causal activation / 因果激活 |
-| `supports` | 0.85 | Supportive association / 支持性关联 |
-| `precedes` | 0.80 | Temporal/logical ordering / 时间/逻辑顺序 |
-| `derived_from` | 0.80 | Origin relationship / 来源关系 |
-| `similar_to` | 0.70 | Similarity / 相似 |
-| `related_to` | 0.50 | Generic fallback / 通用回退 |
-| `contrasts` | 0.40 | Opposition / contrast / 对立/对比 |
+| Axis / 轴 | Effect on activation / 对激活的作用 | Semantic relations (initial belief · propagation) / 语义关系（初始信念 · 传播） |
+|---|---|---|
+| `positive` (directed / 有向) | excitation along the stated direction / 沿陈述方向兴奋 | `dependence` 0.78 · 0.70, `enables` 0.82 · 0.76, `inclusion` 0.92 · 0.86, `membership` 0.94 · 0.88, `functional_map` 0.90 · 0.84, `co_creation`, `mutual_reinforcement`, `future_coupling`, `proper_inclusion` |
+| `negative` (directed / 有向) | inhibition of the partner's excitation through other paths; the partner is still **visible** at the strength of the claim (a terminal) / 抑制对方经其他路径获得的兴奋；对方仍以主张的强度**可见**（终点，不再外扩） | `contrast` 0.70 · 0.06 (weakest: "differ, without conflicting" / 最弱："值得区分，但不冲突"), `conflict` 0.84 · 0.10, `complement`, `exclusion`, `disjointness`, `violates_constraint`, `incompatible_ontology`, `instability`, `adversarial_prediction` |
+| `parallel` (symmetric / 对称) | excitation both ways / 双向兴奋 | `generic_relation` 0.55 · 0.45 (co-occurrence edges / 共现边), `similarity_kernel` 0.70 · 0.64, `overlap`, `approximate_equivalence`, `equivalence` 0.96 · 0.92, `recursive_co_modeling`, `co_membership`, `quotient_map`, `persistent_attention` |
 
-Hebbian relations (`related_to`, auto-discovered from co-occurrence) are capped at weight 0.7. Explicit relations declared by the Agent can reach 1.0.
+Common labels are aliases, read as what they state / 常用标签是别名，按它们陈述的内容读：
 
-Hebbian 关系（`related_to`，从共现中自动发现）权重上限为 0.7。Agent 显式声明的关系可达 1.0。
+| Label / 标签 | Stored as / 存为 | Convention / 约定 |
+|---|---|---|
+| `depends_on`, `derived_from`, `precedes` | `dependence` | `(A, B, "precedes")` is stored as "B depends on A" / 存为 "B depends on A" |
+| `supports`, `activates` | `enables` | source enables target / 源使能目标 |
+| `contains`, `part_of` | `inclusion` | `(wheel, car, "part_of")` is stored and rendered as "car contains wheel" / 存储与渲染都是 "car contains wheel" |
+| `contrasts`, `negative`, `repulsion` | `contrast` | not a conflict; say `conflict` when you mean it / 不是冲突；要表达冲突请用 `conflict` |
+| `positive`, `attraction`, `trust` | `mutual_reinforcement` | |
+| `similar_to` | `similarity_kernel` | |
+| `mutual_understanding` | `recursive_co_modeling` | |
+| `related_to`, `parallel` | `generic_relation` | the fallback; co-occurrence edges are born here / 回退类型；共现边从这里诞生 |
+
+A stated claim starts at the belief above and is confirmed, disconfirmed or withdrawn by later statements (`retracted_relations`). Co-occurrence edges are discovered from the stream (two co-mentions **and** Jaccard association ≥ 0.2), re-judged whenever an endpoint is mentioned, and can be upgraded to a typed claim by a statement. Stores written by 0.2.0, which kept the label itself as the type, are migrated on load (see `CHANGELOG.md`).
+
+陈述的主张从上表的信念出发，被之后的陈述确认、否证或撤回（`retracted_relations`）。共现边从观察流中发现（共现两次**且** Jaccard 关联度 ≥ 0.2），任一端被提及时重判，一次陈述可以把它升级为类型化主张。0.2.0 把标签本身存为类型的存储在加载时迁移（见 `CHANGELOG.md`）。
 
 ## Model Selection / 模型选择
 
@@ -450,9 +509,9 @@ World 0 以独立 JSON 文件的形式持久化到磁盘：
 └── state.json
 ```
 
-Writes use a dirty-flag mechanism: in-memory mutations are batched and flushed at `ingest()` and `reflect()` boundaries, not on every operation. The `Store` interface is abstract — swap `JsonStore` for a different backend without changing cognitive logic.
+Writes use a dirty-flag mechanism: in-memory mutations are batched and flushed at `ingest()` and `reflect()` boundaries, not on every operation. Hebbian learning counters are kept in a separate `learning.json` record that is written on every observation while small and every 20 observations once large; call `world.close()` (or use `with World(...) as w:`) before discarding a large world so it is exact on disk. The `Store` interface is abstract — swap `JsonStore` for a different backend without changing cognitive logic.
 
-写入使用脏标记机制：内存中的变更被批量收集，在 `ingest()` 和 `reflect()` 边界处统一刷盘，而非每次操作都写入。`Store` 接口是抽象的——可以替换 `JsonStore` 为其他后端而不影响认知逻辑。
+写入使用脏标记机制：内存中的变更被批量收集，在 `ingest()` 和 `reflect()` 边界处统一刷盘，而非每次操作都写入。 Hebbian 学习计数单独存放在 `learning.json`：世界较小时每次观察都写，变大后每 20 次观察写一次；丢弃大世界前调用 `world.close()`（或使用 `with World(...) as w:`）以保证落盘完整。`Store` 接口是抽象的——可以替换 `JsonStore` 为其他后端而不影响认知逻辑。
 
 ## Key Design Decisions / 关键设计决策
 
@@ -460,19 +519,19 @@ Writes use a dirty-flag mechanism: in-memory mutations are batched and flushed a
 
 **Relations are first-class. / 关系是一等公民。** Not just `related_to` edges — relations are typed, weighted, reinforced, and decay independently. Relation type influences activation propagation strength. / 不只是 `related_to` 边——关系是有类型的、加权的、可强化的，且独立衰减。关系类型影响激活传播强度。
 
-**Context changes relevance. / 上下文改变相关性。** The same concept-world produces different projections under different task contexts. Task affinity boosts concepts and relations associated with the current task by 1.5x. / 同一个概念世界在不同任务上下文下产生不同的投影。任务亲和度将与当前任务相关的概念和关系提升 1.5 倍。
+**Context changes relevance. / 上下文改变相关性。** The same concept-world produces different projections under different task contexts. Task affinity boosts concepts and relations associated with the current task by 1.5x. A task also grounds on the concepts it names: `project(["deployment"], task="kubernetes rollout")` favours `kubernetes`, `rollout` and their neighbours even if no observation was ever labelled with that task (`world0.context`). / 同一个概念世界在不同任务上下文下产生不同的投影。任务亲和度将与当前任务相关的概念和关系提升 1.5 倍。任务还会锚定到它点名的概念：即使从没有观察被标注过该任务，`task="kubernetes rollout"` 也会偏向 `kubernetes`、`rollout` 及其邻居（`world0.context`）。
 
 **Projection is the output. / 投影是输出。** The system is only useful if it can turn a larger concept-world into a smaller, task-relevant view. Projection uses MMR selection to balance relevance against diversity. / 系统只有在能将更大的概念世界转化为更小的、与任务相关的视图时才有用。投影使用 MMR 选择来平衡相关性和多样性。
 
-**Hebbian learning with threshold. / 带阈值的 Hebbian 学习。** Co-occurring concepts don't immediately form relations — they need to co-occur at least twice before a connection is created. This prevents noise from single observations. / 共现概念不会立即形成关系——需要至少共现两次才会创建连接。这防止了单次观察产生的噪声。
+**Hebbian learning with two gates. / 双门 Hebbian 学习。** Co-occurring concepts don't immediately form relations — they need to co-occur at least twice *and* co-occur more than chance would predict (Jaccard association over observations ≥ 0.2) before a connection is created. This prevents noise from single observations and stops frequently mentioned concepts from linking to everything they happen to share an observation with. / 共现概念不会立即形成关系——需要至少共现两次，**且**共现程度超过偶然水平（观察层面的 Jaccard 关联度 ≥ 0.2）才会创建连接。这既防止单次观察产生噪声，也防止高频概念与所有偶然同框的概念连成一团。 An auto-discovered edge is re-judged against the accumulated statistics whenever one of its endpoints is mentioned, and dropped when it no longer passes; `reflect()` only backstops this. / 自动发现的边在任一端被提及时用累积统计重判，不再达标即删除；`reflect()` 只是后备。
 
-**Graceful decay. / 优雅衰减。** Unused concepts decay exponentially with maturity-dependent half-lives. Core concepts resist decay (3-month half-life); embryonic concepts fade in a day. This keeps the world clean without manual pruning. / 未使用的概念按指数衰减，半衰期取决于成熟度。核心概念抵抗衰减（3 个月半衰期）；萌芽概念在一天内衰退。这让概念世界保持整洁，无需手动修剪。
+**Graceful decay. / 优雅衰减。** Unused concepts decay exponentially in cognitive time (observations), with maturity- and evidence-dependent half-lives. Core concepts resist decay (2160-observation base half-life); embryonic concepts fade within a few dozen observations. This keeps the world clean without manual pruning. / 未使用的概念在认知时间（观察次数）上按指数衰减，半衰期取决于成熟度与证据量。核心概念抵抗衰减（基础半衰期 2160 次观察）；萌芽概念在几十次观察内衰退。这让概念世界保持整洁，无需手动修剪。
 
 ## Development / 开发
 
 ```bash
 pip install -e ".[dev]"
-pytest                        # 554 tests (546 passing, 8 skipped without an LLM key), ~15s / 554 个测试（546 通过，8 个在无 LLM key 时跳过），约 15 秒
+pytest                        # 1 414 tests (1 404 passing, 10 skipped without an LLM key or browser), ~40s / 1 414 个测试（1 404 通过，10 个在无 LLM key 或浏览器时跳过），约 40 秒
 pytest tests/test_benchmark.py -v   # cognitive quality benchmarks / 认知质量基准
 pytest tests/test_benchmark_e2e.py -v -s   # end-to-end scenario / 端到端场景
 ANTHROPIC_API_KEY=sk-... pytest tests/test_extraction_quality_llm.py -v   # real-LLM extraction quality / 真实 LLM 提取质量
@@ -485,9 +544,9 @@ ANTHROPIC_API_KEY=sk-... pytest tests/test_extraction_quality_llm.py -v   # real
 | `test_benchmark.py` | 43 | Activation precision, projection relevance, confidence dynamics, decay curves, Hebbian convergence, cross-domain separation, scale behavior, lifecycle thresholds, persistence fidelity, projection stability, task sensitivity, relation type differentiation, alias management / 激活精度、投影相关性、置信度动态、衰减曲线、Hebbian 收敛、跨域分离、规模行为、生命周期阈值、持久化保真、投影稳定性、任务敏感性、关系类型区分、别名管理 |
 | `test_benchmark_e2e.py` | 24 | Multi-session Agent scenario: knowledge accumulation, cross-session coherence, projection focus, reflect consolidation, render quality, full lifecycle simulation, quantitative report / 多会话 Agent 场景：知识积累、跨会话一致性、投影聚焦、反思巩固、渲染质量、全生命周期模拟、量化报告 |
 | `test_extraction_quality_llm.py` | 8 | Real-LLM extraction quality: synonym/acronym dedup, generic-noise filtering, relation direction, domain-sense split, contradiction handling, Chinese language preservation, cross-text identity (skipped without an LLM key) / 真实 LLM 提取质量：同义词/缩写去重、泛词噪声过滤、关系方向、领域义项拆分、矛盾处理、中文保持、跨文本身份（无 LLM key 时跳过） |
-| Other tests / 其他测试 | ~479 | Unit/integration tests for concepts, relations, dynamics (incl. color-field & communities), spaces, sources, metrics, projection, extraction, agents (PKM/CLI/web/external), LLM providers, persistence / 概念、关系、动力学（含色场与群落）、空间、来源、指标、投影、提取、Agent（PKM/CLI/web/外部）、LLM 提供者、持久化的单元与集成测试 |
+| Other tests / 其他测试 | ~1 337 | Unit/integration tests for concepts, relations, dynamics (incl. color-field & communities), spaces, sources, metrics, projection, extraction, agents (PKM/CLI/web/external), LLM providers, persistence / 概念、关系、动力学（含色场与群落）、空间、来源、指标、投影、提取、Agent（PKM/CLI/web/外部）、LLM 提供者、持久化的单元与集成测试 |
 
-Total: 554 tests (546 passing, 8 skipped without an LLM provider). / 共 554 个测试（546 通过，8 个在无 LLM provider 时跳过）。
+Total: 1 414 tests (1 404 passing, 10 skipped without an LLM provider or browser). / 共 1 414 个测试（1 404 通过，10 个在无 LLM provider 或浏览器时跳过）。
 
 ## Requirements / 依赖
 

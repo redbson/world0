@@ -108,7 +108,7 @@ class TestExtractionParsing:
             ("retrieval augmented generation", "vector search", "dependence")
         ]
         assert obs.contradicted_relations == [
-            ("retrieval augmented generation", "vector search", "conflict")
+            ("retrieval augmented generation", "vector search", "contrast")
         ]
         assert obs.weakened == ["old keyword search"]
         concept_meta = obs.extraction_metadata["concepts"][
@@ -188,7 +188,7 @@ class TestExtractionParsing:
         assert [c.uid for c in obs.concept_candidates] == ["c1", "c2"]
         assert obs.concept_candidates[0].sense == "technology company"
         assert obs.concept_candidates[1].sense == "fruit"
-        assert obs.relations == [("c1", "c2", "conflict")]
+        assert obs.relations == [("c1", "c2", "contrast")]
 
     def test_parses_json_in_markdown_fences(self):
         response = '```json\n{"concepts": [{"name": "python"}], "relations": []}\n```'
@@ -300,3 +300,48 @@ class TestExtractionValidation:
 
         extracted_types = {r[2] for r in obs.relations}
         assert extracted_types == set(names)
+
+
+class TestRetractedRelations:
+    """A relation that held and no longer holds is withdrawn, not disconfirmed."""
+
+    RESPONSE = json.dumps({
+        "concepts": [
+            {"uid": "c1", "name": "api"}, {"uid": "c2", "name": "db"}, {"uid": "c3", "name": "cache"},
+        ],
+        "relations": [{"source": "c1", "target": "c3", "type": "depends_on"}],
+        "retracted_relations": [{"source": "c1", "target": "c2", "type": "depends_on"}],
+    })
+
+    def test_prompt_asks_for_withdrawn_relations(self):
+        llm = FakeLLM(self.RESPONSE)
+        ConceptExtractor(llm).extract("api no longer depends on db; it uses the cache", task="t")
+        assert "retracted_relations" in llm.system
+        assert "no longer" in llm.system
+
+    def test_parsed_into_the_observation(self):
+        obs = ConceptExtractor(FakeLLM(self.RESPONSE)).extract("text", task="t")
+        assert obs.retracted_relations == [("c1", "c2", "dependence")]
+        assert obs.contradicted_relations == []
+
+    def test_an_unresolved_endpoint_is_reported(self):
+        response = json.dumps({
+            "concepts": [{"uid": "c1", "name": "api"}],
+            "retracted_relations": [{"source": "c1", "target": "ghost", "type": "depends_on"}],
+        })
+        obs = ConceptExtractor(FakeLLM(response)).extract("text", task="t")
+        assert obs.retracted_relations == []
+        assert any("retracted relation endpoint not found" in w
+                   for w in obs.extraction_metadata["parse_warnings"])
+
+    def test_the_world_withdraws_the_claim(self, tmp_path):
+        from world0 import Observation, World
+
+        w = World(store_path=tmp_path)
+        for _ in range(3):
+            w.ingest(Observation(concepts=["api", "db"], relations=[("api", "db", "depends_on")]))
+        w.ingest(ConceptExtractor(FakeLLM(self.RESPONSE)).extract("correction", task="t"))
+        edge = next(e for e in w.relations.all()
+                    if {w.concepts.get(e.source_id).name, w.concepts.get(e.target_id).name} == {"api", "db"}
+                    and e.is_explicit)
+        assert edge.is_retracted

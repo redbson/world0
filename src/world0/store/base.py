@@ -83,3 +83,14 @@ class Store(ABC):
 
     @abstractmethod
     def load_state(self) -> dict: ...
+
+    # ── learning state ────────────────────────────────────────────────
+    # Bulky, frequently changing counters (Hebbian co-occurrence and
+    # mention statistics) kept apart from the small world state so the
+    # per-observation state write stays cheap.
+
+    @abstractmethod
+    def save_learning_state(self, state: dict) -> None: ...
+
+    @abstractmethod
+    def load_learning_state(self) -> dict: ...

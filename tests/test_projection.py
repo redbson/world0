@@ -116,7 +116,7 @@ class TestProjectionRender:
         ))
         node = next(c for c in world.concepts.all() if c.name == "Apple")
         proj = world.project([node.id])
-        rendered = proj.render()
+        rendered = proj.render(style="full")
         assert f"apple.technology-company.{node.id}" in rendered
 
 

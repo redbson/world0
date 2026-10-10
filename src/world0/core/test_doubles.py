@@ -135,6 +135,13 @@ class FakeStorageBackend:
     def load_state(self) -> dict:
         return dict(self._state)
 
+    def save_learning_state(self, state: dict) -> None:
+        self._learning_state = dict(state)
+        self._record("save_learning_state", tuple(sorted(state.keys())))
+
+    def load_learning_state(self) -> dict:
+        return dict(getattr(self, "_learning_state", {}))
+
 
 # ── ConceptStore ─────────────────────────────────────────────────────
 
@@ -435,12 +442,20 @@ class FakeRelationStore:
         id_a: str,
         id_b: str,
         relation_type: RelationType | None = None,
+        *,
+        directed: bool = False,
+        semantic: str | None = None,
+        cooccurrence_fallback: bool = True,
     ) -> RelationEdge | None:
+        fallback = None
         for e in self._edges.values():
-            if {e.source_id, e.target_id} == {id_a, id_b}:
+            if e.connects(id_a, id_b, directed=directed):
                 if relation_type is None or e.relation_type == relation_type:
-                    return e
-        return None
+                    if semantic is None or e.semantic_relation == semantic:
+                        return e
+                    if cooccurrence_fallback and not e.is_explicit and fallback is None:
+                        fallback = e
+        return fallback
 
     def find_any_between(
         self, id_a: str, id_b: str
@@ -452,6 +467,9 @@ class FakeRelationStore:
 
     def __len__(self) -> int:
         return len(self._edges)
+
+    def reap_dead_between(self, id_a: str, id_b: str) -> int:
+        return 0
 
     # writer
     def discover(
@@ -468,7 +486,10 @@ class FakeRelationStore:
         prior_strength: float = 1.0,
         evidence_strength: float = 2.0,
     ) -> tuple[RelationEdge, bool]:
-        existing = self.find_between(source_id, target_id, relation_type)
+        existing = self.find_between(
+            source_id, target_id, relation_type, directed=True,
+            semantic=semantic_relation or None,
+        )
         if existing:
             if probability is not None or prior_probability is not None:
                 existing.update_probability(
@@ -511,6 +532,15 @@ class FakeRelationStore:
         edge.reinforce(provenance=provenance)
         self._dirty.add(relation_id)
         self._record("reinforce", relation_id)
+        return edge
+
+    def retract(self, relation_id: str) -> RelationEdge | None:
+        edge = self._edges.get(relation_id)
+        if not edge:
+            return None
+        edge.retracted_tick = 0
+        self._dirty.add(relation_id)
+        self._record("retract", relation_id)
         return edge
 
     def weaken(
@@ -601,6 +631,15 @@ class FakeHebbianLearner:
     def __init__(self) -> None:
         self.calls: list[tuple[list[str], str]] = []
         self.next_new_relation_ids: list[str] = []
+        self.last_revalidated_pairs: list[tuple[str, str]] = []
+
+    def revalidate(self) -> list[str]:
+        return []
+
+    def prediction_error(self, concept_ids: list[str]):
+        from world0.schemas.types import PredictionError
+
+        return PredictionError()
 
     def learn(
         self, concept_ids: list[str], *, provenance: str = ""
