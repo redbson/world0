@@ -15,7 +15,7 @@ Published by GitHub Pages at `https://redbson.github.io/world0/research-portal/`
 | `reports/YYYY-MM-DD.html` | Permanent daily reports (never rewritten after their day) |
 | `weekly/YYYY-Www.html` | Weekly syntheses |
 | `data/` | Source of truth (JSON) — see below |
-| `build/build.py` | Renders the site from `data/`, computes the daily delta, validates everything |
+| `tools/build.py` | Renders the site from `data/`, computes the daily delta, validates everything |
 
 ## Data (stable identifiers)
 
@@ -40,5 +40,5 @@ Evidence labels (CONFIRMED / SUPPORTED / EXPERIMENTAL / SPECULATIVE) describe li
 
 1. Append the day's records to `data/*.json` (never delete or rewrite earlier records; change a status by appending to `history[]` and updating `last_updated`).
 2. Add the day's entry to `reports.json`.
-3. `python3 -I build/build.py --date YYYY-MM-DD` — validates records and cross-references, writes `data/deltas/<date>.json`, `latest.json`, `reports/<date>.html` and regenerates the overview pages. Earlier `reports/*.html` are left untouched. `W0_SHOW_UNTRANSLATED=1` lists strings still missing a Chinese translation.
+3. `python3 -I tools/build.py --date YYYY-MM-DD` — validates records and cross-references, writes `data/deltas/<date>.json`, `latest.json`, `reports/<date>.html` and regenerates the overview pages. Earlier `reports/*.html` are left untouched. `W0_SHOW_UNTRANSLATED=1` lists strings still missing a Chinese translation.
 4. Commit only `research-portal/` (`research: daily intelligence YYYY-MM-DD`), push, then confirm the Pages build succeeded before recording a deployment (`--deployed <ISO timestamp>`).
