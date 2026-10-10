@@ -1,0 +1,45 @@
+{
+ "date": "2026-10-10",
+ "previous_report": null,
+ "papers_added": [
+  "arxiv:2608.22974",
+  "arxiv:2609.34545",
+  "arxiv:2609.16053",
+  "arxiv:2603.11768",
+  "arxiv:2604.20943",
+  "arxiv:2606.03979",
+  "arxiv:2606.25161",
+  "arxiv:2605.20616"
+ ],
+ "papers_updated": [],
+ "findings_new": [
+  "F-20261010-01",
+  "F-20261010-02",
+  "F-20261010-03"
+ ],
+ "evidence_new": [
+  "EV-001",
+  "EV-002",
+  "EV-003",
+  "EV-004",
+  "EV-005"
+ ],
+ "hypotheses_new": [
+  "H-001",
+  "H-002",
+  "H-003"
+ ],
+ "hypothesis_status_changes": [],
+ "experiments_new": [
+  "E-001",
+  "E-002",
+  "E-003"
+ ],
+ "experiment_status_changes": [],
+ "proposals_new": [
+  "AP-001",
+  "AP-002",
+  "AP-003"
+ ],
+ "proposal_status_changes": []
+}

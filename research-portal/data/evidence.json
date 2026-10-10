@@ -1,0 +1,61 @@
+[
+ {
+  "id": "EV-001",
+  "date": "2026-10-10",
+  "paper": "arxiv:2609.34545",
+  "kind": "author_claim",
+  "verification_level": "V1",
+  "statement": "Offline dream cycles (Dreamer/Analyst/Consolidator) repair the memory graph before retrieval fails; soft decay makes forgetting reversible.",
+  "supports": [
+   "H-001"
+  ],
+  "weight": "weak"
+ },
+ {
+  "id": "EV-002",
+  "date": "2026-10-10",
+  "paper": "arxiv:2608.22974",
+  "kind": "author_claim",
+  "verification_level": "V1",
+  "statement": "Task-oriented ontologies refined from judge feedback improve agent effectiveness and reliability.",
+  "supports": [
+   "H-003"
+  ],
+  "weight": "weak"
+ },
+ {
+  "id": "EV-003",
+  "date": "2026-10-10",
+  "paper": "arxiv:2603.11768",
+  "kind": "author_claim",
+  "verification_level": "V1",
+  "statement": "Consolidation framed as a write-validation step guards evolving memory against logical drift.",
+  "supports": [
+   "H-002"
+  ],
+  "weight": "weak"
+ },
+ {
+  "id": "EV-004",
+  "date": "2026-10-10",
+  "paper": "arxiv:2609.16053",
+  "kind": "author_claim",
+  "verification_level": "V1",
+  "statement": "Memories organised as a heterogeneous cognitive graph are revised from retrieval feedback.",
+  "supports": [
+   "H-002",
+   "H-003"
+  ],
+  "weight": "weak"
+ },
+ {
+  "id": "EV-005",
+  "date": "2026-10-10",
+  "paper": "arxiv:2604.20943",
+  "kind": "experimental_observation",
+  "verification_level": "V1",
+  "statement": "Search summary reports perfect recall over ten-turn conversations and 90.9% memory-noise reduction on an eight-test suite (prototype scale).",
+  "supports": [],
+  "weight": "weak"
+ }
+]

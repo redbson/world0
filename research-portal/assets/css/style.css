@@ -1,0 +1,38 @@
+/* World0 research portal — HETERONTO refined cyberpunk: graphite, cyan, violet, fine borders */
+:root{--bg:#0e1013;--panel:#161a1f;--panel2:#1c2128;--line:#2a313a;--fg:#d8dee6;--dim:#8d98a5;--cy:#35e0e8;--vi:#a78bfa;--ok:#5ee0a0;--warn:#f0b35a}
+*{box-sizing:border-box}html{-webkit-text-size-adjust:100%}
+body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.55 ui-monospace,Menlo,Consolas,"Noto Sans Mono","PingFang SC","Microsoft YaHei",monospace}
+a{color:var(--cy);text-decoration:none}a:hover{text-decoration:underline}code{color:var(--vi);font-size:.92em}
+.top{display:flex;justify-content:space-between;align-items:center;gap:8px 16px;flex-wrap:wrap;border-bottom:1px solid var(--line);padding:10px 16px;letter-spacing:.08em;position:sticky;top:0;background:var(--bg);z-index:2}
+.brand{color:var(--fg)}.top nav{display:flex;gap:4px;flex-wrap:wrap}.top nav a{padding:4px 10px;border:1px solid transparent}.top nav a.cur{border-color:var(--line);color:var(--vi)}
+.langsw button{background:var(--panel);color:var(--fg);border:1px solid var(--line);padding:4px 10px;font:inherit;cursor:pointer}.langsw button[aria-pressed=true]{border-color:var(--cy);color:var(--cy)}
+main{max-width:1120px;margin:0 auto;padding:16px}h1{letter-spacing:.1em;margin:.2em 0;font-size:1.5em}h2{color:var(--vi);border-bottom:1px solid var(--line);padding-bottom:4px;margin-top:32px;font-size:1.15em}h3{margin:.4em 0;font-size:1.05em}h4{color:var(--dim);margin:.8em 0 .2em;font-size:.95em}
+.sub,.note,.src,.tag,.when,.crumbs{color:var(--dim)}.src{font-size:.9em}
+.meta{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;margin:0}.meta div,.card{background:var(--panel);border:1px solid var(--line);padding:10px}.card{margin:10px 0}
+dt{color:var(--dim);font-size:11px;text-transform:uppercase}dd{margin:0;word-break:break-word}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:10px}.grid .card{margin:0}
+.strip{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:6px;margin:8px 0}.strip div{background:var(--panel2);border:1px solid var(--line);padding:8px;text-align:center}.strip b{display:block;font-size:1.6em;color:var(--cy)}.strip span{font-size:.85em;color:var(--dim)}
+.hd{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-bottom:4px;font-size:.85em}
+.tw{overflow-x:auto}table{width:100%;border-collapse:collapse}td,th{border:1px solid var(--line);padding:6px 8px;text-align:left;vertical-align:top}th{color:var(--dim);font-weight:normal;background:var(--panel)}
+.lbl{border:1px solid var(--cy);padding:0 6px;font-size:.85em;white-space:nowrap}.lbl.SPECULATIVE,.lbl.INCONCLUSIVE{border-color:var(--vi);color:var(--vi)}.lbl.CONFIRMED,.lbl.SUPPORTED{border-color:var(--ok);color:var(--ok)}.lbl.REFUTED{border-color:var(--warn);color:var(--warn)}
+.chip{border:1px solid var(--line);background:var(--panel2);padding:0 6px;font-size:.85em;white-space:nowrap}.chip.dir{border-style:dashed}
+.vl{font-size:.8em;color:var(--dim);white-space:nowrap}.vl.V3,.vl.V4{color:var(--ok)}.vl.V0{color:var(--warn)}
+.imp{font-size:.8em;padding:0 6px;border:1px solid var(--line)}.imp.HIGH{color:var(--cy);border-color:var(--cy)}.imp.LOW{color:var(--dim)}
+.filters{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0}.filters button{background:var(--panel);color:var(--dim);border:1px solid var(--line);padding:3px 10px;font:inherit;cursor:pointer}.filters button[aria-pressed=true]{color:var(--cy);border-color:var(--cy)}
+.ctl{display:flex;flex-wrap:wrap;gap:12px;margin:8px 0}.ctl select,.ctl input{background:var(--panel);color:var(--fg);border:1px solid var(--line);padding:4px;font:inherit}
+.hidden{display:none!important}.kind{font-size:.75em;color:var(--dim);border:1px solid var(--line);padding:0 4px;margin-left:6px;font-weight:normal}
+ul{padding-left:1.2em}li{margin:3px 0}footer{padding:16px;color:var(--dim);border-top:1px solid var(--line);margin-top:32px;font-size:.9em}
+/* bilingual: .en / .zh spans */
+html[data-lang=en] .zh,html[data-lang=zh] .en{display:none}
+html[data-lang=both] .zh{display:block;color:var(--dim)}
+html[data-lang=both] :is(h1,h2,h3,h4,a,b,dt,th,button,option,label,.chip,.lbl,.vl,.imp,.strip span,.kind,.top,.hd,.filters,.note,.src,.when) .zh{display:inline;margin-left:.4em;color:inherit}
+html[data-lang=both] :is(h1,h2,h3,h4,a,b,dt,th,button,.top) .en{display:inline}
+/* mobile: tables collapse to labelled cards */
+@media (max-width:700px){
+ body{font-size:15px}main{padding:12px}h1{font-size:1.25em}
+ .tw table,.tw thead,.tw tbody,.tw tr,.tw td{display:block;width:100%}.tw thead{display:none}
+ .tw tr{border:1px solid var(--line);margin:8px 0;background:var(--panel)}.tw td{border:0;border-top:1px solid var(--line);padding:6px 8px}
+ .tw td::before{content:attr(data-label);display:block;color:var(--dim);font-size:11px;text-transform:uppercase}
+ .top{position:static}.strip b{font-size:1.3em}
+}
+@media print{.top,.langsw,.filters,.ctl{display:none}body{background:#fff;color:#000}}

@@ -1,0 +1,216 @@
+[
+ {
+  "id": "arxiv:2608.22974",
+  "title": "Toward Effective and Reliable LLM Agents via Dynamic Ontology",
+  "authors": null,
+  "published": "2026-08",
+  "source": "arXiv",
+  "url": "https://arxiv.org/abs/2608.22974",
+  "category": "Dynamic Ontology",
+  "relevance": 0.92,
+  "deep": true,
+  "verification": "search-summary-only",
+  "thesis": "Ontology can act as a kernel for agents: task-oriented ontologies and knowledge graphs are constructed dynamically and refined using judge feedback (OaK).",
+  "mechanism": "Dynamic construction of task-oriented ontology/KG, iterative refinement driven by judge feedback.",
+  "evidence": "Datasets, baselines, metrics and quantitative results not recovered in this session.",
+  "limitations": "Unverified: evaluation scope, cost of judge loop, drift of refined ontology. Full text not read.",
+  "implications": "Closest external analogue to World0 dynamic concept/relation evolution. Judge-feedback refinement could drive relation retyping and card merging. Risk: task-oriented ontologies may be too narrow versus World0's context-sensitive projection of one shared structure.",
+  "first_seen": "2026-10-10",
+  "verification_level": "V1",
+  "last_updated": "2026-10-10",
+  "doi": null,
+  "arxiv_id": "2608.22974",
+  "argument": {
+   "claims": [
+    "An ontology built and refined per task (ontology-as-kernel) makes LLM agents more effective and reliable."
+   ],
+   "premises": [
+    "Agent failures are partly caused by missing or unstable task structure.",
+    "Judge feedback is informative enough to refine an ontology."
+   ],
+   "evidence": [
+    "not recovered"
+   ],
+   "counterpoints": [
+    "Per-task ontologies may fragment knowledge across tasks; World0 instead keeps one shared structure and projects it per context.",
+    "Cost of a judge loop per task is unknown."
+   ],
+   "interpretation": [
+    "Feedback-driven refinement is the transferable idea, not per-task ontologies."
+   ]
+  }
+ },
+ {
+  "id": "arxiv:2609.34545",
+  "title": "Remember Before You're Asked: MemDream for Self-Probing Memory Evolution",
+  "authors": null,
+  "published": "2026-09",
+  "source": "arXiv",
+  "url": "https://arxiv.org/html/2609.34545v1",
+  "category": "Dream Mechanism",
+  "relevance": 0.9,
+  "deep": true,
+  "verification": "search-summary-only",
+  "thesis": "Memory should be repaired offline before retrieval fails, via self-probing dream cycles.",
+  "mechanism": "Offline dream cycles with three agents (Dreamer, Analyst, Consolidator) that probe, diagnose and repair a memory graph; policy trained with GRPO; soft decay gives reversible forgetting; online interaction continues during consolidation.",
+  "evidence": "Numerical results not recovered in this session.",
+  "limitations": "Unverified: benchmark coverage, RL training cost, whether repairs introduce semantic drift.",
+  "implications": "Maps directly onto a World0 Dream Mechanism: probe the concept-world with synthetic task contexts, diagnose weak projections, repair relations. Reversible decay matches the 'never silently delete' stance. Complexity: medium-high; start with a non-RL probe/diagnose/repair loop using the existing projection eval scripts.",
+  "first_seen": "2026-10-10",
+  "verification_level": "V1",
+  "last_updated": "2026-10-10",
+  "doi": null,
+  "arxiv_id": "2609.34545",
+  "argument": {
+   "claims": [
+    "Repairing a memory graph offline, before retrieval fails, improves long-term agent memory."
+   ],
+   "premises": [
+    "Memory failures are detectable by self-probing before a user query exposes them.",
+    "A learned policy (GRPO) can prioritize what to probe and repair."
+   ],
+   "evidence": [
+    "not recovered"
+   ],
+   "counterpoints": [
+    "Repairs could introduce semantic drift in typed relations.",
+    "RL training cost and benchmark coverage are unknown."
+   ],
+   "interpretation": [
+    "A non-learned probe/diagnose/repair loop is a cheaper first test of the same idea inside World0's reflect() pipeline."
+   ]
+  }
+ },
+ {
+  "id": "arxiv:2609.16053",
+  "title": "Retrieval-Driven Memory Reconsolidation for Long-Term LLM Agents (REALM)",
+  "authors": null,
+  "published": "2026-09",
+  "source": "arXiv",
+  "url": "https://arxiv.org/html/2609.16053v1",
+  "category": "Cognitive Architecture",
+  "relevance": 0.78,
+  "deep": false,
+  "verification": "search-summary-only",
+  "thesis": "Organize memories into a heterogeneous cognitive graph and revise them from retrieval feedback.",
+  "mechanism": "Heterogeneous cognitive graph; reconsolidation triggered by retrieval outcomes.",
+  "evidence": "Not recovered.",
+  "limitations": "Not read.",
+  "implications": "Retrieval/projection feedback as a signal for relation weight updates.",
+  "first_seen": "2026-10-10",
+  "verification_level": "V1",
+  "last_updated": "2026-10-10",
+  "doi": null,
+  "arxiv_id": "2609.16053"
+ },
+ {
+  "id": "arxiv:2603.11768",
+  "title": "Governing Evolving Memory in LLM Agents: Risks, Mechanisms, and the Stability and Safety Governed Memory (SSGM) Framework",
+  "authors": null,
+  "published": "2026-03",
+  "source": "arXiv",
+  "url": "https://arxiv.org/html/2603.11768v1",
+  "category": "Cognitive Architecture",
+  "relevance": 0.8,
+  "deep": false,
+  "verification": "search-summary-only",
+  "thesis": "Evolving agent memory needs governance; consolidation should be a write-validation step guarding against logical drift.",
+  "mechanism": "Governed memory framework with validation on consolidation writes.",
+  "evidence": "Not recovered.",
+  "limitations": "Not read.",
+  "implications": "Validation gate for concept-card and relation writes by LLMs (concept integrity, priority 1 in AGENTS.md).",
+  "first_seen": "2026-10-10",
+  "verification_level": "V1",
+  "last_updated": "2026-10-10",
+  "doi": null,
+  "arxiv_id": "2603.11768"
+ },
+ {
+  "id": "arxiv:2604.20943",
+  "title": "SCM: Sleep-Consolidated Memory with Algorithmic Forgetting for Large Language Models",
+  "authors": null,
+  "published": "2026-04",
+  "source": "arXiv",
+  "url": "https://arxiv.org/html/2604.20943v1",
+  "category": "Self-Model",
+  "relevance": 0.7,
+  "deep": false,
+  "verification": "search-summary-only",
+  "thesis": "Combine working-memory limits, NREM/REM-style phases, intentional forgetting and a computational self-model for introspection.",
+  "mechanism": "Sleep-phase consolidation plus adaptive forgetting plus self-model.",
+  "evidence": "Search summary reports perfect recall over ten-turn conversations and 90.9% memory-noise reduction on an eight-test suite (prototype scale; not independently checked).",
+  "limitations": "Small-scale prototype per summary; not read.",
+  "implications": "Only found paper pairing a self-model with offline consolidation; evidence weak.",
+  "first_seen": "2026-10-10",
+  "verification_level": "V1",
+  "last_updated": "2026-10-10",
+  "doi": null,
+  "arxiv_id": "2604.20943"
+ },
+ {
+  "id": "arxiv:2606.03979",
+  "title": "Language Models Need Sleep: Learning to Self-Modify and Consolidate Memories",
+  "authors": "Behrouz et al.",
+  "published": "2026-06",
+  "source": "arXiv",
+  "url": "https://arxiv.org/abs/2606.03979",
+  "category": "Dream Mechanism",
+  "relevance": 0.55,
+  "deep": false,
+  "verification": "search-summary-only",
+  "thesis": "Parametric consolidation: Knowledge Seeding then a RL-driven 'Dreaming' phase generating synthetic rehearsal curricula.",
+  "mechanism": "Weight-level consolidation.",
+  "evidence": "Not recovered.",
+  "limitations": "Parametric, outside World0 scope (conceptual structure, not weights).",
+  "implications": "Low direct relevance; useful as contrast.",
+  "first_seen": "2026-10-10",
+  "verification_level": "V1",
+  "last_updated": "2026-10-10",
+  "doi": null,
+  "arxiv_id": "2606.03979"
+ },
+ {
+  "id": "arxiv:2606.25161",
+  "title": "TRUSTMEM: Learning Trustworthy Memory Consolidation for LLM Agents with Long-Term Memory",
+  "authors": null,
+  "published": "2026-06",
+  "source": "arXiv",
+  "url": "https://arxiv.org/pdf/2606.25161",
+  "category": "Cognitive Architecture",
+  "relevance": 0.5,
+  "deep": false,
+  "verification": "title-only",
+  "thesis": "Trustworthy consolidation (title only).",
+  "mechanism": "Not recovered.",
+  "evidence": "Not recovered.",
+  "limitations": "Not read.",
+  "implications": "Triage later.",
+  "first_seen": "2026-10-10",
+  "verification_level": "V0",
+  "last_updated": "2026-10-10",
+  "doi": null,
+  "arxiv_id": "2606.25161"
+ },
+ {
+  "id": "arxiv:2605.20616",
+  "title": "Auto-Dreamer: Learning Offline Memory Consolidation for Language Agents",
+  "authors": null,
+  "published": "2026-05",
+  "source": "arXiv",
+  "url": "https://arxiv.org/pdf/2605.20616",
+  "category": "Dream Mechanism",
+  "relevance": 0.6,
+  "deep": false,
+  "verification": "title-only",
+  "thesis": "Learned offline consolidation (title only).",
+  "mechanism": "Not recovered.",
+  "evidence": "Not recovered.",
+  "limitations": "Not read.",
+  "implications": "Priority for next session full-text read.",
+  "first_seen": "2026-10-10",
+  "verification_level": "V0",
+  "last_updated": "2026-10-10",
+  "doi": null,
+  "arxiv_id": "2605.20616"
+ }
+]

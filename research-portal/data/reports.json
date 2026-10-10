@@ -1,0 +1,63 @@
+[
+ {
+  "id": "R-2026-10-10",
+  "date": "2026-10-10",
+  "file": "reports/2026-10-10.html",
+  "title": "Offline consolidation and governed ontology evolution",
+  "status": "PARTIAL",
+  "summary": "Offline consolidation (dreaming) and governed, feedback-driven ontology/memory evolution dominate; three findings relevant to World0, all at V1 verification.",
+  "categories": [
+   "Dream Mechanism",
+   "Dynamic Ontology",
+   "Cognitive Architecture"
+  ],
+  "directions": [
+   "offline-consolidation",
+   "ontology-evolution",
+   "memory-governance"
+  ],
+  "importance": "HIGH",
+  "open_questions": [
+   "What quantitative gains do MemDream and OaK report, and on which benchmarks?",
+   "Do dream repairs cause semantic drift in typed relations?",
+   "Is there 2026 work on world models relevant to concept graphs?"
+  ],
+  "next_priorities": [
+   "Obtain full texts of OaK, MemDream, Auto-Dreamer; fill authors and results.",
+   "Search world-model and self-model literature."
+  ],
+  "recommendations": [
+   "Prototype a non-RL dream cycle reusing existing projection-eval scripts (E-001).",
+   "Add a validation gate for LLM-written cards/relations (E-002).",
+   "Keep structure as shared concept-world with context-conditioned projection; do not adopt per-task ontologies wholesale."
+  ],
+  "insights": [
+   {
+    "area": "Dynamic Ontology",
+    "label": "EXPERIMENTAL",
+    "note": "OaK: judge-feedback ontology refinement (summary only)."
+   },
+   {
+    "area": "Self-Model",
+    "label": "SPECULATIVE",
+    "note": "Only SCM pairs a self-model with consolidation; prototype-scale."
+   },
+   {
+    "area": "Dream Mechanism",
+    "label": "EXPERIMENTAL",
+    "note": "MemDream and Auto-Dreamer indicate a growing offline-consolidation line."
+   },
+   {
+    "area": "World Models",
+    "label": "SPECULATIVE",
+    "note": "No 2026 world-model result recovered in this session's searches."
+   },
+   {
+    "area": "Cognitive Architecture",
+    "label": "SUPPORTED",
+    "note": "Multiple independent papers converge on governed, feedback-driven consolidation."
+   }
+  ],
+  "verification_note": "Metadata and summary taken from web-search result summaries only; the arXiv page could not be fetched in this session (network egress to arxiv.org unavailable). Quantitative details are reported only where the search summary stated them."
+ }
+]

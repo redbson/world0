@@ -1,0 +1,94 @@
+[
+ {
+  "id": "AP-001",
+  "date": "2026-10-10",
+  "first_seen": "2026-10-10",
+  "last_updated": "2026-10-10",
+  "component": "world/_reflect.py · ReflectPipeline",
+  "area": "Dream Mechanism",
+  "title": "Dream cycle inside reflect(): probe → diagnose → repair",
+  "change": "Extend reflect() with an optional pass that generates synthetic task contexts, runs project(), scores the projections with the existing eval metrics, and proposes bounded relation edits for weak projections.",
+  "benefit": "Finds weak projections before an Agent hits them; keeps repairs explainable because edits are typed relation changes.",
+  "complexity": "MEDIUM",
+  "risk": "Semantic drift of typed relations; repairs must be reversible (soft decay, no deletes).",
+  "status": "PROPOSED",
+  "label": "EXPERIMENTAL",
+  "findings": [
+   "F-20261010-01"
+  ],
+  "evidence": [
+   "EV-001"
+  ],
+  "experiments": [
+   "E-001"
+  ],
+  "history": [
+   {
+    "date": "2026-10-10",
+    "status": "PROPOSED"
+   }
+  ]
+ },
+ {
+  "id": "AP-002",
+  "date": "2026-10-10",
+  "first_seen": "2026-10-10",
+  "last_updated": "2026-10-10",
+  "component": "extraction/ → concepts/ · relations/ managers",
+  "area": "Cognitive Architecture",
+  "title": "Write-validation gate for LLM-authored cards and relations",
+  "change": "Insert a validation step between ConceptExtractor output and the managers: duplicate signature check, relation-type check, contradiction check against existing relations; rejected writes are logged, not dropped silently.",
+  "benefit": "Protects concept integrity (engineering priority 1) as the world grows from LLM writes.",
+  "complexity": "LOW",
+  "risk": "Over-strict gates could block legitimate concept evolution; needs a tunable threshold.",
+  "status": "PROPOSED",
+  "label": "SUPPORTED",
+  "findings": [
+   "F-20261010-03"
+  ],
+  "evidence": [
+   "EV-003",
+   "EV-004"
+  ],
+  "experiments": [
+   "E-002"
+  ],
+  "history": [
+   {
+    "date": "2026-10-10",
+    "status": "PROPOSED"
+   }
+  ]
+ },
+ {
+  "id": "AP-003",
+  "date": "2026-10-10",
+  "first_seen": "2026-10-10",
+  "last_updated": "2026-10-10",
+  "component": "relations/ weighting · dynamics/ HebbianEngine",
+  "area": "Dynamic Ontology",
+  "title": "Projection-feedback relation weighting",
+  "change": "Feed projection outcomes (used / unused / contradicted in the downstream task) back into relation weights with bounded updates, alongside the existing co-occurrence Hebbian updates.",
+  "benefit": "Relation weights reflect operational usefulness, not only co-occurrence.",
+  "complexity": "MEDIUM",
+  "risk": "Feedback loops can entrench early relations; needs decay and stability tests.",
+  "status": "PROPOSED",
+  "label": "SPECULATIVE",
+  "findings": [
+   "F-20261010-02"
+  ],
+  "evidence": [
+   "EV-002",
+   "EV-004"
+  ],
+  "experiments": [
+   "E-003"
+  ],
+  "history": [
+   {
+    "date": "2026-10-10",
+    "status": "PROPOSED"
+   }
+  ]
+ }
+]

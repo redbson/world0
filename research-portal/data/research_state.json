@@ -1,0 +1,14 @@
+{
+ "runs": [
+  {
+   "date": "2026-10-10",
+   "generated": "2026-10-10T07:45:30Z",
+   "status": "PARTIAL",
+   "papers_added": 8
+  }
+ ],
+ "last_research_update": "2026-10-10T07:45:30Z",
+ "last_successful_deployment": "2026-10-10T07:14:10Z",
+ "last_deployed_commit": "e027e3a",
+ "pages_url": "https://redbson.github.io/world0/research-portal/"
+}
