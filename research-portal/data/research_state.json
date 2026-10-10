@@ -1,0 +1,12 @@
+{
+ "runs": [
+  {
+   "date": "2026-10-10",
+   "generated": "2026-10-10T06:54:31Z",
+   "papers_added": 8,
+   "status": "PARTIAL: primary sources not fetchable; summary-level verification"
+  }
+ ],
+ "last_research_update": "2026-10-10T06:54:31Z",
+ "last_successful_deployment": null
+}

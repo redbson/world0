@@ -1,0 +1,51 @@
+[
+ {
+  "id": "H-001",
+  "hypothesis": "A probe/diagnose/repair offline loop over World0 (synthetic task contexts -> projection eval -> relation repair) improves projection quality without RL.",
+  "motivation": "MemDream reports pre-failure graph repair via dream cycles (unverified detail).",
+  "status": "PROPOSED",
+  "evidence": [
+   "arxiv:2609.34545 (summary only)"
+  ],
+  "next_experiment": "E-001",
+  "history": [
+   {
+    "date": "2026-10-10",
+    "status": "PROPOSED"
+   }
+  ]
+ },
+ {
+  "id": "H-002",
+  "hypothesis": "A write-validation gate on LLM-authored concept cards/relations reduces semantic drift versus ungated writes.",
+  "motivation": "SSGM frames consolidation as validation to prevent logical drift.",
+  "status": "PROPOSED",
+  "evidence": [
+   "arxiv:2603.11768 (summary only)"
+  ],
+  "next_experiment": "E-002",
+  "history": [
+   {
+    "date": "2026-10-10",
+    "status": "PROPOSED"
+   }
+  ]
+ },
+ {
+  "id": "H-003",
+  "hypothesis": "Projection/retrieval outcomes are a usable feedback signal for updating relation weights.",
+  "motivation": "REALM and OaK both refine structure from feedback signals.",
+  "status": "PROPOSED",
+  "evidence": [
+   "arxiv:2609.16053",
+   "arxiv:2608.22974 (summaries only)"
+  ],
+  "next_experiment": "E-003",
+  "history": [
+   {
+    "date": "2026-10-10",
+    "status": "PROPOSED"
+   }
+  ]
+ }
+]

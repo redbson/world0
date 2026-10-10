@@ -1,0 +1,63 @@
+{
+ "date": "2026-10-10",
+ "generated": "2026-10-10T06:54:31Z",
+ "findings": [
+  {
+   "id": "F-1",
+   "title": "Pre-failure offline memory repair (MemDream)",
+   "category": "Dream Mechanism",
+   "discovery": "Offline Dreamer/Analyst/Consolidator agents probe and repair a memory graph before retrieval fails; reversible soft decay.",
+   "relevance": "Template for a World0 Dream Mechanism operating on concepts and relations rather than facts.",
+   "strength": "EXPERIMENTAL",
+   "action": "Prototype non-RL probe/diagnose/repair loop (E-001).",
+   "paper": "arxiv:2609.34545"
+  },
+  {
+   "id": "F-2",
+   "title": "Ontology as a dynamically refined agent kernel (OaK)",
+   "category": "Dynamic Ontology",
+   "discovery": "Task-oriented ontologies/KGs are built and refined from judge feedback.",
+   "relevance": "Validates feedback-driven ontology evolution; contrast with World0's single structure plus context projection.",
+   "strength": "EXPERIMENTAL",
+   "action": "Full-text read; extract judge-feedback loop design.",
+   "paper": "arxiv:2608.22974"
+  },
+  {
+   "id": "F-3",
+   "title": "Consolidation needs write governance (SSGM)",
+   "category": "Cognitive Architecture",
+   "discovery": "Evolving memory risks logical drift; validation at consolidation is proposed as a guard.",
+   "relevance": "Supports concept-integrity-first priority for LLM-written cards/relations.",
+   "strength": "SUPPORTED",
+   "action": "Design validation gate (E-002).",
+   "paper": "arxiv:2603.11768"
+  }
+ ],
+ "insights": [
+  {
+   "area": "Dynamic Ontology",
+   "label": "EXPERIMENTAL",
+   "note": "OaK: judge-feedback ontology refinement (summary only)."
+  },
+  {
+   "area": "Self-Model",
+   "label": "SPECULATIVE",
+   "note": "Only SCM pairs a self-model with consolidation; prototype-scale."
+  },
+  {
+   "area": "Dream Mechanism",
+   "label": "EXPERIMENTAL",
+   "note": "MemDream and Auto-Dreamer indicate a growing offline-consolidation line."
+  },
+  {
+   "area": "World Models",
+   "label": "SPECULATIVE",
+   "note": "No 2026 world-model result recovered in this session's searches."
+  },
+  {
+   "area": "Cognitive Architecture",
+   "label": "SUPPORTED",
+   "note": "Multiple independent papers converge on governed, feedback-driven consolidation."
+  }
+ ]
+}
