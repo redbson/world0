@@ -1,0 +1,94 @@
+[
+ {
+  "id": "H-001",
+  "hypothesis": "A probe/diagnose/repair offline loop over World0 (synthetic task contexts -> projection eval -> relation repair) improves projection quality without RL.",
+  "motivation": "MemDream reports pre-failure graph repair via dream cycles (unverified detail).",
+  "status": "PROPOSED",
+  "evidence": [
+   "arxiv:2609.34545 (summary only)"
+  ],
+  "next_experiment": "E-001",
+  "history": [
+   {
+    "date": "2026-10-10",
+    "status": "PROPOSED"
+   }
+  ]
+ },
+ {
+  "id": "H-002",
+  "hypothesis": "A write-validation gate on LLM-authored concept cards/relations reduces semantic drift versus ungated writes.",
+  "motivation": "SSGM frames consolidation as validation to prevent logical drift.",
+  "status": "PROPOSED",
+  "evidence": [
+   "arxiv:2603.11768 (summary only)"
+  ],
+  "next_experiment": "E-002",
+  "history": [
+   {
+    "date": "2026-10-10",
+    "status": "PROPOSED"
+   }
+  ]
+ },
+ {
+  "id": "H-003",
+  "hypothesis": "Projection/retrieval outcomes are a usable feedback signal for updating relation weights.",
+  "motivation": "REALM and OaK both refine structure from feedback signals.",
+  "status": "PROPOSED",
+  "evidence": [
+   "arxiv:2609.16053",
+   "arxiv:2608.22974 (summaries only)"
+  ],
+  "next_experiment": "E-003",
+  "history": [
+   {
+    "date": "2026-10-10",
+    "status": "PROPOSED"
+   }
+  ]
+ },
+ {
+  "id": "H-004",
+  "hypothesis": "Rehearsal (a read refreshes the recency of what it shows), borrowed from retrieval-driven reconsolidation, would recover a meaningful share of the true endpoints World0 forgets on bigworld.",
+  "motivation": "Retrieval-Driven Memory Reconsolidation rewrites memories when they are retrieved; rehearsal is the form that fits World0.",
+  "status": "REFUTED",
+  "evidence": [
+   "arxiv:2609.16053",
+   "E-004: 65 of 101 forgotten endpoints were never shown; at most about 1 in 10 recoverable"
+  ],
+  "next_experiment": null,
+  "history": [
+   {
+    "date": "2026-10-08",
+    "status": "PROPOSED"
+   },
+   {
+    "date": "2026-10-08",
+    "status": "REFUTED",
+    "note": "E-004: the gap is one-off statements never shown, not shown items forgotten; effect on the bigworld composite ≤ 0.01."
+   }
+  ]
+ },
+ {
+  "id": "H-005",
+  "hypothesis": "Suppressing co-occurrence (generic) edges in activation improves projection quality by raising focus precision (0.60) without losing recall or closure.",
+  "motivation": "Co-occurrence edges might carry activation too far from the task's context.",
+  "status": "REFUTED",
+  "evidence": [
+   "E-005: weight 0 raises precision +0.036 but costs −0.032 closure and −0.009 recall"
+  ],
+  "next_experiment": null,
+  "history": [
+   {
+    "date": "2026-10-08",
+    "status": "PROPOSED"
+   },
+   {
+    "date": "2026-10-08",
+    "status": "REFUTED",
+    "note": "E-005: a trade-off, not an improvement; parameters unchanged."
+   }
+  ]
+ }
+]
